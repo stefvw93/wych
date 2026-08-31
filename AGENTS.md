@@ -28,7 +28,16 @@ release. Add a tool name to select part of the graph. For example, run
 
 ## Project Notes
 
-- Static checks: run `vpr check` (= `vp check && vp run test:types`). Plain
-  `vp check` is the built-in and skips the tstyche type tests.
+- pnpm + Vite+ monorepo. Packages live in `packages/*`; the library is
+  `@wych/react` at `packages/react`. Root `package.json` is private.
+- Root `vite.config.ts` owns repo-wide `lint`/`fmt` and `defaultPackage`
+  (`./packages/react`), so bare `vp pack` / `vp build` target the library.
+  Each package's `vite.config.ts` owns its Vitest, pack, and run tasks.
+- Run commands from the repo root. `vpr check` = `vp check && vpr -r test:types`;
+  `vpr test` fans out with `-r`. Plain `vp check` is the built-in and skips the
+  tstyche type tests.
+- To work on one package: `vp -C packages/react <command>`.
 - `vp run test:types` runs tstyche over `src/**/*.tst.ts`; task defined in
-  `vite.config.ts` under `run.tasks`, cached.
+  `packages/react/vite.config.ts` under `run.tasks`, cached.
+- TypeScript: shared `compilerOptions` in root `tsconfig.base.json`; root
+  `tsconfig.json` is a solution file referencing each package.

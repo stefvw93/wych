@@ -1,21 +1,4 @@
 {
-  "compilerOptions": {
-    "target": "esnext",
-    "lib": ["ESNext", "DOM"],
-    "types": ["vite/client"],
-    "moduleDetection": "force",
-    "module": "esnext",
-    "moduleResolution": "bundler",
-    "resolveJsonModule": true,
-    "strict": true,
-    "noUnusedLocals": true,
-    "declaration": true,
-    "noEmit": true,
-    "allowImportingTsExtensions": true,
-    "esModuleInterop": true,
-    "isolatedModules": true,
-    "verbatimModuleSyntax": true,
-    "skipLibCheck": true,
-    "jsx": "react-jsx"
-  }
+  "files": [],
+  "references": [{ "path": "./packages/react" }]
 }
