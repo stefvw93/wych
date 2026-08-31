@@ -10,6 +10,12 @@ export default defineConfig({
       typeAware: true,
       typeCheck: true,
     },
+    overrides: [
+      {
+        files: ["packages/website/**"],
+        plugins: ["react", "nextjs"],
+      },
+    ],
   },
   fmt: {},
 });

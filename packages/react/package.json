@@ -6,7 +6,8 @@
   "license": "MIT",
   "author": "Stef van Wijchen",
   "files": [
-    "dist"
+    "dist",
+    "docs"
   ],
   "type": "module",
   "exports": {
