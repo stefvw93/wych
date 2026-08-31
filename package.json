@@ -1,0 +1,54 @@
+{
+  "name": "@wych/react",
+  "version": "0.1.0-alpha.0",
+  "description": "",
+  "keywords": [],
+  "license": "MIT",
+  "author": "Stef van Wijchen",
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "dev": "vp pack --watch",
+    "test": "vp test",
+    "check": "vp check && vp run test:types",
+    "prepublishOnly": "vp run build",
+    "prepare": "vp config"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@vitest/browser-playwright": "^4.1.10",
+    "bumpp": "^11.1.0",
+    "tstyche": "^7.2.3",
+    "typescript": "^7.0.2",
+    "vite": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "@types/react": "^18.3 || ^19",
+    "@types/react-dom": "^18.3 || ^19",
+    "effect": "^4.0.0-rc",
+    "react": "^18.3 || ^19",
+    "react-dom": "^18.3 || ^19"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "11.24.0",
+      "onFail": "download"
+    }
+  },
+  "access": "public"
+}
