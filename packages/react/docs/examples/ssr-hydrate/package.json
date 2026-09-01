@@ -1,0 +1,24 @@
+{
+  "name": "@wych-examples/ssr-hydrate",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "test:types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@wych/react": "workspace:^",
+    "effect": "^4.0.0-rc.112",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.0.0"
+  },
+  "stackblitz": {
+    "startCommand": "npm run dev"
+  }
+}

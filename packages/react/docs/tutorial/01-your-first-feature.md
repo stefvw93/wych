@@ -2,6 +2,7 @@
 title: Your first feature
 description: Build a NoteEditor feature, mount it in React, and fold one action without React.
 order: 1
+example: note-editor
 ---
 
 # Your first feature

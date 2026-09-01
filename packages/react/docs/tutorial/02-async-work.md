@@ -2,6 +2,7 @@
 title: Async work
 description: Save the note through an Effect service, with Task for the pending, resolved and rejected states.
 order: 2
+example: note-editor-save
 ---
 
 # Async work

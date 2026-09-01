@@ -2,6 +2,7 @@
 title: Test a feature without React
 description: Fold actions with reduce and run, supply a test layer, and record the devtools stream.
 order: 3
+example: cart-tests
 ---
 
 # Test a feature without React

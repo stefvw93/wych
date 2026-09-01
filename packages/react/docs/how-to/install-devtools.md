@@ -2,6 +2,7 @@
 title: Install devtools
 description: Merge a devtools sink into the root layer, tune the console logger, or forward events elsewhere.
 order: 5
+example: devtools-console
 ---
 
 # Install devtools

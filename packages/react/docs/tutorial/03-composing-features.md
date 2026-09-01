@@ -2,6 +2,7 @@
 title: Composing features
 description: A NoteList parent that mounts NoteEditor children, hears their outputs, and takes children of its own.
 order: 3
+example: note-list
 ---
 
 # Composing features

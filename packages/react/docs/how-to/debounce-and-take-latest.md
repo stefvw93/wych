@@ -2,6 +2,7 @@
 title: Debounce and take latest
 description: Wait for a pause in typing, then interrupt the request that is still in flight.
 order: 1
+example: search-debounce
 ---
 
 # Debounce and take latest

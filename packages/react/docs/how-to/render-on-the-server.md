@@ -2,6 +2,7 @@
 title: Render on the server
 description: Paint the initial state with renderToString, then hydrate the same feature on the client.
 order: 4
+example: ssr-hydrate
 ---
 
 # Render on the server

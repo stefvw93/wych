@@ -2,6 +2,7 @@
 title: Overview
 description: A TEA-style feature runtime for React, built on Effect.
 order: 0
+example: counter
 ---
 
 # @wych/react

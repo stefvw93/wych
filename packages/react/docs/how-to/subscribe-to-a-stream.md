@@ -2,6 +2,7 @@
 title: Subscribe to a stream
 description: Start a long-lived source on Mounted, rebook it on PropsChanged, cancel it on Unmounted.
 order: 2
+example: presence-stream
 ---
 
 # Subscribe to a stream

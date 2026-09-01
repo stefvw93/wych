@@ -55,3 +55,25 @@ release. Add a tool name to select part of the graph. For example, run
 - `vp -C packages/react run docs:check` type-checks every `ts`/`tsx` fence in
   the docs against `src/index.ts`, enforces a code ratio per section, and
   checks internal links. Run it after touching docs.
+- Runnable examples live at `packages/react/docs/examples/<name>` and ship in
+  the tarball. Each is a self-contained Vite (or vitest) project and a pnpm
+  workspace package (`@wych-examples/<name>`, `@wych/react: workspace:^`).
+  A docs page names the example it builds in `example:` frontmatter; the site
+  renders an "Open in StackBlitz" button from it (`packages/website/lib/examples.ts`
+  builds the project payload at build time, rewriting `workspace:^` to the
+  published range; `components/open-in-stackblitz.tsx` posts it via
+  `@stackblitz/sdk`). A name that points at no directory fails `next build`.
+  Each example has a `readme.md` with the five mandatory sections (Overview,
+  Problem, Solution, How It Works, When to Use) and a `stackblitz.startCommand`
+  in its `package.json`.
+  - Run one locally with `vp -C packages/react/docs/examples/<name> dev`
+    (`run test` for `cart-tests`). The `vite` bin is not on the path inside
+    the workspace because `vite` is overridden to `vite-plus-core`; the
+    `npm run dev` script is for StackBlitz and standalone use.
+  - `vpr -r test:types` type-checks every example (`tsc --noEmit`);
+    `vpr -r test` runs `cart-tests`.
+  - Never walk `docs/` recursively: `docs/examples/*/node_modules` is a pnpm
+    symlink farm. `lib/docs.ts` and `docs-check.mjs` list `index.md` plus the
+    four section dirs only.
+  - Examples duplicate the page code on purpose (a page is one module, an
+    example is split into files). Change both when you change one.

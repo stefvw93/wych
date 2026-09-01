@@ -32,15 +32,24 @@ const outDir = path.join(root, ".docs-check", section ?? "all");
 
 const TARGETS = { tutorial: 0.5, "how-to": 0.5, reference: 0.4, explanation: 0.25 };
 
-const pages = readdirSync(docsDir, { recursive: true, encoding: "utf8" })
-  .filter((f) => f.endsWith(".md"))
-  .map((rel) => {
-    const text = readFileSync(path.join(docsDir, rel), "utf8");
-    const dir = path.dirname(rel);
-    const name = path.basename(rel, ".md").replace(/^\d+-/, "");
-    const slug = dir === "." ? (name === "index" ? "" : name) : `${dir}/${name}`;
-    return { rel, dir, slug, text };
-  });
+// Only the index and the four sections are pages. `docs/examples/*` are
+// runnable projects with their own `node_modules`, so a recursive walk from
+// `docs/` is never safe.
+const pages = [
+  "index.md",
+  ...Object.keys(TARGETS).flatMap((dir) =>
+    readdirSync(path.join(docsDir, dir))
+      .filter((f) => f.endsWith(".md"))
+      .sort()
+      .map((f) => `${dir}/${f}`),
+  ),
+].map((rel) => {
+  const text = readFileSync(path.join(docsDir, rel), "utf8");
+  const dir = path.dirname(rel);
+  const name = path.basename(rel, ".md").replace(/^\d+-/, "");
+  const slug = dir === "." ? (name === "index" ? "" : name) : `${dir}/${name}`;
+  return { rel, dir, slug, text };
+});
 
 const slugs = new Set(pages.map((p) => p.slug));
 const checked = section === undefined ? pages : pages.filter((p) => p.dir === section);

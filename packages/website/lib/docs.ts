@@ -32,6 +32,8 @@ export interface Doc {
   readonly title: string;
   readonly description: string;
   readonly order: number;
+  /** Directory name under `docs/examples/` of the runnable project this page builds, if any. */
+  readonly example: string | undefined;
   /** The body, with frontmatter stripped. */
   readonly markdown: string;
 }
@@ -77,6 +79,7 @@ const parse = (file: string, raw: string): Doc | undefined => {
         : prefix !== undefined
           ? Number(prefix)
           : Number.MAX_SAFE_INTEGER,
+    example: typeof data.example === "string" ? data.example : undefined,
     markdown: content.trim(),
   };
 };
@@ -86,8 +89,21 @@ let cached: Promise<readonly Doc[]> | undefined;
 /** Every doc, in nav order: index first, then by section, then by `order`. */
 export const allDocs = (): Promise<readonly Doc[]> =>
   (cached ??= (async () => {
-    const entries = await readdir(DOCS_DIR, { recursive: true });
-    const files = entries.filter((f) => f.endsWith(".md"));
+    // Only the index and the four sections are pages. `docs/examples/*` are
+    // runnable projects with their own `node_modules`, so a recursive walk
+    // from `docs/` is never safe.
+    const files = [
+      "index.md",
+      ...(
+        await Promise.all(
+          SECTIONS.map(async (s) =>
+            (await readdir(path.join(DOCS_DIR, s.dir)))
+              .filter((f) => f.endsWith(".md"))
+              .map((f) => `${s.dir}/${f}`),
+          ),
+        )
+      ).flat(),
+    ];
     const docs = await Promise.all(
       files.map(async (f) => parse(f, await readFile(path.join(DOCS_DIR, f), "utf8"))),
     );

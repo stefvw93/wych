@@ -7,7 +7,9 @@
   "author": "Stef van Wijchen",
   "files": [
     "dist",
-    "docs"
+    "docs",
+    "!docs/examples/*/node_modules",
+    "!docs/examples/*/dist"
   ],
   "type": "module",
   "exports": {
