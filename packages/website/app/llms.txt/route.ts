@@ -1,4 +1,4 @@
-import { allDocs } from "@/lib/docs";
+import { docsBySection, findDoc } from "@/lib/docs";
 
 export const dynamic = "force-static";
 
@@ -9,8 +9,8 @@ const SITE = process.env.NEXT_PUBLIC_SITE_URL ?? "https://wych.dev";
  * fetch only what it needs. The whole corpus is at /llms-full.txt.
  */
 export async function GET() {
-  const docs = await allDocs();
-  const [index, ...rest] = docs;
+  const index = await findDoc("");
+  const sections = await docsBySection();
 
   const body = [
     "# @wych/react",
@@ -19,10 +19,14 @@ export async function GET() {
     "",
     "These docs also ship inside the npm package, at `node_modules/@wych/react/docs`.",
     "",
-    "## Docs",
-    "",
-    ...rest.map((doc) => `- [${doc.title}](${SITE}/docs/${doc.slug}): ${doc.description}`),
-    "",
+    ...sections.flatMap((section) => [
+      `## ${section.title}`,
+      "",
+      ...section.docs.map(
+        (doc) => `- [${doc.title}](${SITE}/docs/${doc.slug}): ${doc.description}`,
+      ),
+      "",
+    ]),
     "## Full text",
     "",
     `- [All pages, concatenated](${SITE}/llms-full.txt)`,

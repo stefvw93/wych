@@ -7,21 +7,21 @@ export const dynamicParams = false;
 
 export async function generateStaticParams() {
   const docs = await allDocs();
-  return docs.map((doc) => ({ slug: doc.slug === "" ? [] : [doc.slug] }));
+  return docs.map((doc) => ({ slug: doc.slug === "" ? [] : doc.slug.split("/") }));
 }
 
 export async function generateMetadata({
   params,
 }: PageProps<"/docs/[[...slug]]">): Promise<Metadata> {
   const { slug } = await params;
-  const doc = await findDoc(slug?.[0] ?? "");
+  const doc = await findDoc(slug?.join("/") ?? "");
   if (!doc) return {};
   return { title: `${doc.title} — @wych/react`, description: doc.description };
 }
 
 export default async function DocPage({ params }: PageProps<"/docs/[[...slug]]">) {
   const { slug } = await params;
-  const doc = await findDoc(slug?.[0] ?? "");
+  const doc = await findDoc(slug?.join("/") ?? "");
   if (!doc) notFound();
 
   const html = await renderMarkdown(doc.markdown);

@@ -41,3 +41,17 @@ release. Add a tool name to select part of the graph. For example, run
   `packages/react/vite.config.ts` under `run.tasks`, cached.
 - TypeScript: shared `compilerOptions` in root `tsconfig.base.json`; root
   `tsconfig.json` is a solution file referencing each package.
+
+## Documentation
+
+- Docs live at `packages/react/docs` and ship in the npm tarball; the site at
+  `packages/website` reads them from the workspace. Layout is Diátaxis:
+  `tutorial/`, `how-to/`, `reference/`, `explanation/`, with `index.md` as
+  the map. Every page has `title`, `description`, `order` frontmatter.
+- Prose docs are written by the `wych-docs-author` agent
+  (`.claude/agents/wych-docs-author.md`); it holds the placement rules, model
+  invariants for samples, and the prose style rules. `/document` runs the
+  full docs sweep for a change (`.claude/skills/document/SKILL.md`).
+- `vp -C packages/react run docs:check` type-checks every `ts`/`tsx` fence in
+  the docs against `src/index.ts`, enforces a code ratio per section, and
+  checks internal links. Run it after touching docs.

@@ -7,13 +7,28 @@ import { createHighlighter } from "shiki";
 /**
  * The docs live in the library package and ship inside its npm tarball, so this
  * site and `node_modules/@wych/react/docs` are always the same files. Resolved
- * from the workspace rather than copied — a copy step is a thing that drifts.
+ * from the workspace rather than copied: a copy step is a thing that drifts.
  */
 const DOCS_DIR = path.join(process.cwd(), "..", "react", "docs");
 
+/**
+ * Diátaxis sections, in nav order. The directory a page lives in is its
+ * section; `index.md` at the root is the landing page and belongs to none.
+ */
+export const SECTIONS = [
+  { dir: "tutorial", title: "Tutorial" },
+  { dir: "how-to", title: "How-to" },
+  { dir: "reference", title: "Reference" },
+  { dir: "explanation", title: "Explanation" },
+] as const;
+
+export type SectionDir = (typeof SECTIONS)[number]["dir"];
+
 export interface Doc {
-  /** Route slug: `index.md` is `""`, everything else is its basename. */
+  /** Route slug under `/docs/`: `""` for the index, else `<section>/<name>`. */
   readonly slug: string;
+  /** `undefined` for the index page. */
+  readonly section: SectionDir | undefined;
   readonly title: string;
   readonly description: string;
   readonly order: number;
@@ -21,33 +36,83 @@ export interface Doc {
   readonly markdown: string;
 }
 
-const parse = (file: string, raw: string): Doc => {
+const sectionRank = (section: SectionDir | undefined): number =>
+  section === undefined ? -1 : SECTIONS.findIndex((s) => s.dir === section);
+
+const isSection = (dir: string): dir is SectionDir => SECTIONS.some((s) => s.dir === dir);
+
+/** `01-getting-started` reads in order on disk; the URL does not need the number. */
+const stripOrderPrefix = (name: string): string => name.replace(/^\d+-/, "");
+
+const parse = (file: string, raw: string): Doc | undefined => {
   const { data, content } = matter(raw);
+  const dir = path.dirname(file);
   const name = path.basename(file, ".md");
+
+  let slug: string;
+  let section: SectionDir | undefined;
+  if (dir === "." && name === "index") {
+    slug = "";
+    section = undefined;
+  } else if (dir !== "." && isSection(dir)) {
+    slug = `${dir}/${stripOrderPrefix(name)}`;
+    section = dir;
+  } else {
+    // A page outside the four sections has no place in the nav; skip it
+    // rather than guess.
+    return undefined;
+  }
+
+  const prefix = /^(\d+)-/.exec(name)?.[1];
   return {
-    slug: name === "index" ? "" : name,
+    slug,
+    section,
     title: typeof data.title === "string" ? data.title : name,
     description: typeof data.description === "string" ? data.description : "",
-    // Unordered pages sort last rather than jumping to the front.
-    order: typeof data.order === "number" ? data.order : Number.MAX_SAFE_INTEGER,
+    // `order` frontmatter wins, then a numeric filename prefix. Unordered pages
+    // sort last rather than jumping to the front.
+    order:
+      typeof data.order === "number"
+        ? data.order
+        : prefix !== undefined
+          ? Number(prefix)
+          : Number.MAX_SAFE_INTEGER,
     markdown: content.trim(),
   };
 };
 
 let cached: Promise<readonly Doc[]> | undefined;
 
-/** Every doc, in nav order. Read once per process — the files cannot change at runtime. */
+/** Every doc, in nav order: index first, then by section, then by `order`. */
 export const allDocs = (): Promise<readonly Doc[]> =>
   (cached ??= (async () => {
-    const files = (await readdir(DOCS_DIR)).filter((f) => f.endsWith(".md"));
+    const entries = await readdir(DOCS_DIR, { recursive: true });
+    const files = entries.filter((f) => f.endsWith(".md"));
     const docs = await Promise.all(
       files.map(async (f) => parse(f, await readFile(path.join(DOCS_DIR, f), "utf8"))),
     );
-    return docs.sort((a, b) => a.order - b.order || a.title.localeCompare(b.title));
+    return docs
+      .filter((d): d is Doc => d !== undefined)
+      .sort(
+        (a, b) =>
+          sectionRank(a.section) - sectionRank(b.section) ||
+          a.order - b.order ||
+          a.title.localeCompare(b.title),
+      );
   })());
 
 export const findDoc = async (slug: string): Promise<Doc | undefined> =>
   (await allDocs()).find((d) => d.slug === slug);
+
+/** Docs grouped by section, in nav order. Empty sections are omitted. */
+export const docsBySection = async (): Promise<
+  ReadonlyArray<{ readonly title: string; readonly dir: SectionDir; readonly docs: readonly Doc[] }>
+> => {
+  const docs = await allDocs();
+  return SECTIONS.map((s) => ({ ...s, docs: docs.filter((d) => d.section === s.dir) })).filter(
+    (s) => s.docs.length > 0,
+  );
+};
 
 // ---------------------------------------------------------------------------
 // Rendering
