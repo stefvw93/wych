@@ -143,6 +143,17 @@
 }
 
 /*
+ * Inline code reads as a chip on the muted surface: the shadcn typography
+ * sample minus its radius. Block code inside `pre` is Shiki's; code in a
+ * heading stays plain so the heading reads as one line.
+ */
+@layer components {
+  code:not(pre code, h1 code, h2 code, h3 code, h4 code) {
+    @apply border border-border bg-muted px-1 py-0.5 font-mono text-[0.875em] text-foreground;
+  }
+}
+
+/*
  * Shiki emits `--shiki-light` / `--shiki-dark` variables per token
  * (`defaultColor: false`); nothing paints them until a rule picks one. The
  * block background comes from the prose classes, not from Shiki.
