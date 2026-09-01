@@ -111,8 +111,7 @@ console.log(result.state.results);
 
 ## Docs
 
-The docs ship inside this package at `node_modules/@wych/react/docs`, and at
-[wych.dev/docs](https://wych.dev/docs).
+The docs ship inside this package at `node_modules/@wych/react/docs`.
 
 - `docs/tutorial/`: one app in three chapters.
 - `docs/how-to/`: recipes for a competent reader.
