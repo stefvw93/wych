@@ -276,7 +276,7 @@ export const noopDevtools: DevtoolsSink = Object.freeze({
  * touching a single `component(bp)` call.
  */
 export const Devtools: Context.Reference<DevtoolsSink> = Context.Reference<DevtoolsSink>(
-  "@tea/Devtools",
+  "@wych/Devtools",
   { defaultValue: () => noopDevtools },
 );
 

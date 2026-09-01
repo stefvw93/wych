@@ -2,12 +2,12 @@
 
 ## Overview & Purpose
 
-`tea.ts` declares `DevtoolsEvent` and `RuntimeOptions.onEvent`, and
+`lib.ts` declares `DevtoolsEvent` and `RuntimeOptions.onEvent`, and
 `createRuntime` **ignores its options argument entirely**. Nothing in the
 library ever emits. Worse, `src/examples/app.tsx` and `src/examples/cart.tsx`
 both pass an `onEvent` with a `console.debug` inside, so a reader copying the
 example installs an observer that never fires and gets no signal that it is
-dead. This is `tea.specs.md` **Open work #3** and one of its Known limitations;
+dead. This is `lib.specs.md` **Open work #3** and one of its Known limitations;
 this feature closes both.
 
 What replaces it is a redux-logger / RTK-style debug utility — collapsed console
@@ -113,7 +113,7 @@ export interface DevtoolsSink {
   readonly onEvent: (event: DevtoolsEvent) => void;
 }
 export const noopDevtools: DevtoolsSink; // frozen module constant, identity-compared
-export const Devtools: Context.Reference<DevtoolsSink>; // key "@tea/Devtools"
+export const Devtools: Context.Reference<DevtoolsSink>; // key "@wych/Devtools"
 export const devtoolsLayer: (sink: DevtoolsSink) => Layer.Layer<never>;
 
 // --- console logger ---
@@ -179,11 +179,11 @@ untouched — no existing `component(bp)` call changes.
 - [x] Every event is **JSON round-trippable**: `JSON.parse(JSON.stringify(event))` deep-equals the event, given encodable state and actions.
 - [x] The `Transition` for the runtime's own `Error` action carries `action: { _tag: "Error" }` and not the action object the runtime built, which holds a live `Error` and a `Cause`. See Expected Behavior.
 - [x] The `Transition` for `HookChanged` carries `action: { _tag: "HookChanged" }`. Hooks are `Record<string, unknown>`, so the previous record the runtime attaches routinely holds functions — `structuredClone` throws on one, which would disable the sink rather than merely losing a field.
-- [x] `PropsChanged` **keeps** its `previous` props, which are a schema value and encode — except for props declared opaque (`Children`), which are replaced by their placeholder (`"<children>"`). A React element tree is the one props value that does not encode, and redacting it is what keeps the round-trip criterion above true. See `tea.specs.md`.
+- [x] `PropsChanged` **keeps** its `previous` props, which are a schema value and encode — except for props declared opaque (`Children`), which are replaced by their placeholder (`"<children>"`). A React element tree is the one props value that does not encode, and redacting it is what keeps the round-trip criterion above true. See `lib.specs.md`.
 
 ### The sink service
 
-- [x] `Devtools` is a `Context.Reference<DevtoolsSink>` keyed `"@tea/Devtools"` whose default is `noopDevtools`.
+- [x] `Devtools` is a `Context.Reference<DevtoolsSink>` keyed `"@wych/Devtools"` whose default is `noopDevtools`.
 - [x] Reading the reference from an empty context returns `noopDevtools` **by identity**, and repeated reads return the same object.
 - [x] `noopDevtools.onEvent` is a no-op and the object is frozen.
 - [x] `devtoolsLayer(sink)` types as `Layer.Layer<never>` and installs `sink` where `Devtools` is read.
@@ -229,10 +229,10 @@ untouched — no existing `component(bp)` call changes.
 
 ### Removal of `RuntimeOptions`
 
-- [x] `DevtoolsEvent` and `RuntimeOptions` are gone from `tea.ts`; `tea.ts` imports the event type from `./devtools`.
-- [x] `createRuntime` takes one parameter. `__type-tests__/tea.tst.ts` already passes one argument at every call site, so this is source-compatible.
+- [x] `DevtoolsEvent` and `RuntimeOptions` are gone from `lib.ts`; `lib.ts` imports the event type from `./devtools`.
+- [x] `createRuntime` takes one parameter. `__type-tests__/core.tst.ts` already passes one argument at every call site, so this is source-compatible.
 - [x] `src/examples/app.tsx` and `src/examples/cart.tsx` no longer pass a dead `onEvent`.
-- [x] `tea.specs.md` Open work #3 is closed and its `onEvent` known-limitation is replaced.
+- [x] `lib.specs.md` Open work #3 is closed and its `onEvent` known-limitation is replaced.
 
 ### Type-level (TSTyche) — `src/lib/__type-tests__/devtools.tst.ts`
 
@@ -244,7 +244,7 @@ untouched — no existing `component(bp)` call changes.
 
 ## Technical Requirements
 
-### Changes to `src/lib/tea.ts`
+### Changes to `src/lib.ts`
 
 | Site                       | Change                                                                                                                                                             |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -254,7 +254,7 @@ untouched — no existing `component(bp)` call changes.
 | `:936`, `:951-954`         | Replace the single shared `dispatch` closure with a per-leaf `dispatchFor(ctx)`. `Keyed` refines `ctx` before recursing, so the leaf's ctx already carries the key |
 | `:1617`                    | **No edit.** `run`'s one-parameter `emit` stays assignable to the two-parameter type and ignores the ctx                                                           |
 | `~:1846`                   | Module-scope `instanceCounts` map + `nextInstance(name)`                                                                                                           |
-| `:1885-1906`               | `createFeatureStore` gains optional `name` and `instance` args — **must be optional**, ~25 direct constructions in `tea.test.ts`                                   |
+| `:1885-1906`               | `createFeatureStore` gains optional `name` and `instance` args — **must be optional**, ~25 direct constructions in `lib.test.ts`                                   |
 | `:2013-2014`               | `pending` becomes `Array<{ action, cause }>`, mirroring `run`'s own `Entry` shape                                                                                  |
 | `:2066-2080`               | `offer` returns a boolean so the `Command` event can carry `dropped`                                                                                               |
 | `:2093-2099`               | `emitOutput` emits the `Output` event before calling `emit`, and its own `Defect` on catch                                                                         |
@@ -294,21 +294,21 @@ the exact swallow-your-caller's-bug mistake `emitOutput` already exists to avoid
 
 ### Module constraints
 
-- `verbatimModuleSyntax` means `devtools.ts` uses `import type { Command, Group } from "./tea"`, which erases completely: exactly one runtime edge (`tea → devtools`), no cycle.
+- `verbatimModuleSyntax` means `devtools.ts` uses `import type { Command, Group } from "./lib"`, which erases completely: exactly one runtime edge (`lib → devtools`), no cycle.
 - `erasableSyntaxOnly` rules out a TS `namespace`; flat names throughout.
 - `Layer.mergeAll` inference over a contravariant `ROut` is confirmed by `vp check` at `/mock` time; the fallback spelling is `AppLayer.pipe(Layer.merge(consoleDevtoolsLayer()))`.
 
 ### Sequencing constraint for `/mock`
 
-`declare const Devtools` emits nothing at runtime, so if `tea.ts` imports it at
+`declare const Devtools` emits nothing at runtime, so if `lib.ts` imports it at
 the mock step, `getReferenceUnsafe(ctx, undefined)` throws and the entire
-existing 2934-line `tea.test.ts` goes red — which `/unit-test` forbids. So:
+existing 2934-line `lib.test.ts` goes red — which `/unit-test` forbids. So:
 
 - `/mock` writes the full `declare` surface in `devtools.ts`, adds
   `export * from "./devtools"` to `index.ts`, and makes only the
-  **type-visible** `tea.ts` edits (delete `DevtoolsEvent`/`RuntimeOptions`, drop
+  **type-visible** `lib.ts` edits (delete `DevtoolsEvent`/`RuntimeOptions`, drop
   the `createRuntime` parameter, widen `deps.emit`, add the optional store
-  args). **No import from `devtools.ts` in `tea.ts` yet.**
+  args). **No import from `devtools.ts` in `lib.ts` yet.**
 - Removing `RuntimeOptions` forces `src/examples/app.tsx` and `cart.tsx` to be
   updated **in that same step** or `vp check` fails.
 - `/implement` adds the imports and every emission call site at the moment
@@ -332,7 +332,7 @@ Elapsed uses `performance.now()` in a `Map` keyed by `${name}#${instance}`.
 ## Dependencies & Integrations
 
 - `effect@4.0.0-beta.102` — `Context.Reference`, `Context.getReferenceUnsafe`, `Layer.succeed`, `ManagedRuntime.cachedContext`.
-- `src/lib/tea.ts` — type-only import of `Command` and `Group`; the runtime edge goes the other way (`tea → devtools`).
+- `src/lib.ts` — type-only import of `Command` and `Group`; the runtime edge goes the other way (`lib → devtools`).
 - `src/lib/index.ts` — `export * from "./devtools"`.
 
 ## Expected Behavior & Edge Cases
@@ -351,9 +351,9 @@ Elapsed uses `performance.now()` in a `Map` keyed by `${name}#${instance}`.
 
 ## Known limitations
 
-- **`dropped: false` means "handed to a live mount", not "ran".** The flag answers what the runtime can know at the offer. A fiber can accept a command and then be torn down before interpreting it — teardown exceeding its 5s bound is the real case, and `tea.ts` says so at that site — and a synchronous event emitted at the offer cannot be revised afterwards. Making it accurate would mean either deferring the event until the work was interpreted, which loses the ordering the log is for, or a second "and it actually ran" event, which is a bigger surface than the problem.
+- **`dropped: false` means "handed to a live mount", not "ran".** The flag answers what the runtime can know at the offer. A fiber can accept a command and then be torn down before interpreting it — teardown exceeding its 5s bound is the real case, and `lib.ts` says so at that site — and a synchronous event emitted at the offer cannot be revised afterwards. Making it accurate would mean either deferring the event until the work was interpreted, which loses the ordering the log is for, or a second "and it actually ran" event, which is a bigger surface than the problem.
 - **`group` is the default address, not a cancel-everything handle.** It is the issuing action's tag — the name the command's **unkeyed** leaves book under. `cancel(group)` reaches those and misses every leaf forked under `keyed(name)`; those names are in `command`, on each `Keyed` node. A `Batch` can book members under several names, so no single address covering the whole command exists in general — the old reading, that cancelling the group interrupts everything the command forked, is dead.
-- **A mount whose fiber died emits no `Unmounted`.** A feature layer that fails to build kills the mount fiber, `release()` clears `active`, and the `stop()` React then calls returns at its `active` guard before reaching the emission. The log shows the feature going quiet with no terminal event. This is the devtools face of `tea.specs.md` open work #1 — the store cannot currently re-arm from `component` either — and it is that item's fix to make, not a second emission site here. Distinct from a teardown handler that _throws_, which does emit: that path still reaches `stop()`'s emission. The console logger's elapsed map no longer depends on the terminal event either way — it is bounded independently.
+- **A mount whose fiber died emits no `Unmounted`.** A feature layer that fails to build kills the mount fiber, `release()` clears `active`, and the `stop()` React then calls returns at its `active` guard before reaching the emission. The log shows the feature going quiet with no terminal event. This is the devtools face of `lib.specs.md` open work #1 — the store cannot currently re-arm from `component` either — and it is that item's fix to make, not a second emission site here. Distinct from a teardown handler that _throws_, which does emit: that path still reaches `stop()`'s emission. The console logger's elapsed map no longer depends on the terminal event either way — it is bounded independently.
 
 - **The blind window before the root context exists.** With a synchronous root layer, only folds _before_ `start()` are lost — a descendant's `useLayoutEffect` dispatch (the buffered path) and the first render's `sync`. With an **asynchronous** root layer, everything until the layer resolves is lost. Warming the context with a `runFork(Effect.void)` inside `createRuntime` would close the sync window, but it moves _when the root layer builds_, which is observable through any layer's acquire side effects — not a debugging tool's call to make.
 - **The console logger prints a stack string, not clickable frames.** The price of an encodable `DefectSummary`.
@@ -396,7 +396,7 @@ command emits the output. So the `Output` carries `cause: { _tag: "Command",
 action: "Landed" }` and not the click two hops back. Each event states the one
 edge the runtime can see; walking them is the UI's job.
 
-- e2e: **not applicable for the examples.** `tea.specs.md` already records that
+- e2e: **not applicable for the examples.** `lib.specs.md` already records that
   `cart.tsx` and `presence.tsx` cannot be mounted in any environment
   (declare-only ambient hooks, `declare const AppLayer`); `app.tsx` is in the
   same position for the same reason. Their change here is a two-line deletion,

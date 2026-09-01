@@ -1,5 +1,5 @@
 /**
- * Unit tests for `tea.ts`, against `tea.specs.md`'s Acceptance Criteria.
+ * Unit tests for `lib.ts`, against `lib.specs.md`'s Acceptance Criteria.
  *
  * `createRuntime` (and its returned `{ Provider, component, useRuntime }`) is
  * out of scope — see specs.md. Everything else with a real implementation is
@@ -42,7 +42,7 @@ import { Action, Children, Command, createFeatureStore, define, Next } from "./l
  */
 const channelOf = (branded: object): unknown => {
   const brand = Object.getOwnPropertySymbols(branded).find(
-    (symbol) => symbol.description === "@tea/channel",
+    (symbol) => symbol.description === "@wych/channel",
   );
   return brand === undefined ? undefined : (branded as Record<symbol, unknown>)[brand];
 };
@@ -106,7 +106,7 @@ describe("vocabularies", () => {
 
     // ...and there is no per-channel `of` to disagree with it. Asking the
     // caller to name a channel the members already carry would be a second
-    // source of truth. (The type-level half is in tea.tst.ts.)
+    // source of truth. (The type-level half is in core.tst.ts.)
     expect("of" in Action.output).toBe(false);
   });
 
@@ -134,7 +134,7 @@ describe("vocabularies", () => {
   });
 
   // Reserved lifecycle tags are rejected at compile time only — see
-  // `src/lib/__type-tests__/tea.tst.ts`. `NotLifecycleTag` isn't a runtime
+  // `src/__type-tests__/core.tst.ts`. `NotLifecycleTag` isn't a runtime
   // check, so there is nothing to assert here at runtime.
 });
 
@@ -851,7 +851,7 @@ describe("Feature internals slot", () => {
 
   it("carries the pieces `component` needs behind a symbol key", () => {
     const [slot] = Object.getOwnPropertySymbols(feature).filter(
-      (symbol) => symbol.description === "@tea/internals",
+      (symbol) => symbol.description === "@wych/internals",
     );
 
     // `declare const internals` emits nothing, so before the fix this symbol
@@ -878,7 +878,7 @@ describe("Feature internals slot", () => {
     });
 
     const [slot] = Object.getOwnPropertySymbols(withOutputs).filter(
-      (symbol) => symbol.description === "@tea/internals",
+      (symbol) => symbol.description === "@wych/internals",
     );
     const internals = (withOutputs as unknown as Record<symbol, Record<string, unknown>>)[slot!];
     expect(internals.outputTags).toEqual(["Done"]);
@@ -2384,7 +2384,7 @@ describe("output-tag routing is one rule (review iteration 3)", () => {
     });
 
     const [slot] = Object.getOwnPropertySymbols(feature).filter(
-      (symbol) => symbol.description === "@tea/internals",
+      (symbol) => symbol.description === "@wych/internals",
     );
     const internals = (feature as unknown as Record<symbol, Record<string, unknown>>)[slot!];
 
@@ -4163,7 +4163,7 @@ describe("Children", () => {
 
   const internalsOf = (feature: object): Record<string, unknown> => {
     const slot = Object.getOwnPropertySymbols(feature).find(
-      (symbol) => symbol.description === "@tea/internals",
+      (symbol) => symbol.description === "@wych/internals",
     );
     return (feature as unknown as Record<symbol, Record<string, unknown>>)[slot!];
   };

@@ -1,4 +1,4 @@
-# tea.ts — TEA-style feature runtime core
+# lib.ts — TEA-style feature runtime core
 
 ## Overview & Purpose
 
@@ -69,7 +69,7 @@ store keeps its previous `props` object, so a reducer's
 unaffected — it reads the component's own props, so it always has the current
 node. Children are for rendering, not for reducing.
 
-The mechanism is one annotation key, `"@tea/opaque"`, whose value is the
+The mechanism is one annotation key, `"@wych/opaque"`, whose value is the
 placeholder. `define(...).create` collects the annotated fields off the props
 schema once and stores them in the feature's internals; a feature that
 declares none pays nothing at the report site. `Schema.optional(x)` is
@@ -324,7 +324,7 @@ landed with every box checked again.
 - [x] `Children` is a props field that validates any value, so a feature can declare `children` and still be validated with `onExcessProperty: "error"`. Declared plainly it is required — the key is absent, not `undefined`, when JSX passes no children — and `Schema.optionalKey(Children)` is the optional form.
 - [x] `Children.as<T>()` is the same declaration at any children type — a render prop, one element, a tuple of slots. It is opaque on identical terms, and the type argument is the only thing holding the caller to the contract.
 - [x] `Children` carries a constantly-`true` equivalence, so a new node alone never raises `PropsChanged` and never re-runs the reducer. The corollary — a reducer's `snapshot.props.children` may be stale — is accepted, and `render` is unaffected.
-- [x] The props carrying the `"@tea/opaque"` annotation are collected off the props schema at `create`, whether the key is declared directly, through `Schema.optionalKey`, or through `Schema.optional` (a union). A feature declaring none collects `[]`.
+- [x] The props carrying the `"@wych/opaque"` annotation are collected off the props schema at `create`, whether the key is declared directly, through `Schema.optionalKey`, or through `Schema.optional` (a union). A feature declaring none collects `[]`.
 - [x] `PropsChanged`'s reported `previous` has each opaque prop replaced by its placeholder (`"<children>"`), which is what keeps every devtools event JSON round-trippable. The reducer's snapshot keeps the real node; a feature with no opaque props reports the action unchanged.
 - [x] `dispatch` accepts declared actions **and declared outputs** — the store routes every dispatched message by tag, so an output dispatched from the view leaves through its `on<Tag>` prop without touching the reducer — and is reference-stable for the life of the mount. An undeclared tag stays a compile error.
 - [x] Lifecycle order: `Mounted` once per mount, then `PropsChanged`/`HookChanged` as ambient inputs change, then `Unmounted` at teardown. _With one uncovered window: a props change landing between the first render and the mount effect buffers its command ahead of `Mounted`'s. See open work #5._

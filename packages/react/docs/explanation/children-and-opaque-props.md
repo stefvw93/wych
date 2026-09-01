@@ -24,7 +24,7 @@ const Panel = define({
 
 ## Three properties, one annotation
 
-`Children` is a `Schema.declare` carrying the `"@tea/opaque"` annotation, whose value is the placeholder string. It has three properties, each chosen.
+`Children` is a `Schema.declare` carrying the `"@wych/opaque"` annotation, whose value is the placeholder string. It has three properties, each chosen.
 
 **It validates anything.** `ReactNode` is wide and recursive, a function's shape is unobservable, and React already owns the question of what it can render. A schema-side re-derivation could only disagree with the renderer.
 

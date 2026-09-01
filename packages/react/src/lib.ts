@@ -82,7 +82,7 @@ const handlerFor = <Handler>(
   tag: string,
 ): Handler | undefined => (Object.hasOwn(handlers, tag) ? handlers[tag] : undefined);
 
-const channel: unique symbol = Symbol("@tea/channel");
+const channel: unique symbol = Symbol("@wych/channel");
 export type Channel = "internal" | "outbound";
 
 export type Message<
@@ -209,7 +209,7 @@ export type PropsOf<P extends AnyPropsSchema> = P["Type"];
  * Marks a prop the devtools must not print. The annotation's value is the
  * placeholder printed in its stead.
  */
-const OPAQUE = "@tea/opaque";
+const OPAQUE = "@wych/opaque";
 
 /** One declaration, at whatever type the feature calls its children. */
 const children = <T>(): Schema.declare<T> =>
@@ -816,7 +816,7 @@ export type Reducer<
   ) => Next<State, Emit<A, O>, R>;
 } & LifecycleHandlers<Props, State, Emit<A, O>, H, R>;
 
-const internals: unique symbol = Symbol("@tea/internals");
+const internals: unique symbol = Symbol("@wych/internals");
 
 export interface FeatureInternals<Props, State, Action, H extends AnyHooks> {
   readonly initialState: (props: Props) => State;
@@ -1786,7 +1786,7 @@ export const createRuntime: <RootR, RootE>(
       // After `sync`, deliberately: `useSyncExternalStore` re-reads
       // `getSnapshot` when the render finishes and schedules another render if
       // it moved — folding first means both reads see the same state.
-      // Defensive rather than a measured fix; see `tea.specs.md`. Hook order
+      // Defensive rather than a measured fix; see `lib.specs.md`. Hook order
       // stays stable: called unconditionally, just later in the body.
       // The third argument is the server snapshot: without it React throws
       // `Missing getServerSnapshot` under `renderToString`. The same reader is

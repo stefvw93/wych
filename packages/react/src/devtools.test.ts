@@ -3,7 +3,7 @@
  * Criteria.
  *
  * Emission — what `createFeatureStore` reports and when — lives in
- * `tea.test.ts`, because that is where the store is. This file covers the
+ * `lib.test.ts`, because that is where the store is. This file covers the
  * module's own surface: the summaries, the reference, the recorder and the
  * console logger.
  */
