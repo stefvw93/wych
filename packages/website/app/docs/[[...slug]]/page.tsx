@@ -50,7 +50,14 @@ export default async function DocPage({ params }: PageProps<"/docs/[[...slug]]">
 
   return (
     <div className="flex min-w-0 flex-col gap-8">
-      <div className="flex flex-wrap items-center justify-between gap-4">
+      {example && (
+        // Zero-height so it costs no layout; sticks below the 3rem header for
+        // the whole article because it is a direct child of this column.
+        <div className="sticky top-14 z-10 -mb-8 flex h-0 justify-end">
+          <OpenInStackBlitz example={example} />
+        </div>
+      )}
+      <div className="flex min-h-7 flex-wrap items-center gap-4">
         <Breadcrumb>
           <BreadcrumbList>
             <BreadcrumbItem>
@@ -72,7 +79,6 @@ export default async function DocPage({ params }: PageProps<"/docs/[[...slug]]">
             )}
           </BreadcrumbList>
         </Breadcrumb>
-        {example && <OpenInStackBlitz example={example} />}
       </div>
 
       <article

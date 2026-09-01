@@ -13,8 +13,8 @@ import type { ExampleProject } from "@/lib/examples";
 export function OpenInStackBlitz({ example }: { readonly example: ExampleProject }) {
   return (
     <Button
-      variant="outline"
       size="sm"
+      className="shadow-md shadow-black/15 dark:shadow-black/40"
       onClick={() =>
         sdk.openProject(example.project, { newWindow: true, openFile: example.openFile })
       }
