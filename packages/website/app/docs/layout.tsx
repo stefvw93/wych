@@ -82,7 +82,7 @@ export default async function DocsLayout({ children }: LayoutProps<"/docs">) {
             <GithubLogoIcon />
           </Button>
         </header>
-        <div className="mx-auto w-full min-w-0 max-w-3xl flex-1 px-6 py-10 md:px-10">
+        <div className="mx-auto w-full min-w-0 max-w-3xl flex-1 px-6 py-10 md:px-10 xl:max-w-[64rem]">
           {children}
         </div>
       </SidebarInset>

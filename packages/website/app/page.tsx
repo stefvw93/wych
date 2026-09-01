@@ -5,6 +5,7 @@ import { SiteHeader } from "@/components/site-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { CopyCode } from "@/components/copy-code";
 import { docsBySection, renderMarkdown } from "@/lib/docs";
 import { loadExample } from "@/lib/examples";
 import { site } from "@/lib/site";
@@ -188,8 +189,8 @@ function Pane({ file, note, html }: { file: string; note: string; html: string }
 export default async function Home() {
   const [sections, feature, test, example] = await Promise.all([
     docsBySection(),
-    renderMarkdown(`\`\`\`tsx\n${FEATURE}\n\`\`\``),
-    renderMarkdown(`\`\`\`ts\n${TEST}\n\`\`\``),
+    renderMarkdown(`\`\`\`tsx\n${FEATURE}\n\`\`\``).then((r) => r.html),
+    renderMarkdown(`\`\`\`ts\n${TEST}\n\`\`\``).then((r) => r.html),
     loadExample("search-debounce", {
       title: "Debounce and take latest",
       description: "A search box with take-latest, and the test that proves it without a DOM.",
@@ -202,27 +203,37 @@ export default async function Home() {
       <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-20 px-6 py-16 md:py-24">
         <section className="flex flex-col items-start gap-6">
           <Badge variant="outline">Effect v4 · React 19</Badge>
-          <h1 className="max-w-4xl text-4xl font-medium tracking-tight text-balance md:text-5xl">
-            {site.tagline}
+          <h1 className="max-w-4xl text-3xl font-medium tracking-tight text-balance sm:text-4xl md:text-5xl">
+            {/* One sentence per line: the promise, then the mechanism. */}
+            {site.tagline.split(/(?<=\.)\s+/).map((sentence) => (
+              <span key={sentence} className="block">
+                {sentence}
+              </span>
+            ))}
           </h1>
           <p className="max-w-prose text-lg leading-8 text-muted-foreground">{site.subline}</p>
-          <p className="max-w-prose text-base leading-7 text-muted-foreground">
-            A feature is one component: schema-typed props and state, a tagged action vocabulary, a
-            pure reducer, and declared outputs that leave through typed{" "}
-            <code className="font-mono text-sm">on&lt;Tag&gt;</code> props. It is not a store, not
-            atoms, and not a server cache; it sits next to those. See{" "}
-            <Link
-              href="/docs/how-to/use-with-the-react-ecosystem"
-              className="underline underline-offset-4"
-            >
-              use with the React ecosystem
-            </Link>{" "}
-            (TanStack Query, routers, stores) and{" "}
-            <Link href="/docs/explanation/comparisons" className="underline underline-offset-4">
-              how it compares
-            </Link>
-            .
-          </p>
+          <div className="flex max-w-prose flex-col gap-3 text-base leading-7 text-muted-foreground">
+            <p>
+              A feature is one component: schema-typed props and state, a tagged action vocabulary,
+              a pure reducer, and declared outputs that leave through typed{" "}
+              <code className="font-mono text-sm">on&lt;Tag&gt;</code> props.
+            </p>
+            <p>It is not a store, not atoms, and not a server cache; it sits next to those.</p>
+            <p>
+              See{" "}
+              <Link
+                href="/docs/how-to/use-with-the-react-ecosystem"
+                className="underline underline-offset-4"
+              >
+                use with the React ecosystem
+              </Link>{" "}
+              (TanStack Query, routers, stores) and{" "}
+              <Link href="/docs/explanation/comparisons" className="underline underline-offset-4">
+                how it compares
+              </Link>
+              .
+            </p>
+          </div>
           <div className="flex flex-wrap gap-2">
             <Button
               size="lg"
@@ -248,9 +259,12 @@ export default async function Home() {
         </section>
 
         <section className="flex flex-col gap-4">
-          <div className="grid gap-6 lg:grid-cols-2">
+          {/* Explicit `minmax(0, 1fr)` tracks: an implicit `auto` track grows to
+              the widest code line and the page scrolls sideways on phones. */}
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            <CopyCode />
             <Pane file="search.tsx" note="the feature" html={feature} />
-            <div className="flex flex-col gap-4">
+            <div className="flex min-w-0 flex-col gap-4">
               <Pane file="search.test.ts" note="the proof: no renderer, no mocks" html={test} />
               <p className="max-w-prose text-sm leading-6 text-muted-foreground">
                 Two keystrokes, one slow API, one result. <code>run</code> seeds the actions, runs

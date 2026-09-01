@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, ArrowRightIcon } from "@phosphor-icons/react/ssr";
+import { ArrowLeftIcon, ArrowRightIcon, PencilSimpleIcon } from "@phosphor-icons/react/ssr";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -10,11 +10,13 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
-import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { CopyCode } from "@/components/copy-code";
 import { OpenInStackBlitz } from "@/components/open-in-stackblitz";
+import { Toc } from "@/components/toc";
 import { SECTIONS, allDocs, renderMarkdown } from "@/lib/docs";
 import { loadExample } from "@/lib/examples";
+import { site } from "@/lib/site";
 
 /** Every page is known at build time, so the whole section is static. */
 export const dynamicParams = false;
@@ -40,7 +42,7 @@ export default async function DocPage({ params }: PageProps<"/docs/[[...slug]]">
   const doc = docs[index];
   if (!doc) notFound();
 
-  const html = await renderMarkdown(doc.markdown);
+  const { html, headings } = await renderMarkdown(doc.markdown);
   const section = SECTIONS.find((s) => s.dir === doc.section);
   const prev = docs[index - 1];
   const next = docs[index + 1];
@@ -48,70 +50,116 @@ export default async function DocPage({ params }: PageProps<"/docs/[[...slug]]">
   // the build rather than dropping the button.
   const example = doc.example === undefined ? undefined : await loadExample(doc.example, doc);
 
+  const editUrl = `${site.github}/edit/main/packages/react/docs/${doc.file}`;
+
   return (
-    <div className="flex min-w-0 flex-col gap-8">
-      {example && (
-        // Zero-height so it costs no layout; sticks below the 3rem header for
-        // the whole article because it is a direct child of this column.
-        <div className="sticky top-14 z-10 -mb-8 flex h-0 justify-end">
-          <OpenInStackBlitz example={example} />
-        </div>
-      )}
-      <div className="flex min-h-7 flex-wrap items-center gap-4">
-        <Breadcrumb>
-          <BreadcrumbList>
-            <BreadcrumbItem>
-              {doc.slug === "" ? (
-                <BreadcrumbPage>Docs</BreadcrumbPage>
-              ) : (
-                <BreadcrumbLink render={<Link href="/docs" />}>Docs</BreadcrumbLink>
+    <div className="xl:grid xl:grid-cols-[minmax(0,48rem)_13rem] xl:gap-12">
+      <div className="flex min-w-0 flex-col gap-8">
+        {example && (
+          // On wide screens the button is zero-height and sticks below the
+          // 3rem header for the whole article. On narrow screens the
+          // breadcrumb would run under it, so it takes a row of its own.
+          <div className="flex justify-end md:sticky md:top-14 md:z-10 md:-mb-8 md:h-0">
+            <OpenInStackBlitz example={example} />
+          </div>
+        )}
+        <div className="flex min-h-7 flex-wrap items-center gap-4">
+          <Breadcrumb>
+            <BreadcrumbList>
+              <BreadcrumbItem>
+                {doc.slug === "" ? (
+                  <BreadcrumbPage>Docs</BreadcrumbPage>
+                ) : (
+                  <BreadcrumbLink render={<Link href="/docs" />}>Docs</BreadcrumbLink>
+                )}
+              </BreadcrumbItem>
+              {section && (
+                <>
+                  <BreadcrumbSeparator />
+                  <BreadcrumbItem>
+                    {/* The index lists each section under a heading of the same name. */}
+                    <BreadcrumbLink render={<Link href={`/docs#${section.dir}`} />}>
+                      {section.title}
+                    </BreadcrumbLink>
+                  </BreadcrumbItem>
+                  <BreadcrumbSeparator />
+                  <BreadcrumbItem>
+                    <BreadcrumbPage>{doc.title}</BreadcrumbPage>
+                  </BreadcrumbItem>
+                </>
               )}
-            </BreadcrumbItem>
-            {section && (
-              <>
-                <BreadcrumbSeparator />
-                <BreadcrumbItem>{section.title}</BreadcrumbItem>
-                <BreadcrumbSeparator />
-                <BreadcrumbItem>
-                  <BreadcrumbPage>{doc.title}</BreadcrumbPage>
-                </BreadcrumbItem>
-              </>
-            )}
-          </BreadcrumbList>
-        </Breadcrumb>
+            </BreadcrumbList>
+          </Breadcrumb>
+        </div>
+
+        <article
+          className="prose prose-neutral max-w-none dark:prose-invert prose-headings:font-heading prose-headings:tracking-tight prose-a:text-foreground prose-a:underline-offset-4 prose-code:before:content-none prose-code:after:content-none prose-pre:rounded-none prose-pre:border prose-pre:border-border prose-pre:bg-muted prose-pre:text-foreground"
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+        <CopyCode />
+
+        <a
+          href={editUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <PencilSimpleIcon className="size-4" />
+          Edit this page on GitHub
+        </a>
+
+        <Separator />
+
+        <nav aria-label="Pagination" className="grid gap-4 sm:grid-cols-2">
+          {prev ? (
+            <PageLink href={`/docs/${prev.slug}`} label="Previous" title={prev.title} side="prev" />
+          ) : (
+            <span />
+          )}
+          {next && (
+            <PageLink href={`/docs/${next.slug}`} label="Next" title={next.title} side="next" />
+          )}
+        </nav>
       </div>
 
-      <article
-        className="prose prose-neutral max-w-none dark:prose-invert prose-headings:font-heading prose-headings:tracking-tight prose-a:text-foreground prose-a:underline-offset-4 prose-code:before:content-none prose-code:after:content-none prose-pre:rounded-none prose-pre:border prose-pre:border-border prose-pre:bg-muted prose-pre:text-foreground"
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
-
-      <Separator />
-
-      <nav aria-label="Pagination" className="flex justify-between gap-4">
-        {prev ? (
-          <Button
-            variant="outline"
-            nativeButton={false}
-            render={<Link href={`/docs/${prev.slug}`} />}
-          >
-            <ArrowLeftIcon data-icon="inline-start" />
-            {prev.title}
-          </Button>
-        ) : (
-          <span />
-        )}
-        {next && (
-          <Button
-            variant="outline"
-            nativeButton={false}
-            render={<Link href={`/docs/${next.slug}`} />}
-          >
-            {next.title}
-            <ArrowRightIcon data-icon="inline-end" />
-          </Button>
-        )}
-      </nav>
+      <aside className="hidden xl:block">
+        <div className="sticky top-24 max-h-[calc(100vh-7rem)] overflow-y-auto">
+          <Toc headings={headings} />
+        </div>
+      </aside>
     </div>
+  );
+}
+
+function PageLink({
+  href,
+  label,
+  title,
+  side,
+}: {
+  readonly href: string;
+  readonly label: string;
+  readonly title: string;
+  readonly side: "prev" | "next";
+}) {
+  const Icon = side === "prev" ? ArrowLeftIcon : ArrowRightIcon;
+  return (
+    <Link
+      href={href}
+      className={`group flex flex-col gap-1 border border-border px-4 py-3 transition-colors hover:bg-muted ${
+        side === "next" ? "items-end text-right sm:col-start-2" : "items-start"
+      }`}
+    >
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <span className="inline-flex items-center gap-1.5 font-heading text-sm font-medium">
+        {side === "prev" && (
+          <Icon className="size-4 transition-transform group-hover:-translate-x-0.5" />
+        )}
+        {title}
+        {side === "next" && (
+          <Icon className="size-4 transition-transform group-hover:translate-x-0.5" />
+        )}
+      </span>
+    </Link>
   );
 }

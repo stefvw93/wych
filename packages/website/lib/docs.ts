@@ -34,6 +34,8 @@ export interface Doc {
   readonly order: number;
   /** Directory name under `docs/examples/` of the runnable project this page builds, if any. */
   readonly example: string | undefined;
+  /** Path under `docs/`, for the edit link. */
+  readonly file: string;
   /** The body, with frontmatter stripped. */
   readonly markdown: string;
 }
@@ -80,6 +82,7 @@ const parse = (file: string, raw: string): Doc | undefined => {
           ? Number(prefix)
           : Number.MAX_SAFE_INTEGER,
     example: typeof data.example === "string" ? data.example : undefined,
+    file,
     markdown: content.trim(),
   };
 };
@@ -165,12 +168,44 @@ const headingId = (text: string, seen: Map<string, number>): string => {
   return n === 0 ? base : `${base}-${n}`;
 };
 
+export interface Heading {
+  readonly id: string;
+  readonly text: string;
+  readonly depth: 2 | 3;
+}
+
+export interface Rendered {
+  readonly html: string;
+  /** `h2` and `h3` in document order, for the on-page nav. */
+  readonly headings: readonly Heading[];
+}
+
+/** marked hands heading text through its HTML escaper; the outline wants the characters back. */
+const decodeEntities = (s: string): string =>
+  s
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+
+const escapeAttr = (s: string): string =>
+  s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/** Copy button injected into every code block; `CopyCode` wires the click. */
+const COPY_BUTTON =
+  `<button type="button" data-copy-code aria-label="Copy code" ` +
+  `class="group/copy absolute top-2 right-2 inline-flex size-7 items-center justify-center border border-border bg-background/80 text-muted-foreground opacity-0 backdrop-blur transition-opacity group-hover/code:opacity-100 hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50 data-copied:text-primary data-copied:opacity-100">` +
+  `<svg class="size-3.5 group-data-copied/copy:hidden" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M216,32H88a8,8,0,0,0-8,8V80H40a8,8,0,0,0-8,8V216a8,8,0,0,0,8,8H168a8,8,0,0,0,8-8V176h40a8,8,0,0,0,8-8V40A8,8,0,0,0,216,32ZM160,208H48V96H160Zm48-48H176V88a8,8,0,0,0-8-8H96V48H208Z"/></svg>` +
+  `<svg class="hidden size-3.5 group-data-copied/copy:block" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M229.66,77.66l-128,128a8,8,0,0,1-11.32,0l-56-56a8,8,0,0,1,11.32-11.32L96,188.69,218.34,66.34a8,8,0,0,1,11.32,11.32Z"/></svg>` +
+  `</button>`;
+
 /**
  * A parser per render: the heading renderer keeps per-page state (the slugs
- * it has issued), and Next renders pages in parallel, so a shared instance
- * would leak ids between pages.
+ * it has issued and the outline), and Next renders pages in parallel, so a
+ * shared instance would leak between pages.
  */
-const createMarked = () => {
+const createMarked = (headings: Heading[]) => {
   const seen = new Map<string, number>();
   return new Marked({
     async: true,
@@ -179,13 +214,22 @@ const createMarked = () => {
       // Every heading is a link to itself. The `#` sits in the left margin and
       // shows on hover or keyboard focus; `scroll-mt` clears the sticky header.
       heading({ tokens, depth }) {
-        const id = headingId(this.parser.parseInline(tokens, this.parser.textRenderer), seen);
+        const text = decodeEntities(this.parser.parseInline(tokens, this.parser.textRenderer));
+        const id = headingId(text, seen);
+        if (depth === 2 || depth === 3) headings.push({ id, text, depth });
         const inner = this.parser.parseInline(tokens);
         return (
           `<h${depth} id="${id}" class="group relative scroll-mt-20">` +
           `<a href="#${id}" class="no-underline before:absolute before:-left-[1.25em] before:text-muted-foreground before:opacity-0 before:transition-opacity before:content-['#'] group-hover:before:opacity-100 focus-visible:outline-none focus-visible:before:opacity-100">` +
           `${inner}</a></h${depth}>\n`
         );
+      },
+      // Off-site links leave the docs in a new tab; everything else falls
+      // through to the default renderer.
+      link({ href, title, tokens }) {
+        if (!/^https?:\/\//.test(href)) return false;
+        const t = title ? ` title="${escapeAttr(title)}"` : "";
+        return `<a href="${escapeAttr(href)}"${t} target="_blank" rel="noreferrer">${this.parser.parseInline(tokens)}</a>`;
       },
     },
     async walkTokens(token) {
@@ -197,16 +241,30 @@ const createMarked = () => {
       const lang = token.lang?.split(/\s/)[0] ?? "";
       const known = shiki.getLoadedLanguages().includes(lang);
       // Shiki emits the `<pre>`; hand it through as raw HTML so marked does not
-      // escape it again.
+      // escape it again. The wrapper hosts the copy button.
       const html = shiki.codeToHtml(token.text, {
         lang: known ? lang : "text",
         themes: { light: "github-light", dark: "github-dark" },
         defaultColor: false,
       });
-      Object.assign(token, { type: "html", block: true, text: html });
+      Object.assign(token, {
+        type: "html",
+        block: true,
+        text: `<div class="group/code relative">${html}${COPY_BUTTON}</div>\n`,
+      });
     },
   });
 };
 
-export const renderMarkdown = (markdown: string): Promise<string> =>
-  createMarked().parse(markdown) as Promise<string>;
+export const renderMarkdown = async (markdown: string): Promise<Rendered> => {
+  const headings: Heading[] = [];
+  const html = await createMarked(headings).parse(markdown);
+  // A wide table scrolls inside its own box instead of the page. Shiki
+  // escapes `<` inside code, so this only matches real tables.
+  return {
+    html: html
+      .replace(/<table>/g, '<div class="overflow-x-auto"><table>')
+      .replace(/<\/table>/g, "</table></div>"),
+    headings,
+  };
+};
