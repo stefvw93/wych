@@ -47,9 +47,8 @@ export default defineConfig({
     ],
   },
   pack: {
-    dts: {
-      tsgo: true,
-    },
+    platform: "neutral",
+    dts: true,
   },
   run: {
     tasks: {
