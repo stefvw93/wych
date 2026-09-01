@@ -5,8 +5,9 @@
 Three search features side by side against a deliberately slow (500 ms) stub
 API, so "Searching" stays visible: `searchFeature` debounces inside a command
 with `Command.restart`, `taskSearch` takes the latest result with a `Task`,
-and `everySearch` keeps every result with `mode: "every"`. `main.tsx` also
-runs a fast comparison between "latest" and "every" and logs it.
+and `everySearch` keeps every result with `mode: "every"`. `src/search.test.ts`
+proves the "latest" vs. "every" comparison as vitest tests, headless, without
+mounting either feature.
 
 ## Problem
 
@@ -39,15 +40,19 @@ default `mode: "latest"`, which books under `Command.restart` so a new
 ## How It Works
 
 `search-api.ts` declares `SearchApi` as a service with one `hits` method.
-`main.tsx` supplies a layer where `hits` sleeps 500 ms, mounts
-`DebouncedSearch` and `Search` under one runtime, then runs `taskSearch` and
-`everySearch` against a faster 50 ms layer with two keystrokes
-(`"a"`, `"ab"`), logging that `taskSearch` emits one `SearchResolved` for
-`"ab!"` while `everySearch` emits both.
+`main.tsx` supplies a layer where `hits` sleeps 500 ms and mounts
+`DebouncedSearch` and `Search` under one runtime. `src/search.test.ts` runs
+against a faster 50 ms layer: one `reduce` test checks the `Pending` write
+and command for a single keystroke, and two `run` tests fold two keystrokes
+(`"a"`, `"ab"`) through `taskSearch` and `everySearch` to quiescence, showing
+that `taskSearch` emits one `SearchResolved` for `"ab!"` (the `"a"` fiber is
+interrupted) while `everySearch` emits both, in order.
 
-Run it standalone or in StackBlitz: `npm install`, then `npm run dev`.
-Inside this monorepo, run `vp -C packages/react/docs/examples/search-debounce dev`
-from the repo root, and `vp -C packages/react/docs/examples/search-debounce run test:types`
+Run it standalone or in StackBlitz: `npm install`, then `npm run dev` (the
+app) or `npm test` (the comparison). Inside this monorepo, run
+`vp -C packages/react/docs/examples/search-debounce dev` from the repo root,
+`vp -C packages/react/docs/examples/search-debounce run test` to run the
+tests, and `vp -C packages/react/docs/examples/search-debounce run test:types`
 to type-check.
 
 ## When to Use

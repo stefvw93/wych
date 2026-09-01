@@ -86,9 +86,18 @@ const parse = (file: string, raw: string): Doc | undefined => {
 
 let cached: Promise<readonly Doc[]> | undefined;
 
-/** Every doc, in nav order: index first, then by section, then by `order`. */
-export const allDocs = (): Promise<readonly Doc[]> =>
-  (cached ??= (async () => {
+/**
+ * Every doc, in nav order: index first, then by section, then by `order`.
+ * Memoized for the build only: in `next dev` the module outlives the file
+ * set, and a page added after the server started would 404 forever.
+ */
+export const allDocs = (): Promise<readonly Doc[]> => {
+  if (process.env.NODE_ENV !== "production") return readDocs();
+  return (cached ??= readDocs());
+};
+
+const readDocs = (): Promise<readonly Doc[]> =>
+  (async () => {
     // Only the index and the four sections are pages. `docs/examples/*` are
     // runnable projects with their own `node_modules`, so a recursive walk
     // from `docs/` is never safe.
@@ -115,7 +124,7 @@ export const allDocs = (): Promise<readonly Doc[]> =>
           a.order - b.order ||
           a.title.localeCompare(b.title),
       );
-  })());
+  })();
 
 export const findDoc = async (slug: string): Promise<Doc | undefined> =>
   (await allDocs()).find((d) => d.slug === slug);
@@ -140,27 +149,64 @@ export const docsBySection = async (): Promise<
  */
 let highlighter: ReturnType<typeof createHighlighter> | undefined;
 
-const marked = new Marked({
-  async: true,
-  gfm: true,
-  async walkTokens(token) {
-    if (token.type !== "code") return;
-    const shiki = await (highlighter ??= createHighlighter({
-      themes: ["github-light", "github-dark"],
-      langs: ["ts", "tsx", "js", "jsx", "json", "sh", "md"],
-    }));
-    const lang = token.lang?.split(/\s/)[0] ?? "";
-    const known = shiki.getLoadedLanguages().includes(lang);
-    // Shiki emits the `<pre>`; hand it through as raw HTML so marked does not
-    // escape it again.
-    const html = shiki.codeToHtml(token.text, {
-      lang: known ? lang : "text",
-      themes: { light: "github-light", dark: "github-dark" },
-      defaultColor: false,
-    });
-    Object.assign(token, { type: "html", block: true, text: html });
-  },
-});
+/**
+ * GitHub-style heading slug: lowercase, punctuation dropped, spaces to
+ * hyphens. `seen` dedupes repeats on one page the way GitHub does (`-1`, `-2`).
+ */
+const headingId = (text: string, seen: Map<string, number>): string => {
+  const base =
+    text
+      .toLowerCase()
+      .trim()
+      .replace(/[^\p{L}\p{N}\s-]/gu, "")
+      .replace(/\s+/g, "-") || "section";
+  const n = seen.get(base) ?? 0;
+  seen.set(base, n + 1);
+  return n === 0 ? base : `${base}-${n}`;
+};
+
+/**
+ * A parser per render: the heading renderer keeps per-page state (the slugs
+ * it has issued), and Next renders pages in parallel, so a shared instance
+ * would leak ids between pages.
+ */
+const createMarked = () => {
+  const seen = new Map<string, number>();
+  return new Marked({
+    async: true,
+    gfm: true,
+    renderer: {
+      // Every heading is a link to itself. The `#` sits in the left margin and
+      // shows on hover or keyboard focus; `scroll-mt` clears the sticky header.
+      heading({ tokens, depth }) {
+        const id = headingId(this.parser.parseInline(tokens, this.parser.textRenderer), seen);
+        const inner = this.parser.parseInline(tokens);
+        return (
+          `<h${depth} id="${id}" class="group relative scroll-mt-20">` +
+          `<a href="#${id}" class="no-underline before:absolute before:-left-[1.25em] before:text-muted-foreground before:opacity-0 before:transition-opacity before:content-['#'] group-hover:before:opacity-100 focus-visible:outline-none focus-visible:before:opacity-100">` +
+          `${inner}</a></h${depth}>\n`
+        );
+      },
+    },
+    async walkTokens(token) {
+      if (token.type !== "code") return;
+      const shiki = await (highlighter ??= createHighlighter({
+        themes: ["github-light", "github-dark"],
+        langs: ["ts", "tsx", "js", "jsx", "json", "sh", "md"],
+      }));
+      const lang = token.lang?.split(/\s/)[0] ?? "";
+      const known = shiki.getLoadedLanguages().includes(lang);
+      // Shiki emits the `<pre>`; hand it through as raw HTML so marked does not
+      // escape it again.
+      const html = shiki.codeToHtml(token.text, {
+        lang: known ? lang : "text",
+        themes: { light: "github-light", dark: "github-dark" },
+        defaultColor: false,
+      });
+      Object.assign(token, { type: "html", block: true, text: html });
+    },
+  });
+};
 
 export const renderMarkdown = (markdown: string): Promise<string> =>
-  marked.parse(markdown) as Promise<string>;
+  createMarked().parse(markdown) as Promise<string>;

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { site } from "@/lib/site";
 import { cn } from "@/lib/utils";
 
 const geistSans = Geist({
@@ -16,7 +17,7 @@ const jetbrainsMono = JetBrains_Mono({
 
 export const metadata: Metadata = {
   title: { default: "@wych/react", template: "%s — @wych/react" },
-  description: "A TEA-style feature runtime for React, built on Effect.",
+  description: site.description,
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

@@ -7,6 +7,9 @@ optional output vocabulary, and a pure reducer. The reducer returns the next
 state and, optionally, a `Command` that describes work. The runtime interprets
 commands as Effects and renders the feature as a React component.
 
+Async state logic is unit-testable to quiescence without a DOM: fold a
+sequence of actions through the reducer and read what it resolved to.
+
 ## Install
 
 ```sh
@@ -18,41 +21,93 @@ npm install @wych/react effect react react-dom
 ## A feature
 
 ```tsx
-import { Layer, Schema } from "effect";
-import { Action, Command, createRuntime, define } from "@wych/react";
+import { Context, Effect, Layer, Schema } from "effect";
+import { Action, createRuntime, define, Task } from "@wych/react";
 
-const Bumped = Action("Bumped", {});
-const Reached = Action.output("Reached", { at: Schema.Number });
+const Hits = Schema.Array(Schema.String);
 
-const counter = define({
-  props: Schema.Struct({ step: Schema.Number }),
-  state: Schema.Struct({ count: Schema.Number }),
-  action: Action.of([Bumped]),
-  output: Action.of([Reached]),
+class SearchApi extends Context.Service<
+  SearchApi,
+  { readonly hits: (query: string) => Effect.Effect<ReadonlyArray<string>> }
+>()("SearchApi") {}
+
+const Typed = Action("Typed", { query: Schema.String });
+const Cleared = Action("Cleared", {});
+
+const search = Task("Search", {
+  success: Hits,
+  onError: Task.message,
+  run: (query: string) => Effect.flatMap(SearchApi, (api) => api.hits(query)),
+});
+
+const taskSearch = define({
+  props: Schema.Struct({}),
+  state: Schema.Struct({ query: Schema.String, results: Task.schema(Hits) }),
+  action: Action.of([Typed, Cleared, ...search.actions]),
 }).create({
-  initialState: (props) => ({ count: props.step }),
+  initialState: () => ({ query: "", results: Task.idle }),
   reducer: {
-    Bumped: (_payload, { state, props }) => {
-      const count = state.count + props.step;
-      return count >= 10 ? [{ count }, Command.output(Reached, { at: count })] : { count };
-    },
+    Typed: ({ query }, { state }) => Task.start({ ...state, query }, "results", search.run(query)),
+    Cleared: (_payload, { state }) => [{ ...state, query: "", results: Task.idle }, search.cancel],
+    SearchResolved: ({ value }, { state }) => ({ ...state, results: Task.resolved(value) }),
+    SearchRejected: ({ error }, { state }) => ({ ...state, results: Task.rejected(error) }),
   },
   render: ({ state, dispatch }) => (
-    <button onClick={() => dispatch(Bumped.make({}))}>{state.count}</button>
+    <div>
+      <input
+        value={state.query}
+        onChange={(event) => dispatch(Typed.make({ query: event.target.value }))}
+      />
+      <button onClick={() => dispatch(Cleared.make({}))}>clear</button>
+      {Task.match(state.results, {
+        Idle: () => null,
+        Pending: () => <p>Searching</p>,
+        Rejected: ({ error }) => <p>{error}</p>,
+        Resolved: ({ value }) => (
+          <ul>
+            {value.map((hit) => (
+              <li key={hit}>{hit}</li>
+            ))}
+          </ul>
+        ),
+      })}
+    </div>
   ),
 });
 
-const { component } = createRuntime(Layer.empty);
-export const Counter = component(counter, { name: "Counter" });
+const api = Layer.succeed(SearchApi)({
+  hits: (query) => Effect.succeed([`${query} result`]),
+});
+
+const { component } = createRuntime(api);
+export const Search = component(taskSearch, { name: "Search" });
 ```
 
 ```tsx
-<Counter step={5} onReached={({ at }) => console.log(at)} />
+<Search />
 ```
 
-The same feature folds without React: `counter.reduce(action, snapshot)` is
-the reducer as one pure function, and `counter.run(actions, options)` folds a
-sequence to quiescence and reports what was emitted.
+The same feature folds without React. `taskSearch` takes the latest result: a
+slow request for `"a"` is still in flight when `"ab"` arrives, and `Task`'s
+default `mode: "latest"` interrupts it.
+
+```tsx
+const slowApi = Layer.succeed(SearchApi)({
+  hits: (query) => Effect.sleep("50 millis").pipe(Effect.as([`${query}!`])),
+});
+
+const result = await Effect.runPromise(
+  taskSearch.run([Typed.make({ query: "a" }), Typed.make({ query: "ab" })], {
+    props: {},
+    hooks: {},
+    layer: slowApi,
+  }),
+);
+console.log(result.emitted);
+// => [{ _tag: "SearchResolved", value: ["ab!"] }]
+console.log(result.state.results);
+// => { _tag: "Resolved", value: ["ab!"] }
+```
 
 ## Docs
 

@@ -21,6 +21,42 @@ Read `index.md` first. Then `reference/` for the API you are changing,
 Do not invent APIs: every export is listed under `reference/`.
 ```
 
+## Why the model suits an agent
+
+A `define({ props, state, action, output })` block is a feature's whole
+contract on one screen: what comes in, what it holds, what it can do, what it
+tells its parent. An agent reads that one object literal instead of
+reconstructing a `useEffect` graph or hunting for state hidden in closures.
+
+```tsx
+import { Action, define } from "@wych/react";
+import { Schema } from "effect";
+
+const Typed = Action("Typed", { text: Schema.String }); // internal: reaches the reducer
+const Submitted = Action.output("Submitted", { text: Schema.String }); // outbound: leaves via onSubmitted
+
+const SearchBox = define({
+  props: Schema.Struct({ placeholder: Schema.String }), // what the parent passes in
+  state: Schema.Struct({ text: Schema.String }), // what the feature holds
+  action: Action.of([Typed]), // what it can do
+  output: Action.of([Submitted]), // what it tells its parent
+});
+```
+
+Wrong is a type error, not a runtime surprise. Schemas type `props` and
+`state`; the reducer owes one handler per tag in the action vocabulary's
+`cases` (see [`reference/actions.md`](/docs/reference/actions), `cases`);
+every declared output becomes a required `on<Tag>` prop at each JSX call site
+(see [`reference/runtime.md`](/docs/reference/runtime)); and `Command` is
+typed against the reducer's own action and output, not annotated by hand (the
+contextual typing rule, [`reference/commands.md`](/docs/reference/commands)).
+An agent that gets one of these wrong finds out at `tsc`, before running
+anything.
+
+It can also check its own work. `feature.run` folds actions to quiescence in
+Node against a test `Layer`, so an agent verifies async logic without a
+browser (see [`how-to/test-a-feature-without-react.md`](/docs/how-to/test-a-feature-without-react)).
+
 ## Check what is on disk
 
 ```sh

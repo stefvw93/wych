@@ -250,6 +250,9 @@ importers:
         specifier: ^18.3 || ^19
         version: 19.2.8(react@19.2.8)
     devDependencies:
+      '@tanstack/react-query':
+        specifier: ^5.102.8
+        version: 5.102.8(react@19.2.8)
       '@types/node':
         specifier: ^26.1.1
         version: 26.4.0
@@ -296,34 +299,6 @@ importers:
       vitest:
         specifier: ^4.1.0
         version: 4.1.11(@types/node@26.4.0)(@vitest/browser-playwright@4.1.11)(@vitest/browser-preview@4.1.10(@voidzero-dev/vite-plus-core@0.2.9(@types/node@26.4.0)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0))(vitest@4.1.10))(@voidzero-dev/vite-plus-core@0.2.9(@types/node@26.4.0)(jiti@2.7.0)(typescript@5.9.3)(yaml@2.9.0))
-
-  packages/react/docs/examples/counter:
-    dependencies:
-      '@wych/react':
-        specifier: workspace:^
-        version: link:../../..
-      effect:
-        specifier: ^4.0.0-rc.112
-        version: 4.0.0-rc.112
-      react:
-        specifier: ^19.2.0
-        version: 19.2.8
-      react-dom:
-        specifier: ^19.2.0
-        version: 19.2.8(react@19.2.8)
-    devDependencies:
-      '@types/react':
-        specifier: ^19.2.0
-        version: 19.2.18
-      '@types/react-dom':
-        specifier: ^19.2.0
-        version: 19.2.5(@types/react@19.2.18)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vite:
-        specifier: npm:@voidzero-dev/vite-plus-core@0.2.9
-        version: '@voidzero-dev/vite-plus-core@0.2.9(@types/node@26.4.0)(jiti@2.7.0)(typescript@5.9.3)(yaml@2.9.0)'
 
   packages/react/docs/examples/devtools-console:
     dependencies:
@@ -492,6 +467,9 @@ importers:
       vite:
         specifier: npm:@voidzero-dev/vite-plus-core@0.2.9
         version: '@voidzero-dev/vite-plus-core@0.2.9(@types/node@26.4.0)(jiti@2.7.0)(typescript@5.9.3)(yaml@2.9.0)'
+      vitest:
+        specifier: ^4.1.0
+        version: 4.1.11(@types/node@26.4.0)(@vitest/browser-playwright@4.1.11)(@vitest/browser-preview@4.1.10(@voidzero-dev/vite-plus-core@0.2.9(@types/node@26.4.0)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0))(vitest@4.1.10))(@voidzero-dev/vite-plus-core@0.2.9(@types/node@26.4.0)(jiti@2.7.0)(typescript@5.9.3)(yaml@2.9.0))
 
   packages/react/docs/examples/ssr-hydrate:
     dependencies:
@@ -520,6 +498,40 @@ importers:
       vite:
         specifier: npm:@voidzero-dev/vite-plus-core@0.2.9
         version: '@voidzero-dev/vite-plus-core@0.2.9(@types/node@26.4.0)(jiti@2.7.0)(typescript@5.9.3)(yaml@2.9.0)'
+
+  packages/react/docs/examples/tanstack-query:
+    dependencies:
+      '@tanstack/react-query':
+        specifier: ^5.102.8
+        version: 5.102.8(react@19.2.8)
+      '@wych/react':
+        specifier: workspace:^
+        version: link:../../..
+      effect:
+        specifier: ^4.0.0-rc.112
+        version: 4.0.0-rc.112
+      react:
+        specifier: ^19.2.0
+        version: 19.2.8
+      react-dom:
+        specifier: ^19.2.0
+        version: 19.2.8(react@19.2.8)
+    devDependencies:
+      '@types/react':
+        specifier: ^19.2.0
+        version: 19.2.18
+      '@types/react-dom':
+        specifier: ^19.2.0
+        version: 19.2.5(@types/react@19.2.18)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vite:
+        specifier: npm:@voidzero-dev/vite-plus-core@0.2.9
+        version: '@voidzero-dev/vite-plus-core@0.2.9(@types/node@26.4.0)(jiti@2.7.0)(typescript@5.9.3)(yaml@2.9.0)'
+      vitest:
+        specifier: ^4.1.0
+        version: 4.1.11(@types/node@26.4.0)(@vitest/browser-playwright@4.1.11)(@vitest/browser-preview@4.1.10(@voidzero-dev/vite-plus-core@0.2.9(@types/node@26.4.0)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0))(vitest@4.1.10))(@voidzero-dev/vite-plus-core@0.2.9(@types/node@26.4.0)(jiti@2.7.0)(typescript@5.9.3)(yaml@2.9.0))
 
   packages/website:
     dependencies:
@@ -1517,6 +1529,14 @@ packages:
     resolution: {integrity: sha512-hwbzQuNUfcPvbegQFatVPl/MY/tcM9KLl963hQ5laJKPh81TEZ1+dNG9PirGvcaDBkp+BCshExAyKVPW91dozw==}
     peerDependencies:
       tailwindcss: '>=3.0.0 || >=4.0.0 || insiders'
+
+  '@tanstack/query-core@5.102.8':
+    resolution: {integrity: sha512-ZNjkJ33CqvPNec/6lZBnHqLc3EVGPZ9ySLhYahU9TcuRFdmwXewuj0c4hwSWcGHqEUwcSrKeZ+oGcvPBqXcQcg==}
+
+  '@tanstack/react-query@5.102.8':
+    resolution: {integrity: sha512-TYBea4OuXWD7MhaSHq069TWbFe7rcwWN6kzT7JF0OKi1K6c1gTv2IzD6A6ExJsCMozdkqBWeuIUZmu4KQg0O5A==}
+    peerDependencies:
+      react: ^18 || ^19
 
   '@testing-library/dom@10.4.1':
     resolution: {integrity: sha512-o4PXJQidqJl82ckFaXUeoAW+XysPLauYI43Abki5hABd853iMhitooc6znOnczgbTYmEP6U6/y1ZyKAIsvMKGg==}
@@ -4549,6 +4569,13 @@ snapshots:
     dependencies:
       postcss-selector-parser: 6.0.10
       tailwindcss: 4.3.3
+
+  '@tanstack/query-core@5.102.8': {}
+
+  '@tanstack/react-query@5.102.8(react@19.2.8)':
+    dependencies:
+      '@tanstack/query-core': 5.102.8
+      react: 19.2.8
 
   '@testing-library/dom@10.4.1':
     dependencies:

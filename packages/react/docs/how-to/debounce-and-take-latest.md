@@ -176,6 +176,8 @@ const every = await Effect.runPromise(everySearch.run(keystrokes, options));
 
 The `"a"` fiber is still sleeping when `"ab"` arrives. `"latest"` interrupts it, and an interrupted task dispatches nothing.
 
+The `search-debounce` example ships this comparison as a vitest file, `src/search.test.ts`, run with `npm test` or `vp -C packages/react/docs/examples/search-debounce run test`.
+
 ## Mount it
 
 The root layer supplies `SearchApi`, so `component` needs no layer of its own.

@@ -30,6 +30,7 @@
     "prepublishOnly": "vp run build"
   },
   "devDependencies": {
+    "@tanstack/react-query": "^5.102.8",
     "@types/node": "^26.1.1",
     "@vitest/browser-playwright": "^4.1.10",
     "tstyche": "^7.2.3",
