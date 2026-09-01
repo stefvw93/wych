@@ -56,10 +56,10 @@ export default async function DocPage({ params }: PageProps<"/docs/[[...slug]]">
     <div className="xl:grid xl:grid-cols-[minmax(0,48rem)_13rem] xl:gap-12">
       <div className="flex min-w-0 flex-col gap-8">
         {example && (
-          // On wide screens the button is zero-height and sticks below the
-          // 3rem header for the whole article. On narrow screens the
-          // breadcrumb would run under it, so it takes a row of its own.
-          <div className="flex justify-end md:sticky md:top-14 md:z-10 md:-mb-8 md:h-0">
+          // Sticks below the 3rem header for the whole article. From `md` up
+          // it is zero-height so it costs no layout; narrower, it keeps its
+          // height so the breadcrumb starts below it instead of under it.
+          <div className="sticky top-14 z-10 flex justify-end md:-mb-8 md:h-0">
             <OpenInStackBlitz example={example} />
           </div>
         )}
