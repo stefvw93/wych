@@ -6,11 +6,14 @@ order: 6
 
 # Compared with other libraries
 
-Wych is a reducer that owns a mount. That puts it next to three tools a React
-and Effect developer already knows, and next to one a Swift developer already
-knows. Each comparison names the real gap, not just the shared vocabulary.
+"Why not Redux?" is the first question, "why not XState?" the second, and
+"is this a TanStack Query replacement?" the one that decides whether anyone
+reads further. Wych is a reducer that owns a mount, which puts it next to all
+three, and next to one tool a Swift developer already knows.
 
-Every section reuses one feature: a search box backed by a debounced task.
+Each section names the real gap. Shared vocabulary is cheap; what matters is
+which problem each tool takes off your hands. Every section reuses one
+feature: a search box backed by a debounced task.
 
 ```tsx
 import { Action, Command, define, Task } from "@wych/react";
@@ -76,9 +79,8 @@ const runSearch = createAsyncThunk("search/run", async (query: string, { extra }
 );
 ```
 
-Wych's state lives on the mount, not on a global path. There is no store to
-subscribe a component to, because `search.results` only exists where
-`<Search />` is mounted.
+Wych's state lives on the mount. There is no store to subscribe a component
+to, because `search.results` only exists where `<Search />` is mounted.
 
 ```tsx continue
 const result = await Effect.runPromise(
@@ -166,7 +168,8 @@ supplied once at `createRuntime`, not a mock injected per test file.
 ## useReducer + TanStack Query
 
 The plain-React baseline is `useReducer` for local state and TanStack Query
-for the request. It gets you most of the way, with four real gaps.
+for the request. It gets most of the way. Four gaps remain, and each one is a
+rule that has to live outside the reducer.
 
 ```tsx fragment
 // Plain React: the effect lives outside the reducer, uncancellable by name
@@ -237,7 +240,7 @@ case .typed(let query):
 // Wych: the same shape, addressed by a group name instead of a cancellation id
 Typed: ({ query }, { state }) =>
   Task.start({ ...state, query }, "results", search.run(query)),
-// Task's default mode is "latest": Command.restart under the group "results"
+// Task's default mode is "latest": Command.restart under the group "Task/Search"
 ```
 
 `TestStore`'s assert-and-step loop and `feature.run`'s fold both answer "what

@@ -4,138 +4,237 @@ description: Why a feature has two message channels, and why the outbound one ne
 order: 2
 ---
 
-A feature has two vocabularies. Actions come in and reach the reducer. Outputs go out and leave through a prop.
+# Actions and outputs
 
-```ts
+A confirm dialog in React talks to its parent through callback props:
+`onConfirm?: () => void`, `onCancel?: () => void`. The parent may forget one.
+The child may call one twice, or after unmount. Nothing in the type says
+what the dialog can say, only what the parent happened to wire up.
+
+Wych gives a feature two vocabularies. Actions come in and reach the reducer.
+Outputs go out and leave through a prop that the type requires.
+
+```tsx
 import { Action, Command, createRuntime, define, Next } from "@wych/react";
 import { Effect, Layer, Schema } from "effect";
 
-const Added = Action("Added", { sku: Schema.String });
-const CheckedOut = Action("CheckedOut", {});
-const OrderPlaced = Action.output("OrderPlaced", { orderId: Schema.String });
+const Opened = Action("Opened", {});
+const Typed = Action("Typed", { text: Schema.String });
+const ConfirmClicked = Action("ConfirmClicked", {});
+const Closed = Action("Closed", { reason: Schema.String });
 
-const Cart = define({
-  props: Schema.Struct({ customerId: Schema.String }),
-  state: Schema.Struct({ items: Schema.Array(Schema.String), placed: Schema.Boolean }),
-  action: Action.of([Added, CheckedOut]),
-  output: Action.of([OrderPlaced]),
+const Confirmed = Action.output("Confirmed", {});
+const Dismissed = Action.output("Dismissed", { reason: Schema.String });
+
+const Dialog = define({
+  props: Schema.Struct({ title: Schema.String, confirmWord: Schema.String }),
+  state: Schema.Struct({ open: Schema.Boolean, typed: Schema.String }),
+  action: Action.of([Opened, Typed, ConfirmClicked, Closed]),
+  output: Action.of([Confirmed, Dismissed]),
 });
 ```
 
-`Action` brands a message internal and `Action.output` brands it outbound. The brand is a real runtime property, and the two channels are not assignable to each other in either direction. One vocabulary holds one channel.
+`Action` brands a message internal and `Action.output` brands it outbound.
+The brand is a runtime property and a type, so the two channels are not
+assignable to each other, and one vocabulary holds one channel.
 
 ```ts continue
 // @ts-expect-error a vocabulary holds one channel
-const Mixed = Action.of([Added, OrderPlaced]);
+const Mixed = Action.of([Opened, Confirmed]);
 ```
 
 ## Why an output never re-enters the reducer
 
-A feature's state is a fold over its own action union. If an outbound message could also be folded, the reducer would have to answer a question the feature cannot answer: what the parent did with it.
+A feature's state is a fold over its own actions. If `Confirmed` could also
+be folded, the reducer would have to answer a question the dialog cannot
+answer: what did the parent do with it? Close a modal, delete a record,
+navigate away. The dialog does not know and should not.
 
-```ts continue
-const cart = Cart.create({
-  initialState: () => ({ items: [], placed: false }),
-  reducer: {
-    Added: ({ sku }, { state }) => ({ ...state, items: [...state.items, sku] }),
-    CheckedOut: (_payload, { state }) => [
-      { ...state, placed: true },
-      Command.output(OrderPlaced, { orderId: `order-${state.items.length}` }),
-    ],
-  },
+```tsx continue
+const reducer = Dialog.reducer({
+  Opened: (_payload, { state }) => ({ ...state, open: true, typed: "" }),
+  Typed: ({ text }, { state }) => ({ ...state, typed: text }),
+  ConfirmClicked: (_payload, { state, props }) =>
+    state.typed === props.confirmWord
+      ? [{ ...state, open: false }, Command.output(Confirmed, {})]
+      : state,
+  Closed: ({ reason }, { state }) => [
+    { ...state, open: false },
+    Command.output(Dismissed, { reason }),
+  ],
+});
+
+const dialog = Dialog.create({
+  initialState: () => ({ open: false, typed: "" }),
+  reducer,
   render: () => null,
 });
 ```
 
-The reducer's key set holds the declared action tags plus the optional lifecycle tags. An output tag is absent from it, so there is no handler to write. `reduce` refuses one at the call as well.
+The reducer's key set is the declared action tags plus the optional
+lifecycle tags. An output tag is absent, so there is no handler to write, and
+`reduce` refuses one at the call as well.
 
 ```ts continue
-cart.reduce(
+dialog.reduce(
   // @ts-expect-error an output never reaches the reducer
-  { _tag: "OrderPlaced", orderId: "o1" },
-  { state: { items: [], placed: false }, props: { customerId: "c1" }, hooks: {} },
+  { _tag: "Confirmed" },
+  {
+    state: { open: true, typed: "" },
+    props: { title: "Delete", confirmWord: "DELETE" },
+    hooks: {},
+  },
 );
-// throws TypeError: No reducer handler for action "OrderPlaced"
+// throws TypeError: No reducer handler for action "Confirmed"
 ```
 
-`run` shows the split. Actions a command emits are folded and collected in `emitted`. Outputs are collected in `outputs` and folded nowhere.
+`run` shows the split. Actions a command emits are folded and collected in
+`emitted`. Outputs are collected in `outputs` and folded nowhere.
 
 ```ts continue
-Effect.runPromise(
-  cart.run([{ _tag: "Added", sku: "sku-1" }, { _tag: "CheckedOut" }], {
-    props: { customerId: "c1" },
+const confirmed = await Effect.runPromise(
+  dialog.run([Opened.make({}), Typed.make({ text: "DELETE" }), ConfirmClicked.make({})], {
+    props: { title: "Delete", confirmWord: "DELETE" },
     hooks: {},
     layer: Layer.empty,
   }),
 );
-// => { state: { items: ["sku-1"], placed: true },
-//      emitted: [],
-//      outputs: [{ _tag: "OrderPlaced", orderId: "order-1" }] }
+
+console.log(confirmed.state);
+// => { open: false, typed: "DELETE" }
+console.log(confirmed.emitted);
+// => []
+console.log(confirmed.outputs);
+// => [{ _tag: "Confirmed" }]
 ```
 
-The runtime cannot attribute what the parent dispatches next to the output that caused it, because an output leaves through a plain React callback into arbitrary code. Devtools report the `Output` event and the parent's own `Dispatch` cause, and claim no edge between them.
+A callback prop would have carried the same fact, with no record of it. Here
+the announcement is a value the test reads.
 
 ## Why `_tag` is stripped at both edges
 
-Each output becomes a required `on<Tag>` prop that receives the payload alone.
+Each output becomes a required `on<Tag>` prop that receives the payload
+alone. The parent cannot forget `onConfirmed`; leaving it out is a compile
+error at the JSX.
 
 ```tsx continue
 const runtime = createRuntime(Layer.empty);
-const CartView = runtime.component(cart, { name: "Cart" });
+const ConfirmDialog = runtime.component(dialog, { name: "ConfirmDialog" });
 
-const Checkout = () => (
-  <CartView customerId="c1" onOrderPlaced={({ orderId }) => window.alert(orderId)} />
+const DeleteAccount = () => (
+  <ConfirmDialog
+    title="Delete account"
+    confirmWord="DELETE"
+    onConfirmed={() => window.alert("deleted")}
+    onDismissed={({ reason }) => console.info(reason)}
+  />
 );
 ```
 
-The prop name already carries the tag, so the payload carries no discriminant to destructure around. A reducer handler is stripped on the same rule: the handler key did the routing, so what the handler holds is plain data. Storing a payload whole cannot smuggle a tag into state or into a command's payload.
+The prop name already carries the tag, so the payload carries no
+discriminant to destructure around. A reducer handler is stripped on the same
+rule: the handler key did the routing, so what the handler holds is plain
+data. A payload stored whole cannot smuggle a tag into state or into a
+command.
 
 ```ts continue
-const next = cart.reduce(
-  { _tag: "Added", sku: "sku-1" },
-  { state: { items: [], placed: false }, props: { customerId: "c1" }, hooks: {} },
+const next = dialog.reduce(
+  { _tag: "Typed", text: "DEL" },
+  {
+    state: { open: true, typed: "" },
+    props: { title: "Delete", confirmWord: "DELETE" },
+    hooks: {},
+  },
 );
-// the handler received { sku: "sku-1" }
-Next.state(next); // => { items: ["sku-1"], placed: false }
+// the handler received { text: "DEL" }
+console.log(Next.state(next));
+// => { open: true, typed: "DEL" }
 ```
 
-A missing `on<Tag>` handler at runtime throws `TypeError('No "onOrderPlaced" prop for output "OrderPlaced"')` to the nearest error boundary. The parent owes a handler for every output the child declares.
+At runtime, an output leaving while its prop is absent throws
+`TypeError('No "onConfirmed" prop for output "Confirmed"')` to the nearest
+error boundary. That path is unreachable through JSX, because the prop is
+required.
 
 ## Why `dispatch` routes outputs from the view
 
-`render` and `Component.useFeature()` both hand back a `dispatch` that accepts declared actions and declared outputs. The store routes every message by tag, so an output dispatched from the view goes straight to its prop.
+`render` and `ConfirmDialog.useFeature()` hand back a `dispatch` that accepts
+declared actions and declared outputs. The store routes every message by
+tag, so an output dispatched from the view goes straight to its prop.
 
 ```tsx continue
-const passthrough = Cart.render(({ dispatch }) => (
-  <button onClick={() => dispatch(OrderPlaced.make({ orderId: "o1" }))}>announce</button>
-));
+import { createRoot } from "react-dom/client";
+
+const announcer = Dialog.create({
+  initialState: () => ({ open: true, typed: "" }),
+  reducer,
+  render: ({ dispatch }) => (
+    <button onClick={() => dispatch(Dismissed.make({ reason: "escape" }))}>Close</button>
+  ),
+});
+const Announcer = runtime.component(announcer, { name: "Announcer" });
+
+const reasons: Array<string> = [];
+createRoot(document.getElementById("root")!).render(
+  <Announcer
+    title="Delete"
+    confirmWord="DELETE"
+    onConfirmed={() => {}}
+    onDismissed={({ reason }) => reasons.push(reason)}
+  />,
+);
+await new Promise((resolve) => setTimeout(resolve, 50)); // let the mount effect run
+document.querySelector("button")!.click();
+
+console.log(reasons);
+// => ["escape"]
 ```
 
-Without that route, a view that only announces would need a mirror action whose single job is to return `Command.output`. That handler writes no state and exists to satisfy the plumbing.
+Without that route, a view that only announces would need a mirror action
+whose one job is to return `Command.output`. That handler writes no state
+and exists to satisfy the plumbing.
 
-## When state must witness what left
-
-Route through an action when the feature's own state has to record the announcement. The view dispatches the action, the handler writes state, and the command carries the output out.
+Route through an action when the feature's own state has to record what
+left. `Closed` above is that case: the view dispatches `Closed`, the handler
+writes `open: false`, and the command carries `Dismissed` out. The state
+change and the announcement come from one fold, so they cannot come apart.
 
 ```ts continue
-const checkout = Cart.reducer({
-  Added: ({ sku }, { state }) => ({ ...state, items: [...state.items, sku] }),
-  CheckedOut: (_payload, { state }) => [
-    { ...state, placed: true },
-    Command.output(OrderPlaced, { orderId: `order-${state.items.length}` }),
-  ],
-});
-```
+const closed = dialog.reduce(
+  { _tag: "Closed", reason: "backdrop" },
+  {
+    state: { open: true, typed: "" },
+    props: { title: "Delete", confirmWord: "DELETE" },
+    hooks: {},
+  },
+);
 
-`placed: true` is the witness. The output still leaves once, from the same fold that wrote the state, so the two cannot come apart.
+console.log(Next.state(closed).open);
+// => false
+console.log(Next.command(closed)?._tag);
+// => "Effect"
+```
 
 ## Why lifecycle tags are reserved
 
-The runtime raises `Mounted`, `PropsChanged`, `HookChanged`, `Error` and `Unmounted` into the same reducer, using the same key lookup. A user message with one of those tags would be indistinguishable from the runtime's own.
+The runtime raises `Mounted`, `PropsChanged`, `HookChanged`, `Error` and
+`Unmounted` into the same reducer through the same key lookup. A user
+message with one of those tags would be indistinguishable from the runtime's
+own, so the five names are rejected at declaration on both channels.
 
 ```ts continue
 // @ts-expect-error "Mounted" is a lifecycle tag
 const Mounted = Action("Mounted", {});
 ```
 
-The five tags are rejected at declaration, in both channels, so the collision is a compile error at the line that causes it. Payloads and firing order are in [lifecycle](/docs/reference/lifecycle); the vocabulary API is in [actions](/docs/reference/actions).
+## What the runtime cannot see
+
+An output leaves through a plain React callback into arbitrary parent code.
+The runtime cannot know what the parent dispatched next, so devtools report
+the `Output` event and the parent's own `Dispatch` cause and claim no edge
+between them. A devtools UI can draw that edge from adjacency; the runtime
+will not assert it.
+
+Payloads and firing order for the lifecycle actions are in
+[lifecycle](/docs/reference/lifecycle). The vocabulary API is in
+[actions](/docs/reference/actions).

@@ -17,8 +17,11 @@ const initialState = Editor.initialState((props) => ({
 }));
 
 const reducer = Editor.reducer({
-  TextChanged: ({ text }, { props }) => ({ text, dirty: text !== props.initialText }),
-  Reverted: (_payload, { props }) => ({ text: props.initialText, dirty: false }),
+  TextChanged: (payload, snapshot) => ({
+    text: payload.text,
+    dirty: payload.text !== snapshot.props.initialText,
+  }),
+  Reverted: (_payload, snapshot) => ({ text: snapshot.props.initialText, dirty: false }),
 });
 
 const render = Editor.render(({ state, dispatch }) => (
@@ -27,7 +30,7 @@ const render = Editor.render(({ state, dispatch }) => (
       value={state.text}
       onChange={(event) => dispatch(TextChanged.make({ text: event.target.value }))}
     />
-    <button type="button" disabled={!state.dirty} onClick={() => dispatch({ _tag: "Reverted" })}>
+    <button type="button" disabled={!state.dirty} onClick={() => dispatch(Reverted.make({}))}>
       Revert
     </button>
   </form>

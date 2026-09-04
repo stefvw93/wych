@@ -12,7 +12,8 @@ each, and know when one of them saved.
 
 Features talk to each other the way React components do: props down, outputs up.
 The child announces `Saved` and the parent receives it through an `onSaved`
-prop. Nothing in the child knows a parent exists.
+prop. The child's inputs are its props and its outputs are declared, so the
+same editor mounts under any parent, or under none.
 
 ## 1. Add a list endpoint to the service
 
@@ -49,7 +50,8 @@ export const { component } = createRuntime(notesApiLayer);
 ## 2. Announce the save
 
 `Action.output` declares an outbound message. `Command.output` emits one. The
-editor is the chapter 2 file with those two lines added.
+editor is the chapter 2 file with those two lines added and the cancel button
+left out.
 
 ```tsx continue
 // note-editor.tsx
@@ -64,7 +66,10 @@ const saveNote = Task("Save", {
   success: Schema.String,
   onError: Task.message,
   run: (note: { readonly id: string; readonly text: string }) =>
-    Effect.flatMap(NotesApi, (api) => api.save(note)),
+    Effect.gen(function* () {
+      const api = yield* NotesApi;
+      return yield* api.save(note);
+    }),
 });
 
 const Editor = define({
@@ -92,7 +97,9 @@ const editor = Editor.create({
       save: Task.idle,
     }),
     SaveClicked: (_payload, { state, props }) =>
-      Task.start(state, "save", saveNote.run({ id: props.noteId, text: state.text })),
+      Task.isPending(state.save)
+        ? state
+        : Task.start(state, "save", saveNote.run({ id: props.noteId, text: state.text })),
     SaveResolved: ({ value }, { state, props }) => [
       { ...state, dirty: false, save: Task.resolved(value) },
       Command.output(Saved, { id: props.noteId, revision: value }),
@@ -105,7 +112,7 @@ const editor = Editor.create({
         value={state.text}
         onChange={(event) => dispatch(TextChanged.make({ text: event.target.value }))}
       />
-      <button type="button" disabled={!state.dirty} onClick={() => dispatch({ _tag: "Reverted" })}>
+      <button type="button" disabled={!state.dirty} onClick={() => dispatch(Reverted.make({}))}>
         Revert
       </button>
       <button type="button" onClick={() => dispatch(SaveClicked.make({}))}>
@@ -120,7 +127,14 @@ export const NoteEditor = component(editor, { name: "NoteEditor" });
 
 `Saved` has no reducer handler, and writing one is a compile error. An output
 leaves the feature and never comes back. `NoteEditor` now takes a required
-`onSaved` prop, derived from the tag.
+`onSaved` prop, derived from the tag, with the payload minus `_tag`.
+
+```tsx continue
+const one = <NoteEditor noteId="n1" initialText="Buy milk" onSaved={({ id }) => console.log(id)} />;
+
+// @ts-expect-error Property 'onSaved' is missing
+const missing = <NoteEditor noteId="n1" initialText="Buy milk" />;
+```
 
 ## 3. Declare the parent
 
@@ -133,7 +147,15 @@ import { Children } from "@wych/react";
 
 const NoteSaved = Action("NoteSaved", { id: Schema.String, revision: Schema.String });
 
-const loadNotes = Task("Load", { success: Schema.Array(Note), onError: Task.message });
+const loadNotes = Task("Load", {
+  success: Schema.Array(Note),
+  onError: Task.message,
+  run: () =>
+    Effect.gen(function* () {
+      const api = yield* NotesApi;
+      return yield* api.list;
+    }),
+});
 
 const List = define({
   props: Schema.Struct({ title: Schema.String, children: Schema.optionalKey(Children) }),
@@ -145,7 +167,8 @@ const List = define({
 });
 ```
 
-`loadNotes` declares no `run`, so its `run` takes the effect at the call site.
+`loadNotes` takes no input, so `run` declares none and the handler calls
+`loadNotes.run()`.
 `Children` validates any node and is invisible to change detection. A parent
 that passes a fresh node on every render raises no `PropsChanged`.
 
@@ -156,8 +179,7 @@ startup work goes.
 
 ```ts continue
 const listReducer = List.reducer({
-  Mounted: (_payload, { state }) =>
-    Task.start(state, "notes", loadNotes.run(Effect.flatMap(NotesApi, (api) => api.list))),
+  Mounted: (_payload, { state }) => Task.start(state, "notes", loadNotes.run()),
   NoteSaved: ({ id }, { state }) => ({ ...state, lastSaved: id }),
   LoadResolved: ({ value }, { state }) => ({ ...state, notes: Task.resolved(value) }),
   LoadRejected: ({ error }, { state }) => ({ ...state, notes: Task.rejected(error) }),
@@ -166,7 +188,8 @@ const listReducer = List.reducer({
 
 Lifecycle handlers are optional and take the same shape as any other handler.
 The five tags are `Mounted`, `PropsChanged`, `HookChanged`, `Error` and
-`Unmounted`.
+`Unmounted`. Their payloads and firing order are in the
+[lifecycle reference](/docs/reference/lifecycle).
 
 ## 5. Split a piece of the view out
 
@@ -180,8 +203,12 @@ const LastSaved = () => {
 };
 ```
 
-`LastSaved` is part of the list's view, so it reads the list's state. Called
-outside a `<NoteList>` it throws `TypeError: NoteList.useFeature() called
+`LastSaved` is part of the list's view, so it reads the list's state. That is
+the line between a view fragment and a child feature: a fragment reaches into
+its own feature through `useFeature`, a child feature such as `NoteEditor`
+receives props and announces outputs.
+
+Called outside a `<NoteList>`, `LastSaved` throws `TypeError: NoteList.useFeature() called
 outside <NoteList>`.
 
 ## 6. Render the children
@@ -274,11 +301,11 @@ console.log(saved.state.dirty);
 
 ```sh
 src/
-  notes-api.ts     # list and save
-  runtime.ts       # createRuntime(notesApiLayer)
+  main.tsx         # the mount
   note-editor.tsx  # the child feature, with its Saved output
   note-list.tsx    # the parent feature and its view fragment
-  main.tsx         # the mount
+  notes-api.ts     # list and save
+  runtime.ts       # createRuntime(notesApiLayer)
 ```
 
 Split across the files, the imports between them are:

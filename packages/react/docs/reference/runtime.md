@@ -143,7 +143,7 @@ Anything that must outlive a mount belongs in the root layer.
 
 ### `name`
 
-`name` defaults to `"TeaFeature"`. It appears in the component's
+`name` defaults to `"WychFeature"`. It appears in the component's
 `displayName`, in `useFeature` error messages, and as the `name` field of every
 [devtools event](/docs/reference/devtools).
 
@@ -153,7 +153,7 @@ const Anonymous = component(cart);
 console.log(CartView.displayName);
 // => "Cart"
 console.log(Anonymous.displayName);
-// => "TeaFeature"
+// => "WychFeature"
 ```
 
 ## Output props

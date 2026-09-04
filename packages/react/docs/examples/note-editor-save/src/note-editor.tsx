@@ -7,7 +7,10 @@ const saveNote = Task("Save", {
   success: Schema.String,
   onError: Task.message,
   run: (note: { readonly id: string; readonly text: string }) =>
-    Effect.flatMap(NotesApi, (api) => api.save(note)),
+    Effect.gen(function* () {
+      const api = yield* NotesApi;
+      return yield* api.save(note);
+    }),
 });
 
 const TextChanged = Action("TextChanged", { text: Schema.String });
@@ -43,7 +46,9 @@ const reducer = Editor.reducer({
     save: Task.idle,
   }),
   SaveClicked: (_payload, { state, props }) =>
-    Task.start(state, "save", saveNote.run({ id: props.noteId, text: state.text })),
+    Task.isPending(state.save)
+      ? state
+      : Task.start(state, "save", saveNote.run({ id: props.noteId, text: state.text })),
   SaveCancelled: (_payload, { state }) => [{ ...state, save: Task.idle }, saveNote.cancel],
   SaveResolved: ({ value }, { state }) => ({
     ...state,
@@ -59,7 +64,7 @@ const render = Editor.render(({ state, dispatch }) => (
       value={state.text}
       onChange={(event) => dispatch(TextChanged.make({ text: event.target.value }))}
     />
-    <button type="button" disabled={!state.dirty} onClick={() => dispatch({ _tag: "Reverted" })}>
+    <button type="button" disabled={!state.dirty} onClick={() => dispatch(Reverted.make({}))}>
       Revert
     </button>
     <button type="button" onClick={() => dispatch(SaveClicked.make({}))}>

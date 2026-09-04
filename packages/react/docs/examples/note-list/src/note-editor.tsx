@@ -12,7 +12,10 @@ const saveNote = Task("Save", {
   success: Schema.String,
   onError: Task.message,
   run: (note: { readonly id: string; readonly text: string }) =>
-    Effect.flatMap(NotesApi, (api) => api.save(note)),
+    Effect.gen(function* () {
+      const api = yield* NotesApi;
+      return yield* api.save(note);
+    }),
 });
 
 const Editor = define({
@@ -40,7 +43,9 @@ export const editor = Editor.create({
       save: Task.idle,
     }),
     SaveClicked: (_payload, { state, props }) =>
-      Task.start(state, "save", saveNote.run({ id: props.noteId, text: state.text })),
+      Task.isPending(state.save)
+        ? state
+        : Task.start(state, "save", saveNote.run({ id: props.noteId, text: state.text })),
     SaveResolved: ({ value }, { state, props }) => [
       { ...state, dirty: false, save: Task.resolved(value) },
       Command.output(Saved, { id: props.noteId, revision: value }),
@@ -53,7 +58,7 @@ export const editor = Editor.create({
         value={state.text}
         onChange={(event) => dispatch(TextChanged.make({ text: event.target.value }))}
       />
-      <button type="button" disabled={!state.dirty} onClick={() => dispatch({ _tag: "Reverted" })}>
+      <button type="button" disabled={!state.dirty} onClick={() => dispatch(Reverted.make({}))}>
         Revert
       </button>
       <button type="button" onClick={() => dispatch(SaveClicked.make({}))}>

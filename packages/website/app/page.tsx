@@ -98,32 +98,33 @@ test("a newer keystroke interrupts the request in flight", async () => {
 
 const PILLARS = [
   {
-    title: "One reducer, lifecycle included",
+    title: "Lifecycle without useEffect",
     body: (
       <>
         <code>Mounted</code>, <code>PropsChanged</code>, <code>Unmounted</code> and{" "}
-        <code>Error</code> are handlers like any other action, so mount and teardown are pure
-        reduction. A handler returns the next state, or the next state and a <code>Command</code>.
+        <code>Error</code> arrive in the reducer like any other action. Startup work, a resubscribe
+        when a prop changes, a flush on exit: each is a handler returning{" "}
+        <code>[state, command]</code>. No dependency array, no cleanup closure.
       </>
     ),
   },
   {
-    title: "Commands are data, fibers have names",
+    title: "Fibers have names",
     body: (
       <>
-        A <code>Command</code>&rsquo;s only leaf is an Effect. Book it under a key and the next
-        action can cancel or restart it. That is the runtime&rsquo;s one supervisory concept; every
-        other policy is an Effect combinator you already know.
+        The only leaf of a <code>Command</code> is an Effect. Book it under a key and any later
+        handler can cancel or restart it by that name. That is the runtime&rsquo;s one supervisory
+        concept. Debounce, throttle and retry are the Effect combinators you already have.
       </>
     ),
   },
   {
-    title: "Inert until mounted",
+    title: "A feature is a value",
     body: (
       <>
-        A feature is a value. <code>run</code> folds actions to quiescence against a{" "}
-        <code>Layer</code> and reports state, emissions and outputs. <code>component</code>{" "}
-        energizes it; <code>renderToString</code> paints initial state and folds nothing.
+        <code>reduce</code> folds one action. <code>run</code> folds a sequence to its end against a{" "}
+        <code>Layer</code> and reports state, emissions and outputs. <code>component</code> mounts
+        the same value in React. <code>renderToString</code> paints initial state and folds nothing.
       </>
     ),
   },
@@ -146,7 +147,7 @@ const AGENT_POINTS = [
       <>
         Schemas type props, state and payloads. The reducer needs one handler per action tag,
         required and exhaustive. Outputs are required <code>on&lt;Tag&gt;</code> props at every JSX
-        call site. An agent&rsquo;s mistake fails <code>tsc</code>, not your users.
+        call site. An agent&rsquo;s mistake fails <code>tsc</code> before it reaches a user.
       </>
     ),
   },
@@ -154,8 +155,8 @@ const AGENT_POINTS = [
     title: "It can check its own work",
     body: (
       <>
-        <code>run</code> folds a feature to quiescence in Node against a test <code>Layer</code>, so
-        an agent verifies async logic without a browser. The docs ship inside the package and at{" "}
+        <code>run</code> folds a feature to its end in Node against a test <code>Layer</code>, so an
+        agent verifies async logic without a browser. The docs ship inside the package and at{" "}
         <code>/llms.txt</code>, so it reads the version you installed.
       </>
     ),
@@ -163,11 +164,12 @@ const AGENT_POINTS = [
 ] as const;
 
 const SECTION_BLURBS: Record<string, string> = {
-  Tutorial: "One app, three chapters: build a feature, add async work, compose features.",
+  Tutorial:
+    "One app in three chapters: a feature, then async work, then a parent that hears its children.",
   "How-to":
-    "Debounce, streams, tests without React, the React ecosystem, server rendering, devtools.",
-  Reference: "Every export: runtime, features, actions, commands, lifecycle, tasks, devtools.",
-  Explanation: "The model, the two channels, commands as data, cancellation, comparisons.",
+    "Recipes: debounce, streams, tests with no DOM, TanStack Query, server rendering, devtools.",
+  Reference: "Every export, one page per area, with its contract and a snippet that calls it.",
+  Explanation: "Why the reducer returns work instead of doing it.",
 };
 
 /** A code pane in the hero pair: a file-name caption over a highlighted block. */
@@ -204,7 +206,7 @@ export default async function Home() {
         <section className="flex flex-col items-start gap-6">
           <Badge variant="outline">Effect v4 · React 19</Badge>
           <h1 className="max-w-4xl text-3xl font-medium tracking-tight text-balance sm:text-4xl md:text-5xl">
-            {/* One sentence per line: the promise, then the mechanism. */}
+            {/* One sentence per line; the tagline is one sentence today. */}
             {site.tagline.split(/(?<=\.)\s+/).map((sentence) => (
               <span key={sentence} className="block">
                 {sentence}
@@ -212,28 +214,6 @@ export default async function Home() {
             ))}
           </h1>
           <p className="max-w-prose text-lg leading-8 text-muted-foreground">{site.subline}</p>
-          <div className="flex max-w-prose flex-col gap-3 text-base leading-7 text-muted-foreground">
-            <p>
-              A feature is one component: schema-typed props and state, a tagged action vocabulary,
-              a pure reducer, and declared outputs that leave through typed{" "}
-              <code className="font-mono text-sm">on&lt;Tag&gt;</code> props.
-            </p>
-            <p>It is not a store, not atoms, and not a server cache; it sits next to those.</p>
-            <p>
-              See{" "}
-              <Link
-                href="/docs/how-to/use-with-the-react-ecosystem"
-                className="underline underline-offset-4"
-              >
-                use with the React ecosystem
-              </Link>{" "}
-              (TanStack Query, routers, stores) and{" "}
-              <Link href="/docs/explanation/comparisons" className="underline underline-offset-4">
-                how it compares
-              </Link>
-              .
-            </p>
-          </div>
           <div className="flex flex-wrap gap-2">
             <Button
               size="lg"
@@ -268,13 +248,33 @@ export default async function Home() {
               <Pane file="search.test.ts" note="the proof: no renderer, no mocks" html={test} />
               <p className="max-w-prose text-sm leading-6 text-muted-foreground">
                 Two keystrokes, one slow API, one result. <code>run</code> seeds the actions, runs
-                every command against the layer, folds what they dispatch, and resolves at
-                quiescence. The same feature, unchanged, is a React component.
+                every command against the layer, folds what they dispatch, and resolves when nothing
+                is left running. The same feature, unchanged, is a React component.
               </p>
               <div>
                 <OpenInStackBlitz example={example} />
               </div>
             </div>
+          </div>
+        </section>
+
+        <section className="flex flex-col gap-3">
+          <div className="flex max-w-prose flex-col gap-3 text-base leading-7 text-muted-foreground">
+            <p>Wych is not a store, not atoms, and not a server cache. It sits next to those.</p>
+            <p>
+              See{" "}
+              <Link
+                href="/docs/how-to/use-with-the-react-ecosystem"
+                className="underline underline-offset-4"
+              >
+                use with the React ecosystem
+              </Link>{" "}
+              (TanStack Query, routers, stores) and{" "}
+              <Link href="/docs/explanation/comparisons" className="underline underline-offset-4">
+                how it compares
+              </Link>
+              .
+            </p>
           </div>
         </section>
 
@@ -297,8 +297,8 @@ export default async function Home() {
               Written by agents, checked by the compiler
             </h2>
             <p className="max-w-prose text-base leading-7 text-muted-foreground">
-              Wych is a good target for a coding agent for the same reasons it is a good target for
-              you: the surface is small, typed, and legible, and the proof runs headless.{" "}
+              A coding agent gets the same deal you do: a small typed surface that reads as a spec,
+              and a proof that runs with no browser.{" "}
               <Link href="/docs/how-to/use-with-ai-agents" className="underline underline-offset-4">
                 Use with AI agents
               </Link>

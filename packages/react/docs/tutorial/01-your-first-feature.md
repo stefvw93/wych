@@ -32,8 +32,9 @@ yet.
 
 ## 2. Declare the shapes
 
-`define` takes the four declarations of a feature. Props and state are
-`Schema.Struct`s. Actions are a tagged vocabulary.
+`define` declares what a feature is made of. Props and state are
+`Schema.Struct`s. Actions are a tagged vocabulary. Outputs, the fourth
+declaration, wait until [chapter 3](/docs/tutorial/composing-features).
 
 ```ts continue
 // note-editor.tsx
@@ -68,22 +69,30 @@ const initialState = Editor.initialState((props) => ({
 ## 4. Write the reducer
 
 One handler per action tag, exhaustive. A handler receives the action's
-**payload** with `_tag` stripped, plus a snapshot of `{ state, props, hooks }`.
+payload and a snapshot.
 
 ```ts continue
 const reducer = Editor.reducer({
-  TextChanged: ({ text }, { props }) => ({ text, dirty: text !== props.initialText }),
-  Reverted: (_payload, { props }) => ({ text: props.initialText, dirty: false }),
+  TextChanged: (payload, snapshot) => ({
+    text: payload.text,
+    dirty: payload.text !== snapshot.props.initialText,
+  }),
+  Reverted: (_payload, snapshot) => ({ text: snapshot.props.initialText, dirty: false }),
 });
 ```
 
 The reducer is pure. It returns the next state. Nothing here runs an effect and
-nothing mutates `state`.
+nothing mutates `snapshot.state`.
+
+> `payload` is the action without its `_tag`: for `TextChanged` that is
+> `{ text }`, for `Reverted` it is `{}`. `snapshot` is `{ state, props, hooks }`.
+> Later chapters destructure both, `({ text }, { props })`, once the shape is
+> familiar.
 
 ## 5. Write the view
 
-`render` receives the same snapshot plus `dispatch`. `dispatch` takes the full
-tagged message, so it carries `_tag`.
+`render` receives the same snapshot plus `dispatch`. `dispatch` takes a whole
+message, which `make` builds from the payload.
 
 ```tsx continue
 const render = Editor.render(({ state, dispatch }) => (
@@ -92,15 +101,12 @@ const render = Editor.render(({ state, dispatch }) => (
       value={state.text}
       onChange={(event) => dispatch(TextChanged.make({ text: event.target.value }))}
     />
-    <button type="button" disabled={!state.dirty} onClick={() => dispatch({ _tag: "Reverted" })}>
+    <button type="button" disabled={!state.dirty} onClick={() => dispatch(Reverted.make({}))}>
       Revert
     </button>
   </form>
 ));
 ```
-
-`TextChanged.make({ text })` and the literal `{ _tag: "Reverted" }` are the same
-message. Use whichever reads better.
 
 ## 6. Build the feature and its component
 
@@ -113,8 +119,9 @@ const editor = Editor.create({ initialState, reducer, render });
 export const NoteEditor = component(editor, { name: "NoteEditor" });
 ```
 
-`name` appears in error messages and in devtools. It defaults to
-`"TeaFeature"`, which tells you nothing, so set it.
+> `name` appears in error messages, in React devtools as `displayName`, and in
+> every Wych devtools event. It defaults to `"WychFeature"`, which cannot tell two
+> features apart, so set it.
 
 ## 7. Mount it
 
@@ -134,10 +141,11 @@ Type in the textarea and the button enables. Press it and the text returns to
 Props are validated on mount and whenever the props identity changes. An extra
 prop or a wrong type throws a `TypeError` to the nearest error boundary.
 
-## 8. Fold an action without React
+## 8. Test it without React
 
 `feature.reduce` is the reducer as one pure function. It needs no DOM and no
-Effect runtime, which makes it the fastest way to check a handler.
+Effect runtime, so a test hands it an action and a snapshot and reads what
+came back.
 
 ```ts continue
 import { Next } from "@wych/react";
@@ -154,26 +162,52 @@ console.log(Next.command(next));
 // => undefined
 ```
 
-`reduce` returns a `Next`: a bare state, or a `[state, command]` tuple.
-`Next.state` and `Next.command` read either shape, so a test folds a sequence
-without matching on the tuple.
+As a vitest file, that is the whole test. Nothing renders and nothing is
+mocked.
+
+```ts fragment
+// note-editor.test.ts
+import { Next } from "@wych/react";
+import { expect, test } from "vitest";
+import { editor, TextChanged } from "./note-editor";
+
+test("typing marks the note dirty", () => {
+  const next = editor.reduce(TextChanged.make({ text: "Buy oats" }), {
+    state: { text: "Buy milk", dirty: false },
+    props: { noteId: "n1", initialText: "Buy milk" },
+    hooks: {},
+  });
+
+  expect(Next.state(next)).toEqual({ text: "Buy oats", dirty: true });
+  expect(Next.command(next)).toBeUndefined();
+});
+```
+
+> `reduce` returns a `Next`: a bare state, or a `[state, command]` tuple.
+> `Next.state` and `Next.command` read either shape, so a test never matches on
+> the tuple. This handler returned no command, so `Next.command` is `undefined`.
 
 ## The files
 
 ```sh
 src/
-  runtime.ts       # createRuntime, exports component
-  note-editor.tsx  # define, initialState, reducer, render, create, component
-  main.tsx         # createRoot and the mount
+  main.tsx             # createRoot and the mount
+  note-editor.test.ts  # reduce, one action, no DOM
+  note-editor.tsx      # define, initialState, reducer, render, create, component
+  runtime.ts           # createRuntime, exports component
 ```
 
-The snippets above type-check as one module. Split across the three files, the
+The snippets above type-check as one module. Split across the files, the
 imports between them are:
 
 ```ts fragment
 import { component } from "./runtime"; // note-editor.tsx
 import { NoteEditor } from "./note-editor"; // main.tsx
+import { editor, TextChanged } from "./note-editor"; // note-editor.test.ts
 ```
+
+`npm run dev` starts the app and `npm test` runs the test. The example behind
+the "Open in StackBlitz" button is this file set.
 
 ## Next
 

@@ -39,3 +39,4 @@ Bring all documentation touched by the change up to date. A change is not comple
 - Documentation is a hard gate: a feature without its docs sweep is not committable.
 - All prose follows the Communication Style rules in `.claude/agents/wych-docs-author.md` (STE100, sentence length cap, no em-dashes, paragraph cadence, banned vocabulary, bullets over long prose lists).
 - Docs must match the source: every claim verifiable, code samples follow Oxfmt conventions (two spaces, double quotes) and Effect v4 idioms, no sample breaks a model invariant.
+- Effect code in docs and examples uses `Effect.gen(function* () { ... })` for anything with more than one step; `.pipe(...)` only for a single trailing combinator. It reads imperatively, which is what the audience needs.

@@ -6,7 +6,15 @@ import { component } from "./runtime";
 
 const NoteSaved = Action("NoteSaved", { id: Schema.String, revision: Schema.String });
 
-const loadNotes = Task("Load", { success: Schema.Array(Note), onError: Task.message });
+const loadNotes = Task("Load", {
+  success: Schema.Array(Note),
+  onError: Task.message,
+  run: () =>
+    Effect.gen(function* () {
+      const api = yield* NotesApi;
+      return yield* api.list;
+    }),
+});
 
 const List = define({
   props: Schema.Struct({ title: Schema.String, children: Schema.optionalKey(Children) }),
@@ -18,8 +26,7 @@ const List = define({
 });
 
 const listReducer = List.reducer({
-  Mounted: (_payload, { state }) =>
-    Task.start(state, "notes", loadNotes.run(Effect.flatMap(NotesApi, (api) => api.list))),
+  Mounted: (_payload, { state }) => Task.start(state, "notes", loadNotes.run()),
   NoteSaved: ({ id }, { state }) => ({ ...state, lastSaved: id }),
   LoadResolved: ({ value }, { state }) => ({ ...state, notes: Task.resolved(value) }),
   LoadRejected: ({ error }, { state }) => ({ ...state, notes: Task.rejected(error) }),

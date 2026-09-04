@@ -224,6 +224,15 @@ const createMarked = (headings: Heading[]) => {
           `${inner}</a></h${depth}>\n`
         );
       },
+      // A blockquote is an aside, styled as the shadcn Alert (see
+      // https://ui.shadcn.com/docs/components/alert) rather than as a quote:
+      // the typography plugin would set it italic with a left rule.
+      blockquote({ tokens }) {
+        return (
+          `<div role="note" data-slot="alert" class="my-6 grid w-full gap-0.5 rounded-none border bg-card px-4 py-3 text-sm/relaxed text-card-foreground [&_p]:my-0 [&_p:not(:last-child)]:mb-2">` +
+          `${this.parser.parse(tokens)}</div>\n`
+        );
+      },
       // Off-site links leave the docs in a new tab; everything else falls
       // through to the default renderer.
       link({ href, title, tokens }) {

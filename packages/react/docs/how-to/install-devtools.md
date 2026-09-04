@@ -26,7 +26,7 @@ const devtools = import.meta.env.DEV ? consoleDevtoolsLayer() : Layer.empty;
 const { component } = createRuntime(Layer.mergeAll(app, devtools));
 ```
 
-Name your components. The name is in every event, and `component(feature)` with no name reports `"TeaFeature"`.
+Name your components. The name is in every event, and `component(feature)` with no name reports `"WychFeature"`.
 
 ```tsx continue
 import { Action, define } from "@wych/react";

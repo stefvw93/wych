@@ -154,6 +154,19 @@ const unboundCommand = unbound.run(Effect.succeed("receipt_1"));
 const boundCommand = photoSearch.run("cats");
 ```
 
+A `run` that takes no input is still bound: the operation's `run` is called
+with nothing.
+
+```ts continue
+const refresh = Task("Refresh", {
+  success: Photos,
+  onError: Task.message,
+  run: () => Effect.flatMap(PhotoApi, (api) => api.search("")),
+});
+
+const refreshCommand = refresh.run();
+```
+
 `run` is returned from the triggering action's handler, which is what keeps the
 effect's `R` visible to the feature's service requirements.
 
