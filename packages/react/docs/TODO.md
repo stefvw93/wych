@@ -43,9 +43,9 @@ file.
       symptom the reader will actually see.
 - [ ] `install-devtools.md`: fine; check the options list against
       `ConsoleDevtoolsOptions` after any devtools change.
-- [ ] `use-with-ai-agents.md`: verify the `wych.dev` URLs once the domain is
-      live; the section on why the model suits an agent duplicates the home
-      page and should point there.
+- [ ] `use-with-ai-agents.md`: the section on why the model suits an agent
+      duplicates the home page and should point there. (URLs moved to
+      `wych.build` on 2026-09-04.)
 - [ ] `use-with-the-react-ecosystem.md`: opening list is contrastive ("not a
       store, not atoms"); how-to pages keep the contrast ban.
 
@@ -65,9 +65,8 @@ Adequate as lookup. Light pass only.
 
 ## Outside `docs/`
 
-- [ ] `packages/react/README.md`: definition-shaped by decision. Realign its
-      opening sentence with `site.description` ("A feature runtime for React:
-      pure reducers, Effect commands, headless tests") and drop "TEA-style".
+- [x] `packages/react/README.md`: opening realigned, status section added,
+      site link added (2026-09-04). Still definition-shaped by decision.
 - [ ] Home page (`packages/website/app/page.tsx`): the hero test caption and
       the agent section were tightened in pass 1; revisit after the tutorial
       rewrite so the "Start the tutorial" promise matches chapter 1's opening.

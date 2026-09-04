@@ -76,10 +76,10 @@ Two routes serve the same content over HTTP.
 
 ```sh
 # One line per page, with links. Follows the llms.txt convention.
-curl https://wych.dev/llms.txt
+curl https://wych.build/llms.txt
 
 # Every page concatenated into one document.
-curl https://wych.dev/llms-full.txt
+curl https://wych.build/llms-full.txt
 ```
 
 ## The layout

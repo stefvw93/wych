@@ -36,7 +36,11 @@ const Cleared = Action("Cleared", {});
 const search = Task("Search", {
   success: Hits,
   onError: Task.message,
-  run: (query: string) => Effect.flatMap(SearchApi, (api) => api.hits(query)),
+  run: (query: string) =>
+    Effect.gen(function* () {
+      const api = yield* SearchApi;
+      return yield* api.hits(query);
+    }),
 });
 
 const taskSearch = define({
@@ -119,6 +123,13 @@ Three consumers read the same reducer through one command interpreter:
 `feature.reduce` folds one action, `feature.run` folds a sequence until
 nothing is left running, and `component` mounts it. A test written with `run` measures the
 behaviour the mounted component has.
+
+## Status
+
+Alpha, on Effect v4 release candidates. Two limits worth knowing before you
+start: `run` never resolves while a never-completing command is in flight,
+and `run` discards a command that dies. Both are explained in
+[commands as data](/docs/explanation/commands-as-data).
 
 ## Install
 

@@ -2,7 +2,7 @@ import { docsBySection, findDoc } from "@/lib/docs";
 
 export const dynamic = "force-static";
 
-const SITE = process.env.NEXT_PUBLIC_SITE_URL ?? "https://wych.dev";
+const SITE = process.env.NEXT_PUBLIC_SITE_URL ?? "https://wych.build";
 
 /**
  * The llms.txt index — https://llmstxt.org. One line per page, so an agent can

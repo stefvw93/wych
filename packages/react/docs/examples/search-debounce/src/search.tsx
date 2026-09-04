@@ -46,7 +46,11 @@ export const searchFeature = define({
 const search = Task("Search", {
   success: Hits,
   onError: Task.message,
-  run: (query: string) => Effect.flatMap(SearchApi, (api) => api.hits(query)),
+  run: (query: string) =>
+    Effect.gen(function* () {
+      const api = yield* SearchApi;
+      return yield* api.hits(query);
+    }),
 });
 
 const Cleared = Action("Cleared", {});
@@ -91,7 +95,11 @@ const searchEvery = Task("SearchEvery", {
   success: Hits,
   onError: Task.message,
   mode: "every",
-  run: (query: string) => Effect.flatMap(SearchApi, (api) => api.hits(query)),
+  run: (query: string) =>
+    Effect.gen(function* () {
+      const api = yield* SearchApi;
+      return yield* api.hits(query);
+    }),
 });
 
 export const everySearch = define({

@@ -31,7 +31,11 @@ const Typed = Action("Typed", { query: Schema.String });
 const search = Task("Search", {
   success: Hits,
   onError: Task.message,
-  run: (query: string) => Effect.flatMap(SearchApi, (api) => api.hits(query)),
+  run: (query: string) =>
+    Effect.gen(function* () {
+      const api = yield* SearchApi;
+      return yield* api.hits(query);
+    }),
 });
 
 const Search = define({

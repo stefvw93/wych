@@ -1,14 +1,13 @@
 # @wych/react
 
-A TEA-style feature runtime for React, built on [Effect](https://effect.website).
+A feature runtime for React: pure reducers, Effect commands, headless tests.
+Built on [Effect](https://effect.website). Docs at [wych.build](https://wych.build).
 
 A feature is schema-typed props and state, a tagged action vocabulary, an
 optional output vocabulary, and a pure reducer. The reducer returns the next
-state and, optionally, a `Command` that describes work. The runtime interprets
-commands as Effects and renders the feature as a React component.
-
-Async state logic is unit-testable to quiescence without a DOM: fold a
-sequence of actions through the reducer and read what it resolved to.
+state and, when there is work to do, a `Command`: an Effect the runtime forks,
+books under a name, and interrupts when a later action says so. The same
+reducer folds under React, under a test, or by hand.
 
 ## Install
 
@@ -37,7 +36,11 @@ const Cleared = Action("Cleared", {});
 const search = Task("Search", {
   success: Hits,
   onError: Task.message,
-  run: (query: string) => Effect.flatMap(SearchApi, (api) => api.hits(query)),
+  run: (query: string) =>
+    Effect.gen(function* () {
+      const api = yield* SearchApi;
+      return yield* api.hits(query);
+    }),
 });
 
 const taskSearch = define({
@@ -109,9 +112,19 @@ console.log(result.state.results);
 // => { _tag: "Resolved", value: ["ab!"] }
 ```
 
+## Status
+
+Alpha. The API is small and stable enough to build on; the version number
+says what it says. Effect v4 is a release candidate, so the peer range is
+`^4.0.0-rc`. Two known limits, both documented in
+[commands as data](https://wych.build/docs/explanation/commands-as-data):
+`run` never resolves while a never-completing command is in flight, and `run`
+discards a command that dies instead of routing it to the `Error` handler.
+
 ## Docs
 
-The docs ship inside this package at `node_modules/@wych/react/docs`.
+Online at [wych.build/docs](https://wych.build/docs). The same pages ship
+inside this package at `node_modules/@wych/react/docs`.
 
 - `docs/tutorial/`: one app in three chapters.
 - `docs/how-to/`: recipes for a competent reader.
