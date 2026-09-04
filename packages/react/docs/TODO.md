@@ -99,5 +99,10 @@ Adequate as lookup. Light pass only.
 - [ ] `docs-check`: deep-equality on a command value fails on its `pipe`
       method; docs use `summarizeCommand` or `?._tag`. Consider stripping
       functions in `toAssertions`, or leave as is and note it in the header.
+- [x] StackBlitz install crash (2026-09-04): `vitest@^4.1` peer metadata makes
+      npm 10 (WebContainers) die with `Cannot read properties of null (reading
+  'edgesOut')`; npm 11 is fine. Examples pin `vitest: ^5.0.0`, which
+      installs clean. Keep example devDependencies npm-10-safe: test a bumped
+      example with `npx npm@10 install` outside the workspace before shipping.
 - [ ] Step 3 of the StackBlitz plan: a drift guard that each page fence appears
       in its example's files.
