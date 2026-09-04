@@ -64,7 +64,7 @@ export type DevtoolsCause =
   | { readonly _tag: "Defect"; readonly from: string };
 
 export interface DevtoolsEnvelope {
-  readonly name: string; // from `component(bp, { name })`; "TeaFeature" when unnamed
+  readonly name: string; // from `component(bp, { name })`; "WychFeature" when unnamed
   readonly instance: string; // which mount
   readonly cause: DevtoolsCause;
 }
@@ -203,7 +203,7 @@ untouched — no existing `component(bp)` call changes.
 - [x] `stop()` emits the `Unmounted` `Transition` and the teardown `Command` event, even though teardown bypasses `fold` and calls `feature.reduce` directly. The transition is emitted **even when the `Unmounted` handler throws** — `reduce` discards that handler's state either way, so there is no next state to be wrong about, and the console logger evicts its elapsed entry on this event.
 - [x] `summarizeDefect` is total **including for an `Error` subclass with a throwing `message` or `stack` getter**. `instanceof Error` is not a guarantee that reading a property is safe, and both funnels call the summarizer before routing — see Expected Behavior.
 - [x] `instance` is stable across `stop(); start()` on one store, and differs between two stores of the same `name`.
-- [x] `name` comes from `component(bp, { name })` and falls back to `"TeaFeature"`.
+- [x] `name` comes from `component(bp, { name })` and falls back to `"WychFeature"`.
 
 ### Robustness and cost
 

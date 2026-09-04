@@ -1176,7 +1176,7 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
   const { feature, equivalence, runtime, layer, emit, defect } = args;
   const { initialState, outputTags, opaqueProps: opaqueFields, handles } = feature[internals];
 
-  const name = args.name ?? "TeaFeature";
+  const name = args.name ?? "WychFeature";
   const instance = args.instance ?? String(++instanceCount);
 
   let resolved = false;
@@ -1687,7 +1687,7 @@ export const createRuntime: <RootR, RootE>(
     componentOptions: { readonly layer?: Layer.Layer<any, any, any>; readonly name?: string } = {},
   ): FeatureComponent<any, any, any, any, any> => {
     const { render, useUnsafeHooks, props: propsSchema, outputTags } = feature[internals];
-    const name = componentOptions.name ?? "TeaFeature";
+    const name = componentOptions.name ?? "WychFeature";
 
     // One context per `component()` call, so two components over one
     // feature cannot see each other's mounts. `undefined` is the no-mount

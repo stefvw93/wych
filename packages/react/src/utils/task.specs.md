@@ -103,7 +103,11 @@ to render — a cancelled operation dispatches nothing at all.
 binds the work to the operation: the effect is written once beside the schemas
 that describe what it yields, and the operation's `run` takes the input. Omit
 it and the operation's `run` takes the effect, for work that genuinely differs
-per call site; its `R` then flows to `ServicesOf` from the call.
+per call site; its `R` then flows to `ServicesOf` from the call. A bound
+`run` that takes no input pins `Input` to `void` through its own constructor
+overloads, so the call is `op.run()`; inferred through the generic form a
+zero-parameter function would give `Input` no candidate, collapse to `never`,
+and read as unbound.
 
 **The fiber group is `Task/${Name}`**, namespaced against the flat per-mount
 namespace `lib.specs.md` describes: an unkeyed command books under its issuing
@@ -152,6 +156,7 @@ the same return.
 - [x] `Task("search", …)` does not compile; `Task("Search", …)` does.
 - [x] There is no `"first"` mode.
 - [x] Bound `run` is callable with its input and not with an effect; unbound `run` is callable with an effect and not with an input, and `ServicesOf` of a reducer using it names the effect's service.
+- [x] A bound `run` declared with no parameter is callable with no argument, and with neither an input nor an effect; its `R` still comes from the declared effect.
 - [x] `Task.schema(Schema.String)`'s `Type` is the four-case union with `string` value and `string` error; with an explicit failure schema the error takes its `Type`.
 - [x] `match` result type is the union of the arms; three arms do not compile.
 - [x] `Task.value` / `error` / `getOrElse` are typed by the field; the guards narrow `value` / `error` inside the branch.

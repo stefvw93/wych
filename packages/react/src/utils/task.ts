@@ -300,7 +300,8 @@ export interface TaskOperation<
    *
    * `Input` is `never` unless the operation declared `run`, and it is what picks
    * this signature: bound operations take the argument, unbound ones take the
-   * effect.
+   * effect. A bound operation whose `run` takes nothing has `Input = void`, so
+   * `op.run()` is the call.
    */
   readonly run: [Input] extends [never]
     ? <A extends Success["Type"], E, R2>(
@@ -333,8 +334,40 @@ export interface TaskOperation<
  * and every trigger passes an argument instead of rebuilding it. Omit it and
  * the operation's `run` takes the effect, for work that genuinely differs per
  * call site.
+ *
+ * A `run` that takes no input gets its own overloads, listed first. Inferred
+ * through the generic form, a zero-parameter function gives `Input` no
+ * candidate, so it would fall back to `never` and the operation would read as
+ * unbound: typed to take an effect the runtime then ignores. The overloads pin
+ * `Input` to `void`, which TypeScript lets a caller omit: `op.run()`.
  */
 export interface TaskConstructor<Ch extends "internal" | "outbound"> {
+  <const Name extends Capitalize<string>, Success extends Schema.Top, R = never>(
+    name: Name,
+    schemas: {
+      readonly success: Success;
+      readonly onError: TaskOnError<string>;
+      readonly mode?: TaskMode;
+      readonly run: () => Effect.Effect<Success["Type"], unknown, R>;
+    },
+  ): TaskOperation<Name, Success, Schema.String, void, R, Ch>;
+
+  <
+    const Name extends Capitalize<string>,
+    Success extends Schema.Top,
+    Failure extends Schema.Top,
+    R = never,
+  >(
+    name: Name,
+    schemas: {
+      readonly success: Success;
+      readonly failure: Failure;
+      readonly onError: TaskOnError<Failure["Type"]>;
+      readonly mode?: TaskMode;
+      readonly run: () => Effect.Effect<Success["Type"], unknown, R>;
+    },
+  ): TaskOperation<Name, Success, Failure, void, R, Ch>;
+
   <const Name extends Capitalize<string>, Success extends Schema.Top, Input = never, R = never>(
     name: Name,
     schemas: {

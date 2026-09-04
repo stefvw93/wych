@@ -345,7 +345,7 @@ landed with every box checked again.
 - [x] After a fold moves state, a fragment reading `state` re-renders and sees the new state on the same render as the root — never one render behind.
 - [x] Two `component()` calls over one feature are independent: `A.useFeature()` under `<B>` throws, even though both wrap the same feature.
 - [x] Nested mounts of one component: a fragment resolves the nearest.
-- [x] Called outside any mount of its component, throws `TypeError` with message `` `${name}.useFeature() called outside <${name}>` ``, `name` being the `component` option or `"TeaFeature"`.
+- [x] Called outside any mount of its component, throws `TypeError` with message `` `${name}.useFeature() called outside <${name}>` ``, `name` being the `component` option or `"WychFeature"`.
 - [x] A node the parent passes as `children` and the feature renders inside its tree may call `useFeature()` — the provider is positional, so this is React's compound-component shape (`<Select><SelectItem/></Select>`) and works by construction. Not a target, not prevented.
 - [x] `validateProps`, `sync`, `start`/`stop`, StrictMode behaviour and every devtools emission are untouched. The provider is one element around `render`'s output.
 - [x] `FeatureComponent` is exported, so a fragment can type a prop as `typeof Seed` or the snapshot as `ReturnType<typeof Seed.useFeature>` without reconstructing the generics.

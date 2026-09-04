@@ -3468,7 +3468,7 @@ describe("createFeatureStore — devtools", () => {
     expect(event!.next).toBe(store.getSnapshot());
   });
 
-  it("falls back to `TeaFeature` when the caller named nothing", () => {
+  it("falls back to `WychFeature` when the caller named nothing", () => {
     const { store, recorder } = setup({
       reducer: { Bump: (_a: unknown, s: any) => s.state, Land: (_a: unknown, s: any) => s.state },
     });
@@ -3476,7 +3476,7 @@ describe("createFeatureStore — devtools", () => {
     store.start();
     store.dispatch({ _tag: "Bump" } as never);
 
-    expect(recorder.events[0]!.name).toBe("TeaFeature");
+    expect(recorder.events[0]!.name).toBe("WychFeature");
   });
 
   it("emits a `PropsChanged` transition with a lifecycle cause", () => {

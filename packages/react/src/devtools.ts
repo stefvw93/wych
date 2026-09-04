@@ -45,7 +45,7 @@ export type DevtoolsCause =
  * burns an id, and the counter is module-global rather than per runtime.
  */
 export interface DevtoolsEnvelope {
-  /** From `component(bp, { name })`; `"TeaFeature"` when the caller named nothing. */
+  /** From `component(bp, { name })`; `"WychFeature"` when the caller named nothing. */
   readonly name: string;
   /** Which mount. */
   readonly instance: string;

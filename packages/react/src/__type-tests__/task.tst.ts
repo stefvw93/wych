@@ -9,6 +9,10 @@ type SearchAction =
   | { readonly _tag: "SearchResolved"; readonly value: string }
   | { readonly _tag: "SearchRejected"; readonly error: string };
 
+type LoadAction =
+  | { readonly _tag: "LoadResolved"; readonly value: string }
+  | { readonly _tag: "LoadRejected"; readonly error: string };
+
 // ---------------------------------------------------------------------------
 // Surface
 // ---------------------------------------------------------------------------
@@ -61,6 +65,35 @@ test("declaring `run` makes the operation's `run` take its input, and only its i
 
   // The effect form is gone: a bound operation owns its work.
   expect(search.run).type.not.toBeCallableWith(Effect.succeed("query"));
+});
+
+test("a `run` that takes no input makes the operation's `run` callable with nothing", () => {
+  const load = Task("Load", {
+    success: Schema.String,
+    onError: Task.message,
+    run: () => Effect.flatMap(Api, (api) => api.load),
+  });
+
+  expect(load.run()).type.toBe<Command<LoadAction, Api>>();
+
+  // Still bound: neither an input nor an effect is accepted.
+  expect(load.run).type.not.toBeCallableWith("query");
+  expect(load.run).type.not.toBeCallableWith(Effect.succeed("ok"));
+
+  const typed = Task("Load", {
+    success: Schema.String,
+    failure: Schema.Number,
+    onError: () => 404,
+    run: () => Effect.succeed("ok"),
+  });
+
+  expect(typed.run()).type.toBe<
+    Command<
+      | { readonly _tag: "LoadResolved"; readonly value: string }
+      | { readonly _tag: "LoadRejected"; readonly error: number },
+      never
+    >
+  >();
 });
 
 test("without `run`, it takes the effect and carries its services to `ServicesOf`", () => {

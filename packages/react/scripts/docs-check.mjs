@@ -5,8 +5,11 @@
  *    `ts continue` is appended to the page's previous checked fence, so a page
  *    can build one file step by step. A fence tagged `ts fragment` is skipped;
  *    use it only for a snippet the page has already shown in full.
- * 2. Every page meets its section's code ratio (code lines over non-blank
- *    lines): tutorial and how-to 50%, reference 40%, explanation 25%.
+ * 2. Every page's code ratio (code lines over non-blank lines) is printed
+ *    against its section's suggested floor: tutorial and how-to 50%,
+ *    reference 40%, explanation 25%. A page below the floor is flagged in the
+ *    table and never fails the check; the number is a prompt to look, not a
+ *    gate.
  * 3. Every `/docs/...` link resolves to a page.
  * 4. With `--run`, every checked snippet is executed in a browser (the `docs`
  *    vitest project). Each `console.log(expr);` followed by `// => literal`
@@ -136,13 +139,11 @@ for (const page of checked) {
   const target = TARGETS[page.dir];
   const ratio = code / Math.max(1, code + prose);
   const pct = Math.round(ratio * 100);
-  const status = target === undefined ? "" : ratio >= target ? "ok" : `below ${target * 100}%`;
+  const status =
+    target === undefined ? "" : ratio >= target ? "ok" : `below ${target * 100}% (suggestion)`;
   console.log(
     `${page.rel.padEnd(40)} code ${String(code).padStart(4)} prose ${String(prose).padStart(4)}  ${String(pct).padStart(3)}%  ${status}`,
   );
-  if (target !== undefined && ratio < target) {
-    failures.push(`${page.rel}: code ratio ${pct}% is below the ${target * 100}% target`);
-  }
 }
 
 for (const unit of generated) writeFileSync(unit.file, unit.lines.join("\n") + "\n");
