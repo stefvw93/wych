@@ -646,19 +646,30 @@ export type Next<State, Action, R = never> =
 
 /**
  * Accessors, so a test can fold a sequence of actions without pattern matching
- * on the tuple at every step.
+ * on the tuple at every step, and one constructor for the lazy tuple.
  *
  * `command` is the one place a lazy command is resolved: `reduce`'s
  * `Unmounted` branch, `run`, the store's fold and its teardown all read
  * through it, so there is no second site to keep in step.
+ *
+ * `lazy(state, thunk)` names the `[state, (next) => command]` tuple, for a
+ * handler whose command reads the state it just built. `State` is inferred
+ * from the first argument, so the thunk sees that exact shape. The eager
+ * tuple stays a literal; `Task.start` is the sibling that also writes
+ * `Pending`.
  */
 export const Next: {
   readonly state: <State>(next: Next<State, any, any>) => State;
   readonly command: <State, Action, R>(
     next: Next<State, Action, R>,
   ) => Command<Action, R> | undefined;
+  readonly lazy: <State, Action, R = never>(
+    state: State,
+    command: LazyCommand<State, Action, R>,
+  ) => readonly [State, LazyCommand<State, Action, R>];
 } = {
   state: (next) => (Array.isArray(next) ? next[0] : next),
+  lazy: (state, command) => [state, command],
   command: (next) => {
     if (!Array.isArray(next)) return undefined;
     const command = next[1];

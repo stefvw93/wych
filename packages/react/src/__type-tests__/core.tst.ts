@@ -16,6 +16,7 @@ import {
   type MemberOf,
   type Message,
   Next,
+  type LazyCommand,
   type NoPropCollision,
   type OutputProps,
   type RenderSnapshot,
@@ -1113,6 +1114,54 @@ test("`ServicesOf` reads `R` through a lazy command", () => {
 
   // The DI guarantee holds one function deeper: the service the thunk's
   // command needs is still a compile error at `component`.
+  expect(createRuntime(Layer.empty).component).type.not.toBeCallableWith(lazyFoo);
+  expect(createRuntime(fooLayer).component).type.toBeCallableWith(lazyFoo);
+});
+
+test("`Next.lazy` infers the tuple state from its first argument and fits the handler's `Next`", () => {
+  const Optional = define({
+    props: Schema.Struct({}),
+    state: Schema.Struct({ picked: Schema.optional(Schema.String) }),
+    action: Action.of([Action("Pick", { id: Schema.String }), Action("Seen", {})]),
+  });
+
+  Optional.create({
+    initialState: () => ({}),
+    reducer: {
+      Pick: (action, { state }) =>
+        Next.lazy({ ...state, picked: action.id }, (next) => {
+          // Unlike the bare tuple, the thunk sees the narrowed state it was
+          // built from: `picked` is a `string` here.
+          expect(next.picked).type.toBe<string>();
+          return Command.effect((dispatch) => dispatch({ _tag: "Seen" }));
+        }),
+      Seen: (_action, { state }) => state,
+    },
+    render: () => null,
+  });
+
+  const lazy = Next.lazy({ count: 1 }, () => named);
+  expect(lazy).type.toBe<
+    readonly [
+      { count: number },
+      LazyCommand<{ count: number }, { readonly _tag: "X" }, PipeableFooService>,
+    ]
+  >();
+  expect(Next.command(lazy)).type.toBe<
+    Command<{ readonly _tag: "X" }, PipeableFooService> | undefined
+  >();
+});
+
+test("`ServicesOf` reads `R` through `Next.lazy`", () => {
+  const lazyFoo = Contextual.create({
+    initialState: () => ({ count: 0 }),
+    reducer: {
+      Ping: (_action, { state }) => Next.lazy(state, () => Command.effect(() => fooEffect)),
+      Pong: (_action, snapshot) => snapshot.state,
+    },
+    render: () => null,
+  });
+
   expect(createRuntime(Layer.empty).component).type.not.toBeCallableWith(lazyFoo);
   expect(createRuntime(fooLayer).component).type.toBeCallableWith(lazyFoo);
 });

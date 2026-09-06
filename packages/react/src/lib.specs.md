@@ -293,6 +293,7 @@ landed with every box checked again.
 - [x] `Next.command(next)` returns the command for a tuple, `undefined` for a bare state.
 - [x] `Next.command(next)` resolves a lazy command by calling it **once** with the tuple's own state, by identity, and returns what it returned. Every consumer — `reduce`'s `Unmounted` branch, `run`, the store's fold and teardown — reads through it, so a lazy command reaches the interpreter already resolved.
 - [x] `Task.start(state, key, thunk)` accepts a lazy command and hands it the state with `Pending` written.
+- [x] `Next.lazy(state, thunk)` returns the `[state, thunk]` tuple unchanged, by identity on both parts, with `State` inferred from `state`; it is a name for the lazy form, and `Next.command` resolves its result like any other tuple.
 
 ### `Feature.reduce`
 

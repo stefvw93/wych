@@ -224,6 +224,21 @@ describe("Next", () => {
     expect(seen[0]).toBe(next);
   });
 
+  it("lazy() is the [state, thunk] tuple by identity, and command() resolves it", () => {
+    const command = Command.effect(() => Effect.void);
+    const state = { count: 3 };
+    const thunk = (_next: { count: number }) => command;
+
+    const next = Next.lazy(state, thunk);
+
+    // A name for the tuple, not a wrapper: both parts pass through untouched,
+    // so every consumer keeps reading through `Next.state` and `Next.command`.
+    expect(next[0]).toBe(state);
+    expect(next[1]).toBe(thunk);
+    expect(Next.state(next)).toBe(state);
+    expect(Next.command(next)).toBe(command);
+  });
+
   it("a lazy command reaches `run` resolved, seeing the post-fold state", async () => {
     // One resolution site, `Next.command`, so `run` needs nothing of its own —
     // and the emission proves the thunk saw the state the handler returned,
