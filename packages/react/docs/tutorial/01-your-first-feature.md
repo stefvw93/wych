@@ -91,7 +91,9 @@ nothing mutates `snapshot.state`.
 
 ## 5. Write the view
 
-`render` receives the same snapshot plus `dispatch`. `dispatch` takes a whole
+`render` receives the same snapshot the reducer does, plus `dispatch`. The
+text stays in `state`, where the reducer and the test in step 8 can see it.
+A `useState` inside `render` would hide it from both. `dispatch` takes a whole
 message, which `make` builds from the payload.
 
 ```tsx continue

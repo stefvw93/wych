@@ -10,10 +10,11 @@ boundary.
 
 ## Problem
 
-A list of editable notes needs a parent that knows what changed, without the
-parent reaching into each child's internal state. If a child's save result
-re-entered a shared reducer directly, the parent and every child would need
-to agree on one action vocabulary.
+One editor saves one note. A list has to load many notes, mount an editor for
+each, and know when one of them saved. The parent must hear about a save
+without reading the editor's state, and the editor must mount under any
+parent, or under none. If a child's save result re-entered a shared reducer,
+the parent and every child would need to agree on one action vocabulary.
 
 ## Solution
 

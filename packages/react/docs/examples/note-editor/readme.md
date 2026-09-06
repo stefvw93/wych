@@ -9,10 +9,12 @@ mounts it, and `note-editor.test.ts` folds one action with no DOM.
 
 ## Problem
 
-A text field with a dirty flag and a revert button needs local state, but
-`useState` ties that state to the component instance. It cannot be tested
-without mounting, and there is no way to reuse the same state machine outside
-React.
+The editor holds the text of one note, tracks whether it moved away from what
+the parent passed, and reverts on demand. The React habit is `useState` in the
+component. Then the text lives in React and nowhere else. The dirty rule is a
+comparison inside the change handler, and Revert needs its own copy of the
+initial text. The only way to test either is to mount the component and type
+into it.
 
 ## Solution
 

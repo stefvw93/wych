@@ -148,10 +148,12 @@ command.
 const debounced = Command.restart(
   "results",
   Command.effect((dispatch) =>
-    Effect.sleep("300 millis").pipe(
-      Effect.andThen(Effect.flatMap(SearchApi, (api) => api.hits("cats"))),
-      Effect.flatMap((hits) => dispatch({ _tag: "SearchResolved", value: hits })),
-    ),
+    Effect.gen(function* () {
+      yield* Effect.sleep("300 millis");
+      const api = yield* SearchApi;
+      const hits = yield* api.hits("cats");
+      yield* dispatch({ _tag: "SearchResolved", value: hits });
+    }),
   ),
 );
 ```

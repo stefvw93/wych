@@ -94,7 +94,10 @@ const login = Task("Login", {
   success: Schema.String,
   onError: Task.message,
   run: (credentials: { readonly email: string; readonly password: string }) =>
-    Effect.flatMap(Auth, (auth) => auth.signIn(credentials.email, credentials.password)),
+    Effect.gen(function* () {
+      const auth = yield* Auth;
+      return yield* auth.signIn(credentials.email, credentials.password);
+    }),
 });
 
 const Login = define({

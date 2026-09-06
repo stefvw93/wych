@@ -9,11 +9,13 @@ and `note-editor.test.ts` runs the same sequences through each.
 
 ## Problem
 
-Saving over the network needs a pending state, a result, an error, and a
-way to ignore a second click while the first save is in flight. Written by
-hand, `saving` and `error` are two fields that can disagree, the revision
-has nowhere to land, and the failure mapping is a `catchCause` block in the
-handler.
+The editor holds text and nothing else. Saving it needs a service to call, a
+way to run the call, and somewhere to put the outcome. Every save button then
+hits the same two problems. Two clicks send two requests: a disabled button
+stops a mouse, and a keyboard shortcut or a retry loop does not read the
+button. And `saving` plus `error` are two fields that can disagree, with no
+place for the revision the save returned. A save has four outcomes, and two
+booleans cannot spell four cases.
 
 ## Solution
 
@@ -31,8 +33,9 @@ SaveClicked: (_payload, { state, props }) =>
 SaveCancelled: (_payload, { state }) => [{ ...state, save: Task.idle }, saveNote.cancel],
 ```
 
-`render` reads the field with the total `Task.match`, covering all four
-cases so there is no missing branch for "pending with an error".
+`render` reads the field with `Task.match`, which is exhaustive: a missing
+case does not compile, and "pending with an error" is no longer a case at
+all.
 
 ## How It Works
 

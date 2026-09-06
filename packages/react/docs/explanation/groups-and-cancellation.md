@@ -38,10 +38,12 @@ const poll = (intervalMs: number) =>
     "poll",
     Command.effect<typeof Sampled.Type, Metrics>((dispatch) =>
       Effect.forever(
-        Effect.flatMap(Metrics, (metrics) => metrics.sample).pipe(
-          Effect.flatMap((value) => dispatch(Sampled.make({ value }))),
-          Effect.andThen(Effect.sleep(intervalMs)),
-        ),
+        Effect.gen(function* () {
+          const metrics = yield* Metrics;
+          const value = yield* metrics.sample;
+          yield* dispatch(Sampled.make({ value }));
+          yield* Effect.sleep(intervalMs);
+        }),
       ),
     ),
   );
@@ -71,9 +73,11 @@ const dashboard = Dashboard.create({
     RefreshedNow: (_payload, { state }) => [
       state,
       Command.effect((dispatch) =>
-        Effect.flatMap(Metrics, (metrics) => metrics.sample).pipe(
-          Effect.flatMap((value) => dispatch(Sampled.make({ value }))),
-        ),
+        Effect.gen(function* () {
+          const metrics = yield* Metrics;
+          const value = yield* metrics.sample;
+          yield* dispatch(Sampled.make({ value }));
+        }),
       ),
     ],
     PropsChanged: ({ previous }, { state, props }) =>
@@ -195,9 +199,11 @@ interruption point.
 
 ```ts continue
 const twoSamples = Command.effect<typeof Sampled.Type, Metrics>((dispatch) =>
-  Effect.flatMap(Metrics, (metrics) => Effect.all([metrics.sample, metrics.sample])).pipe(
-    Effect.flatMap(([first, second]) => dispatch(Sampled.make({ value: (first + second) / 2 }))),
-  ),
+  Effect.gen(function* () {
+    const metrics = yield* Metrics;
+    const [first, second] = yield* Effect.all([metrics.sample, metrics.sample]);
+    yield* dispatch(Sampled.make({ value: (first + second) / 2 }));
+  }),
 );
 ```
 

@@ -52,12 +52,13 @@ const uploader = Uploader.create({
       Command.restart(
         "upload",
         Command.effect((dispatch) =>
-          Effect.flatMap(Uploads, (uploads) =>
-            Stream.runForEach(uploads.upload(name), (percent) =>
+          Effect.gen(function* () {
+            const uploads = yield* Uploads;
+            yield* Stream.runForEach(uploads.upload(name), (percent) =>
               dispatch(Progressed.make({ percent })),
-            ),
-          ).pipe(
-            Effect.flatMap(() => dispatch(Finished.make({}))),
+            );
+            yield* dispatch(Finished.make({}));
+          }).pipe(
             Effect.catchCause((cause) =>
               dispatch(Failed.make({ message: String(Cause.squash(cause)) })),
             ),
@@ -122,11 +123,6 @@ console.log(done.state);
 and emits by calling `dispatch`: zero times, once, or on every element of a
 stream. The other constructors combine, name or interrupt.
 
-An earlier version had `Command.stream` as a second leaf. It described one
-Effect shape as its own ADT node, and every `Stream` combinator was already
-available one call earlier, inside the effect. It was removed, along with
-`Command.ignore`, `Command.queue` and a `Policy` type, for the reason below.
-
 ```ts continue
 import { Effect as E } from "effect";
 
@@ -150,18 +146,18 @@ throttled progress report is `Stream.throttle` where the work is written.
 ```ts continue
 const throttled = (name: string) =>
   Command.effect<typeof Progressed.Type, Uploads>((dispatch) =>
-    Effect.flatMap(Uploads, (uploads) =>
-      Stream.runForEach(
+    Effect.gen(function* () {
+      const uploads = yield* Uploads;
+      yield* Stream.runForEach(
         uploads
           .upload(name)
           .pipe(Stream.throttle({ cost: () => 1, units: 1, duration: "100 millis" })),
         (percent) => dispatch(Progressed.make({ percent })),
-      ),
-    ).pipe(Effect.catchCause(() => E.void)),
+      );
+    }).pipe(Effect.catchCause(() => E.void)),
   );
 ```
 
-A policy vocabulary written as data could only be a smaller copy of that.
 The runtime owns the one thing a handler cannot write for itself: naming a
 running fiber so a _different_ action's handler can interrupt it. That is
 `Command.keyed` and `Command.cancel`, and it is the whole supervisor. The
@@ -189,21 +185,23 @@ console.log(stopped.state.status);
 
 A handler that writes state inline often needs that same state in the
 command. The lazy form hands the thunk the state it sits beside, so the
-handler keeps its one-expression body.
+handler keeps its one-expression body. `Next.lazy(state, thunk)` is that
+`[state, thunk]` tuple with a name, and it types the thunk's argument as the
+state the handler just built.
 
 ```ts continue
 const lazily = Uploader.reducer({
-  Picked: ({ name }, { state }) => [
-    { ...state, name, percent: 0, status: "uploading" },
-    (next) =>
+  Picked: ({ name }, { state }) =>
+    Next.lazy({ ...state, name, percent: 0, status: "uploading" }, (next) =>
       Command.effect((dispatch) =>
-        Effect.flatMap(Uploads, (uploads) =>
-          Stream.runForEach(uploads.upload(next.name), (percent) =>
+        Effect.gen(function* () {
+          const uploads = yield* Uploads;
+          yield* Stream.runForEach(uploads.upload(next.name), (percent) =>
             dispatch(Progressed.make({ percent })),
-          ),
-        ).pipe(Effect.catchCause(() => E.void)),
+          );
+        }).pipe(Effect.catchCause(() => E.void)),
       ),
-  ],
+    ),
   Progressed: ({ percent }, { state }) => ({ ...state, percent }),
   Finished: (_payload, { state }) => ({ ...state, status: "done" }),
   Failed: ({ message }, { state }) => ({ ...state, status: message }),
@@ -219,7 +217,7 @@ resolved. A `Lazy` ADT variant would put a second resolution site in every
 consumer, and devtools would report a function where a command belongs.
 
 ```ts continue
-const lazyNext: Next<{ name: string }, never> = [{ name: "a.jpg" }, () => Command.none];
+const lazyNext = Next.lazy({ name: "a.jpg" }, () => Command.none);
 console.log(Next.command(lazyNext)?._tag);
 // => "None"
 ```
