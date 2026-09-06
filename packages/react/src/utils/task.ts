@@ -92,12 +92,12 @@ const rejected = <Failure>(
 // ---------------------------------------------------------------------------
 
 /**
- * The four arms, each handed its whole member — the shape `Vocabulary.match`
+ * The four cases, each handed its whole member — the shape `Vocabulary.match`
  * and `Match.tag` already establish, so `Resolved: (r) => r.value` reads the
  * same here as it does there.
  *
- * Total, with no `orElse`: the point of four cases is that a render forgetting
- * one is a compile error, not a blank screen.
+ * Exhaustive, with no `orElse`: the point of four cases is that a render
+ * forgetting one is a compile error, not a blank screen.
  */
 export type TaskCases<Success, Failure, Out> = {
   readonly Idle: (value: { readonly _tag: "Idle" }) => Out;
@@ -107,12 +107,12 @@ export type TaskCases<Success, Failure, Out> = {
 };
 
 /**
- * What a set of arms returns, as their union.
+ * What a set of cases returns, as their union.
  *
- * Inferring one `Out` across four arms does not union them — TypeScript picks
- * the first candidate and rejects the rest, so a render whose `Pending` arm is
- * a string and whose `Resolved` arm is an element would not compile. Reading
- * the result off the arms instead leaves each one to say what it returns.
+ * Inferring one `Out` across four cases does not union them — TypeScript picks
+ * the first candidate and rejects the rest, so a render whose `Pending` case is
+ * a string and whose `Resolved` case is an element would not compile. Reading
+ * the result off the cases instead leaves each one to say what it returns.
  */
 export type TaskMatched<Cases> = {
   [K in keyof Cases]: Cases[K] extends (...args: never) => infer Out ? Out : never;
@@ -138,8 +138,8 @@ const isRejected = <Failure>(task: TaskValue<unknown, Failure>): task is Rejecte
 
 /**
  * The partial reads, for everywhere that is not a render: a reducer deriving
- * from the last result, a guard, a default. `match` is total by design and
- * four arms are noise when three of them say "nothing".
+ * from the last result, a guard, a default. `match` is exhaustive by design
+ * and four cases are noise when three of them say "nothing".
  */
 const value = <Success>(task: TaskValue<Success, unknown>): Option.Option<Success> =>
   task._tag === "Resolved" ? Option.some(task.value) : Option.none();
@@ -224,7 +224,7 @@ export type TaskMode =
 // ---------------------------------------------------------------------------
 
 /**
- * Total, by construction: a `Cause` covers the effect's typed failures *and*
+ * Exhaustive, by construction: a `Cause` covers the effect's typed failures *and*
  * its defects, and the return type has no escape hatch, so every way the work
  * can end badly is accounted for at the declaration site. Commands cannot fail,
  * so this is where that obligation has to be discharged.
@@ -255,7 +255,7 @@ const message: TaskOnError<string> = (cause) => {
  * entries, or a `start` that writes into state on your behalf. The operation
  * owns the *work* — scheduling it, interrupting it, turning however it ended
  * into one of two actions. Where the result lands is the feature's business,
- * and the feature's reducer is already total over the action union, so writing
+ * and the feature's reducer is already exhaustive over the action union, so writing
  * those two entries by hand costs two lines and cannot be forgotten:
  *
  *     SearchResolved: (action, { state }) => ({ ...state, search: Task.resolved(action.value) }),
@@ -468,7 +468,7 @@ export interface TaskConstructors extends TaskConstructor<"internal"> {
   /** `Cause` → its message. The mapping that pairs with the default `Schema.String` failure. */
   readonly message: TaskOnError<string>;
 
-  /** The four arms, over a field you hold. Total: a missing arm does not compile. */
+  /** The four cases, over a field you hold. Exhaustive: a missing case does not compile. */
   readonly match: <Success, Failure, Cases extends TaskCases<Success, Failure, unknown>>(
     value: TaskValue<Success, Failure>,
     cases: Cases,
@@ -477,7 +477,7 @@ export interface TaskConstructors extends TaskConstructor<"internal"> {
   /**
    * The partial reads, for everywhere that is not a render — a reducer
    * deriving from the last result, a `disabled={…}`, a take-first guard —
-   * where four arms are noise. Data-first, like `Option`'s own.
+   * where four cases are noise. Data-first, like `Option`'s own.
    */
   readonly value: <Success>(task: TaskValue<Success, unknown>) => Option.Option<Success>;
   readonly error: <Failure>(task: TaskValue<unknown, Failure>) => Option.Option<Failure>;
@@ -519,7 +519,7 @@ const make = (ch: "internal" | "outbound") =>
     const Resolved = message_(resolvedTag, { value: schemas.success });
     const Rejected = message_(rejectedTag, { error: failure });
 
-    // Total: `catchCause` covers typed failures and defects alike, so nothing
+    // Exhaustive: `catchCause` covers typed failures and defects alike, so nothing
     // escapes into the `Error` lifecycle and the command's own error channel is
     // `never` — which is what `Command.effect` requires anyway. Interruption is
     // the one cause that is *not* a failure of the work: take-latest and
