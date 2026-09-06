@@ -21,7 +21,7 @@ const Hits = Schema.Array(Schema.String);
 
 class SearchApi extends Context.Service<
   SearchApi,
-  { readonly hits: (query: string) => Effect.Effect<ReadonlyArray<string>> }
+  { readonly hits: (query: string, page?: number) => Effect.Effect<ReadonlyArray<string>> }
 >()("SearchApi") {}
 
 const Typed = Action("Typed", { query: Schema.String });
@@ -205,6 +205,83 @@ The `"a"` fiber is still sleeping when `"ab"` arrives. `"latest"` interrupts it,
 
 The `search-debounce` example ships this comparison as a vitest file, `src/search.test.ts`, run with `npm test` or `vp -C packages/react/docs/examples/search-debounce run test`.
 
+## Load the next page
+
+A "more" button asks for the page after the one on screen. The handler writes `page + 1` into the state and the request needs that same number. `Task.start` accepts a thunk in place of the command. The thunk receives the state the handler built, with `Pending` already written, so the page number is read once, from the state that holds it.
+
+```tsx continue
+const searchPage = Task("SearchPage", {
+  success: Hits,
+  onError: Task.message,
+  run: ({ query, page }: { readonly query: string; readonly page: number }) =>
+    Effect.gen(function* () {
+      const api = yield* SearchApi;
+      return yield* api.hits(query, page);
+    }),
+});
+
+const MoreClicked = Action("MoreClicked", {});
+
+const pagedSearch = define({
+  props: Schema.Struct({}),
+  state: Schema.Struct({ query: Schema.String, page: Schema.Number, results: Task.schema(Hits) }),
+  action: Action.of([Typed, MoreClicked, ...searchPage.actions]),
+}).create({
+  initialState: () => ({ query: "", page: 1, results: Task.idle }),
+  reducer: {
+    Typed: ({ query }, { state }) =>
+      Task.start({ ...state, query, page: 1 }, "results", (next) => searchPage.run(next)),
+    MoreClicked: (_payload, { state }) =>
+      Task.start({ ...state, page: state.page + 1 }, "results", (next) => searchPage.run(next)),
+    SearchPageResolved: ({ value }, { state }) => ({ ...state, results: Task.resolved(value) }),
+    SearchPageRejected: ({ error }, { state }) => ({ ...state, results: Task.rejected(error) }),
+  },
+  render: ({ state, dispatch }) => (
+    <div>
+      <input
+        value={state.query}
+        onChange={(event) => dispatch(Typed.make({ query: event.target.value }))}
+      />
+      <button onClick={() => dispatch(MoreClicked.make({}))}>more</button>
+      {Task.match(state.results, {
+        Idle: () => null,
+        Pending: () => <p>Loading page {state.page}</p>,
+        Rejected: ({ error }) => <p>{error}</p>,
+        Resolved: ({ value }) => (
+          <ul>
+            {value.map((hit) => (
+              <li key={hit}>{hit}</li>
+            ))}
+          </ul>
+        ),
+      })}
+    </div>
+  ),
+});
+```
+
+Use the thunk when the command reads a field the handler computes: the incremented `page`, a trimmed query, a generated id. Pass the command outright when its input is the payload, as `taskSearch` does with `query`. The [features reference](/docs/reference/features#next) shows the same form for a handler without a task field.
+
+`searchPage` keeps the default `"latest"`, so a click on "more" while page 1 is still loading interrupts that request. One result arrives, for the page the state holds.
+
+```tsx continue
+const pagedApi = Layer.succeed(SearchApi)({
+  hits: (query, page) => Effect.sleep("50 millis").pipe(Effect.as([`${query} p${page}`])),
+});
+
+const paged = await Effect.runPromise(
+  pagedSearch.run([Typed.make({ query: "a" }), MoreClicked.make({})], {
+    props: {},
+    hooks: {},
+    layer: pagedApi,
+  }),
+);
+console.log(paged.emitted);
+// => [{ _tag: "SearchPageResolved", value: ["a p2"] }]
+console.log(paged.state.page);
+// => 2
+```
+
 ## Mount it
 
 The root layer supplies `SearchApi`, so `component` needs no layer of its own.
@@ -226,4 +303,4 @@ const App = () => <Search />;
 createRoot(document.getElementById("root")!).render(<App />);
 ```
 
-Both features in this page mount the same way. `searchFeature` and `taskSearch` declare no outputs, so the component takes no `on<Tag>` props.
+Every feature in this page mounts the same way. None of them declares an output, so the components take no `on<Tag>` props.

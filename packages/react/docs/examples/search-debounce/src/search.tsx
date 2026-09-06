@@ -123,3 +123,53 @@ export const everySearch = define({
   },
   render: () => null,
 });
+
+/** Load the next page: `Task.start` takes a thunk that reads the state the handler built. */
+const searchPage = Task("SearchPage", {
+  success: Hits,
+  onError: Task.message,
+  run: ({ query, page }: { readonly query: string; readonly page: number }) =>
+    Effect.gen(function* () {
+      const api = yield* SearchApi;
+      return yield* api.hits(query, page);
+    }),
+});
+
+export const MoreClicked = Action("MoreClicked", {});
+
+export const pagedSearch = define({
+  props: Schema.Struct({}),
+  state: Schema.Struct({ query: Schema.String, page: Schema.Number, results: Task.schema(Hits) }),
+  action: Action.of([Typed, MoreClicked, ...searchPage.actions]),
+}).create({
+  initialState: () => ({ query: "", page: 1, results: Task.idle }),
+  reducer: {
+    Typed: ({ query }, { state }) =>
+      Task.start({ ...state, query, page: 1 }, "results", (next) => searchPage.run(next)),
+    MoreClicked: (_payload, { state }) =>
+      Task.start({ ...state, page: state.page + 1 }, "results", (next) => searchPage.run(next)),
+    SearchPageResolved: ({ value }, { state }) => ({ ...state, results: Task.resolved(value) }),
+    SearchPageRejected: ({ error }, { state }) => ({ ...state, results: Task.rejected(error) }),
+  },
+  render: ({ state, dispatch }) => (
+    <div>
+      <input
+        value={state.query}
+        onChange={(event) => dispatch(Typed.make({ query: event.target.value }))}
+      />
+      <button onClick={() => dispatch(MoreClicked.make({}))}>more</button>
+      {Task.match(state.results, {
+        Idle: () => null,
+        Pending: () => <p>Loading page {state.page}</p>,
+        Rejected: ({ error }) => <p>{error}</p>,
+        Resolved: ({ value }) => (
+          <ul>
+            {value.map((hit) => (
+              <li key={hit}>{hit}</li>
+            ))}
+          </ul>
+        ),
+      })}
+    </div>
+  ),
+});

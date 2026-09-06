@@ -230,7 +230,8 @@ export const LoginView = component(loginForm, { name: "Login" });
 
 All three read commands through one interpreter, so grouping and
 cancellation have one implementation and `Next.command` is the one place a
-lazy command resolves. A test written with `run` therefore measures the
+[lazy command](/docs/explanation/commands-as-data#a-command-can-be-lazy)
+resolves. A test written with `run` therefore measures the
 behaviour the mounted component has. Two interpreters would have to agree
 forever, and they would drift.
 

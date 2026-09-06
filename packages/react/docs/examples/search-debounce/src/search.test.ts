@@ -1,7 +1,7 @@
 import { Next, Task } from "@wych/react";
 import { Effect, Layer } from "effect";
 import { expect, test } from "vitest";
-import { everySearch, taskSearch, Typed } from "./search";
+import { everySearch, MoreClicked, pagedSearch, taskSearch, Typed } from "./search";
 import { SearchApi } from "./search-api";
 
 // A slow stub: the "a" request is still in flight when "ab" arrives.
@@ -42,4 +42,23 @@ test("every: both requests land, in order", async () => {
     { _tag: "SearchEveryResolved", value: ["ab!"] },
   ]);
   expect(state.results).toEqual({ _tag: "Resolved", value: ["ab!"] });
+});
+
+// --- a lazy command reads the state the handler built ------------------------
+
+const pagedApi = Layer.succeed(SearchApi)({
+  hits: (query, page) => Effect.sleep("50 millis").pipe(Effect.as([`${query} p${page}`])),
+});
+
+test("more: the request reads the page the handler just wrote", async () => {
+  const paged = await Effect.runPromise(
+    pagedSearch.run([Typed.make({ query: "a" }), MoreClicked.make({})], {
+      props: {},
+      hooks: {},
+      layer: pagedApi,
+    }),
+  );
+
+  expect(paged.emitted).toEqual([{ _tag: "SearchPageResolved", value: ["a p2"] }]);
+  expect(paged.state.page).toBe(2);
 });

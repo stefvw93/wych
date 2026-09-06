@@ -4,5 +4,5 @@ export const Hits = Schema.Array(Schema.String);
 
 export class SearchApi extends Context.Service<
   SearchApi,
-  { readonly hits: (query: string) => Effect.Effect<ReadonlyArray<string>> }
+  { readonly hits: (query: string, page?: number) => Effect.Effect<ReadonlyArray<string>> }
 >()("SearchApi") {}

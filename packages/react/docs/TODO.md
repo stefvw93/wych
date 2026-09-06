@@ -58,6 +58,11 @@ above the floor.
 - [x] `use-with-ai-agents.md`: the "why the model suits an agent" section is
       gone; one sentence points at the home page section. Task-shaped
       otherwise.
+- [x] `debounce-and-take-latest.md` (2026-09-06): "Load the next page" is
+      the one recipe for a lazy command (`Task.start` with a thunk); the
+      decision line says thunk for a computed field, outright for a payload.
+      `Next.lazy` stays reference/explanation only until a recipe without a
+      task field needs it. Tutorials keep one path and do not mention it.
 - [x] `use-with-the-react-ecosystem.md`: opens from the reader's app; the
       contrastive list is gone; one running file with the three integration
       points; drift 43 to 3 (the API stubs, deliberate).
