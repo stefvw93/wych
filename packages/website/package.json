@@ -5,17 +5,21 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "test": "vp test"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
     "@phosphor-icons/react": "^2.1.10",
     "@stackblitz/sdk": "^1.11.1",
     "@vercel/analytics": "^2.0.1",
+    "@wych/react": "workspace:^",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "effect": "^4.0.0-rc.112",
     "gray-matter": "^4.0.3",
     "marked": "^18.0.11",
+    "minisearch": "^7.2.0",
     "next": "16.3.3",
     "react": "19.2.8",
     "react-dom": "19.2.8",
@@ -32,7 +36,9 @@
     "@types/react-dom": "^19",
     "babel-plugin-react-compiler": "1.0.0",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vite": "catalog:",
+    "vite-plus": "catalog:"
   },
   "packageManager": "pnpm@11.5.0"
 }

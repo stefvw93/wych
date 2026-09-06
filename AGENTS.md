@@ -77,3 +77,17 @@ release. Add a tool name to select part of the graph. For example, run
     four section dirs only.
   - Examples duplicate the page code on purpose (a page is one module, an
     example is split into files). Change both when you change one.
+
+## @wych/react
+
+The @packages/website project uses `@wych/react`, a feature runtime for React built on
+Effect: pure reducers, commands as data, headless tests. The docs are local,
+as markdown:
+
+    node_modules/@wych/react/docs
+
+Read `index.md` first. Then `reference/` for the API you are changing,
+`how-to/` for a recipe, `explanation/` for why the model works this way.
+Do not invent APIs: every export is listed under `reference/`.
+Prove async logic with `feature.run` in a vitest file; see
+`how-to/test-a-feature-without-react.md`.

@@ -1,5 +1,6 @@
 import { GithubLogoIcon } from "@phosphor-icons/react/ssr";
 import Link from "next/link";
+import { SearchTrigger } from "@/components/search-trigger";
 import { Button } from "@/components/ui/button";
 import { site } from "@/lib/site";
 
@@ -12,6 +13,7 @@ export function SiteHeader() {
           {site.name}
         </Link>
         <nav className="flex items-center gap-1">
+          <SearchTrigger />
           <Button variant="ghost" nativeButton={false} render={<Link href="/docs" />}>
             Docs
           </Button>

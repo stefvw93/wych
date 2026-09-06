@@ -156,7 +156,7 @@ let highlighter: ReturnType<typeof createHighlighter> | undefined;
  * GitHub-style heading slug: lowercase, punctuation dropped, spaces to
  * hyphens. `seen` dedupes repeats on one page the way GitHub does (`-1`, `-2`).
  */
-const headingId = (text: string, seen: Map<string, number>): string => {
+export const headingId = (text: string, seen: Map<string, number>): string => {
   const base =
     text
       .toLowerCase()
@@ -181,7 +181,7 @@ export interface Rendered {
 }
 
 /** marked hands heading text through its HTML escaper; the outline wants the characters back. */
-const decodeEntities = (s: string): string =>
+export const decodeEntities = (s: string): string =>
   s
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")

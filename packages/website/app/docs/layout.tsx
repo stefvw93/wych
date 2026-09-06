@@ -1,6 +1,7 @@
 import { GithubLogoIcon, HouseIcon } from "@phosphor-icons/react/ssr";
 import Link from "next/link";
 import { DocsSidebarNav } from "@/components/docs-sidebar-nav";
+import { SearchTrigger } from "@/components/search-trigger";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -71,7 +72,9 @@ export default async function DocsLayout({ children }: LayoutProps<"/docs">) {
           >
             <HouseIcon />
           </Button>
-          <div className="flex-1" />
+          <div className="flex flex-1 justify-end">
+            <SearchTrigger />
+          </div>
           <Button
             variant="ghost"
             size="icon-sm"
