@@ -759,10 +759,10 @@ export interface LifecycleHandlers<Props, State, Action, H extends AnyHooks, R =
   readonly HookChanged?: LifecycleHandler<"HookChanged", Props, State, Action, H, R>;
 
   /**
-   * Commands cannot fail, but they can still *die* — and a feature layer can
-   * fail to build. Both arrive here as defects. Left unhandled, the defect is
-   * rethrown into the nearest React error boundary. `error` is the squashed
-   * cause; `cause` is there for handlers that want the real one.
+   * Commands cannot fail, but they can still *die*; a handler can throw; and
+   * a feature layer can fail to build. All three arrive here as defects. Left
+   * unhandled, the defect is rethrown into the nearest React error boundary.
+   * `error` is the squashed cause; `cause` is always `Cause.die(error)`.
    */
   readonly Error?: LifecycleHandler<"Error", Props, State, Action, H, R>;
 
