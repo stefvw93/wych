@@ -15,7 +15,20 @@
  *    vitest project). Each `console.log(expr);` followed by `// => literal`
  *    becomes `expect(expr).toEqual(literal)`, so a result comment that drifts
  *    from the real behaviour fails. A statement followed by `// throws Name: msg`
- *    is wrapped in `expect(() => { ... }).toThrow("msg")`.
+ *    is wrapped in `expect(() => { ... }).toThrow("msg")`. A `// =>` literal
+ *    may continue over following `//` lines until its brackets balance.
+ *    `toEqual` compares structurally, so a literal for a command value fails
+ *    on the command's `pipe` method: log `summarizeCommand(cmd)` or
+ *    `cmd?._tag` instead of the command itself.
+ * 5. A page with `example:` frontmatter is compared against
+ *    `docs/examples/<name>`: every code line of a checked fence (imports,
+ *    comments, `console.log` and `expect` lines aside, a leading `export `
+ *    ignored) should appear in one of the example's source files. The count
+ *    of lines that do not is printed as `drift` and never fails the check.
+ *
+ * Fences import `test`/`expect` from `"vitest"` as a reader would; the
+ * checker rewrites that specifier to `"vite-plus/test"`, which is the module
+ * the `docs` vitest project resolves.
  *
  * Run: `vp run docs:check` from `packages/react`. `--section <dir>` checks one
  * section only (links still resolve against every page) and writes its
@@ -34,6 +47,42 @@ const section = sectionArg === -1 ? undefined : process.argv[sectionArg + 1];
 const outDir = path.join(root, ".docs-check", section ?? "all");
 
 const TARGETS = { tutorial: 0.5, "how-to": 0.5, reference: 0.4, explanation: 0.25 };
+
+/** Readers write `from "vitest"`; the `docs` project resolves `vite-plus/test`. */
+const withTestSpecifier = (line) => line.replace(/from\s*"vitest"/, 'from "vite-plus/test"');
+
+/**
+ * Trimmed source lines of every `.ts`/`.tsx` file under an example, for the
+ * drift count. `node_modules` is a pnpm symlink farm and is never walked.
+ */
+const exampleLines = (name) => {
+  const lines = new Set();
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === "node_modules") continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (/\.tsx?$/.test(entry.name)) {
+        for (const line of readFileSync(full, "utf8").split("\n")) {
+          const trimmed = line.trim();
+          lines.add(trimmed);
+          // A page shows `const x`, an example exports it.
+          lines.add(trimmed.replace(/^export /, ""));
+        }
+      }
+    }
+  };
+  walk(path.join(docsDir, "examples", name));
+  return lines;
+};
+
+/** A fence line the drift count compares; `undefined` for a line it skips. */
+const driftKey = (line) => {
+  const s = line.trim().replace(/^export /, "");
+  if (s === "" || /^(\/\/|import\b|\} from\b|console\.log\(|expect\()/.test(s)) return undefined;
+  if (/^[{}()[\];,]*$/.test(s)) return undefined;
+  return s;
+};
 
 // Only the index and the four sections are pages. `docs/examples/*` are
 // runnable projects with their own `node_modules`, so a recursive walk from
@@ -84,6 +133,8 @@ for (const page of checked) {
   let block = 0;
   /** The unit a `continue` fence appends to. */
   let current = null;
+  /** Raw lines of every checked fence, for the drift count. */
+  const driftLines = [];
 
   lines.forEach((line, i) => {
     if (i === 0 && line === "---") {
@@ -118,7 +169,8 @@ for (const page of checked) {
           srcStart: fence.start + 1,
           length: fence.body.length,
         });
-        current.lines.push(...fence.body);
+        current.lines.push(...fence.body.map(withTestSpecifier));
+        driftLines.push(...fence.body);
       }
       fence = null;
       return;
@@ -141,9 +193,19 @@ for (const page of checked) {
   const pct = Math.round(ratio * 100);
   const status =
     target === undefined ? "" : ratio >= target ? "ok" : `below ${target * 100}% (suggestion)`;
+  const example = /^example:\s*(\S+)\s*$/m.exec(page.text)?.[1];
+  let drift = "";
+  let driftReport = [];
+  if (example !== undefined) {
+    const known = exampleLines(example);
+    const missing = driftLines.map(driftKey).filter((k) => k !== undefined && !known.has(k));
+    drift = `  drift ${String(missing.length).padStart(3)}`;
+    if (process.argv.includes("--drift")) driftReport = missing;
+  }
   console.log(
-    `${page.rel.padEnd(40)} code ${String(code).padStart(4)} prose ${String(prose).padStart(4)}  ${String(pct).padStart(3)}%  ${status}`,
+    `${page.rel.padEnd(40)} code ${String(code).padStart(4)} prose ${String(prose).padStart(4)}  ${String(pct).padStart(3)}%  ${status.padEnd(4)}${drift}`,
   );
+  for (const k of driftReport) console.log(`    ${k}`);
 }
 
 for (const unit of generated) writeFileSync(unit.file, unit.lines.join("\n") + "\n");
@@ -209,7 +271,7 @@ if (generated.length > 0) {
  * starts after the previous line that ends a statement (`;`) or is blank.
  */
 const toAssertions = (source) => {
-  const lines = source
+  const lines = joinResultComments(source)
     .replace(
       /^([ \t]*)console\.log\((.+)\);\n[ \t]*\/\/ => (.+)$/gm,
       (_m, indent, expr, literal) => `${indent}expect(${expr}).toEqual(${literal});`,
@@ -234,6 +296,38 @@ const toAssertions = (source) => {
     i = start + wrapped.length - 1;
   }
   return lines.join("\n");
+};
+
+/** Bracket depth of a literal, string contents ignored. */
+const depth = (text) => {
+  const bare = text.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/g, '""');
+  return (bare.match(/[[{(]/g)?.length ?? 0) - (bare.match(/[\]})]/g)?.length ?? 0);
+};
+
+/**
+ * A `// =>` literal that spans several `//` lines is joined into one, so the
+ * `console.log` rewrite sees a single line. Continuation stops when the
+ * brackets balance.
+ */
+const joinResultComments = (source) => {
+  const lines = source.split("\n");
+  const out = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const m = /^([ \t]*)\/\/ => (.*)$/.exec(lines[i]);
+    if (!m) {
+      out.push(lines[i]);
+      continue;
+    }
+    let literal = m[2];
+    while (depth(literal) > 0 && i + 1 < lines.length) {
+      const next = /^[ \t]*\/\/ ?(.*)$/.exec(lines[i + 1]);
+      if (!next || next[1].startsWith("=>")) break;
+      literal += ` ${next[1].trim()}`;
+      i += 1;
+    }
+    out.push(`${m[1]}// => ${literal}`);
+  }
+  return out.join("\n");
 };
 
 /** A snippet that is itself a vitest file runs as one; wrapping it would nest tests. */
@@ -270,12 +364,15 @@ if (shouldRun && failures.length === 0 && generated.length > 0) {
       ].join("\n"),
     );
   }
-  const vitest = path.join(root, "..", "..", "node_modules", ".bin", "vitest");
-  const run = spawnSync(vitest, ["run", "--project", "docs", path.relative(root, runDir)], {
+  // `vitest` has no bin in this workspace (it is overridden by Vite+), so the
+  // snippets run through the `vp test` built-in.
+  const run = spawnSync("vp", ["test", "--project", "docs", path.relative(root, runDir)], {
     cwd: root,
     encoding: "utf8",
   });
-  if (run.status !== 0) {
+  if (run.error !== undefined) {
+    failures.push(`snippet execution could not start: ${run.error.message}`);
+  } else if (run.status !== 0) {
     failures.push(`snippet execution failed:\n${run.stdout}\n${run.stderr}`);
   } else {
     console.log(`${generated.length} snippets executed`);
