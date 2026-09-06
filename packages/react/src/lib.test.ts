@@ -477,6 +477,45 @@ describe("Feature.run", () => {
     expect(emitted).toEqual([{ _tag: "Echo" }]);
   });
 
+  it("a seeded action's command starts before the next seeded action is reduced", async () => {
+    const started: number[] = [];
+    const Feature = define({ props: RunProps, state: RunState, action: Action.of([Bump]) });
+    const feature = Feature.create({
+      initialState: () => ({ count: 0 }),
+      reducer: {
+        Bump: (_action, { state }) => {
+          const count = state.count + 1;
+          return [
+            { count },
+            Command.restart(
+              "bump",
+              Command.effect(() =>
+                Effect.gen(function* () {
+                  started.push(count);
+                  yield* Effect.sleep("10 millis");
+                }),
+              ),
+            ),
+          ];
+        },
+      },
+      render: () => null,
+    });
+
+    const { state } = await Effect.runPromise(
+      feature.run([{ _tag: "Bump" }, { _tag: "Bump" }], {
+        props: {},
+        hooks: {},
+        layer: Layer.empty,
+      }),
+    );
+
+    expect(state).toEqual({ count: 2 });
+    // The first seed's fiber reached its sleep before the second seed was
+    // reduced, so `restart` interrupted a request that had already started.
+    expect(started).toEqual([1, 2]);
+  });
+
   it("a command's emissions feed back into the reducer and land in `emitted`", async () => {
     const Feature = define({ props: RunProps, state: RunState, action: Action.of([Bump]) });
     const feature = Feature.create({

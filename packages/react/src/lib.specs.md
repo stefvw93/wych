@@ -305,6 +305,7 @@ landed with every box checked again.
 ### `Feature.run`
 
 - [x] Seeded actions are processed but are not recorded in `emitted`.
+- [x] After each action is reduced and its command interpreted, the loop yields once, so the fibers that action forked run to their first suspension before the next action is reduced. A `restart` issued by the second of two seeded actions therefore interrupts a request the first already sent.
 - [x] Actions a command emits feed back into the reducer loop; `emitted` collects them.
 - [x] `outputs` collects messages whose tag is a declared output; an output never re-enters the reducer.
 - [x] A handler receives the action's **payload** — `_tag` stripped on the same terms as an output crossing into its `on<Tag>` prop: the handler key already named the tag, so what the handler holds cannot smuggle a tag into state or a command's payload. Lifecycle handlers receive theirs on the same rule.

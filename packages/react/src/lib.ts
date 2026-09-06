@@ -1066,6 +1066,12 @@ export const define: <
                 const command = Next.command(next);
                 state = Next.state(next);
                 if (command) yield* interpret(command, { tag: entry.msg._tag });
+                // Let the fibers this action forked run to their first
+                // suspension before the next action is reduced. Seeded actions
+                // then behave like dispatches separated by an event-loop turn:
+                // a `restart` from the second seed interrupts a request the
+                // first seed already sent, rather than one that never started.
+                yield* Effect.yieldNow;
               }
 
               return { state, emitted, outputs };
