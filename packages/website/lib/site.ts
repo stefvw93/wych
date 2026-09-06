@@ -1,6 +1,8 @@
 /** Links and copy shared by the landing page and the docs shell. */
 export const site = {
   name: "@wych/react",
+  /** `service.name` on every span, from Next and from Effect alike. */
+  serviceName: "wych-docs",
   /** The headline: the category, then the hook. One sentence. */
   tagline: "Pure reducers for React, with Effect doing the work.",
   /** The subline: the mechanism. */

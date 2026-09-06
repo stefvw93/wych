@@ -1,6 +1,7 @@
+import { Effect, Option, Tracer } from "effect";
 import { expect, test } from "vite-plus/test";
 import type { Doc } from "@/lib/docs";
-import { indexDoc } from "@/lib/search-index";
+import { buildSearchIndexEffect, indexDoc } from "@/lib/search-index";
 
 const doc = (markdown: string, overrides: Partial<Doc> = {}): Doc => ({
   slug: "reference/commands",
@@ -74,4 +75,27 @@ test("the index page has an empty section and a bare slug", () => {
     doc("# Overview\n\nHello.\n", { slug: "", section: undefined, title: "Overview" }),
   );
   expect(record).toMatchObject({ id: "#", slug: "", section: "" });
+});
+
+test("the index builds under a search.index.build span with docs.read nested inside", async () => {
+  // A tracer that only records names and parents: proves the spans nest in
+  // one fiber without an OpenTelemetry provider in the test.
+  const spans: Array<{ name: string; parent: string | undefined }> = [];
+  const tracer = Tracer.make({
+    span(options) {
+      spans.push({
+        name: options.name,
+        parent: Option.map(options.parent, (p) => (p._tag === "Span" ? p.name : p.spanId)).pipe(
+          Option.getOrUndefined,
+        ),
+      });
+      return new Tracer.NativeSpan(options);
+    },
+  });
+  const records = await Effect.runPromise(buildSearchIndexEffect().pipe(Effect.withTracer(tracer)));
+  expect(records.length).toBeGreaterThan(0);
+  expect(spans).toEqual([
+    { name: "search.index.build", parent: undefined },
+    { name: "docs.read", parent: "search.index.build" },
+  ]);
 });

@@ -1,8 +1,10 @@
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
+import { Effect } from "effect";
 import matter from "gray-matter";
 import { Marked } from "marked";
 import { createHighlighter } from "shiki";
+import { run, runtime } from "@/lib/tracing";
 
 /**
  * The docs live in the library package and ship inside its npm tarball, so this
@@ -87,47 +89,50 @@ const parse = (file: string, raw: string): Doc | undefined => {
   };
 };
 
-let cached: Promise<readonly Doc[]> | undefined;
+const readDocs = Effect.fn("docs.read")(function* () {
+  // Only the index and the four sections are pages. `docs/examples/*` are
+  // runnable projects with their own `node_modules`, so a recursive walk
+  // from `docs/` is never safe.
+  const listed = yield* Effect.forEach(
+    SECTIONS,
+    (s) =>
+      Effect.tryPromise(() => readdir(path.join(DOCS_DIR, s.dir))).pipe(
+        Effect.map((names) => names.filter((f) => f.endsWith(".md")).map((f) => `${s.dir}/${f}`)),
+      ),
+    { concurrency: "unbounded" },
+  );
+  const files = ["index.md", ...listed.flat()];
+  const parsed = yield* Effect.forEach(
+    files,
+    (f) =>
+      Effect.tryPromise(() => readFile(path.join(DOCS_DIR, f), "utf8")).pipe(
+        Effect.map((raw) => parse(f, raw)),
+      ),
+    { concurrency: "unbounded" },
+  );
+  const docs = parsed
+    .filter((d): d is Doc => d !== undefined)
+    .sort(
+      (a, b) =>
+        sectionRank(a.section) - sectionRank(b.section) ||
+        a.order - b.order ||
+        a.title.localeCompare(b.title),
+    );
+  yield* Effect.annotateCurrentSpan("docs.count", docs.length);
+  return docs;
+});
 
 /**
  * Every doc, in nav order: index first, then by section, then by `order`.
  * Memoized for the build only: in `next dev` the module outlives the file
  * set, and a page added after the server started would 404 forever.
  */
-export const allDocs = (): Promise<readonly Doc[]> => {
-  if (process.env.NODE_ENV !== "production") return readDocs();
-  return (cached ??= readDocs());
-};
+export const allDocsEffect: Effect.Effect<readonly Doc[]> =
+  process.env.NODE_ENV === "production"
+    ? runtime.runSync(Effect.cached(Effect.orDie(readDocs())))
+    : Effect.orDie(readDocs());
 
-const readDocs = (): Promise<readonly Doc[]> =>
-  (async () => {
-    // Only the index and the four sections are pages. `docs/examples/*` are
-    // runnable projects with their own `node_modules`, so a recursive walk
-    // from `docs/` is never safe.
-    const files = [
-      "index.md",
-      ...(
-        await Promise.all(
-          SECTIONS.map(async (s) =>
-            (await readdir(path.join(DOCS_DIR, s.dir)))
-              .filter((f) => f.endsWith(".md"))
-              .map((f) => `${s.dir}/${f}`),
-          ),
-        )
-      ).flat(),
-    ];
-    const docs = await Promise.all(
-      files.map(async (f) => parse(f, await readFile(path.join(DOCS_DIR, f), "utf8"))),
-    );
-    return docs
-      .filter((d): d is Doc => d !== undefined)
-      .sort(
-        (a, b) =>
-          sectionRank(a.section) - sectionRank(b.section) ||
-          a.order - b.order ||
-          a.title.localeCompare(b.title),
-      );
-  })();
+export const allDocs = (): Promise<readonly Doc[]> => run(allDocsEffect);
 
 export const findDoc = async (slug: string): Promise<Doc | undefined> =>
   (await allDocs()).find((d) => d.slug === slug);
@@ -151,6 +156,11 @@ export const docsBySection = async (): Promise<
  * again each time, which dominates the build.
  */
 let highlighter: ReturnType<typeof createHighlighter> | undefined;
+
+const SHIKI_OPTIONS: Parameters<typeof createHighlighter>[0] = {
+  themes: ["github-light", "github-dark"],
+  langs: ["ts", "tsx", "js", "jsx", "json", "sh", "md"],
+};
 
 /**
  * GitHub-style heading slug: lowercase, punctuation dropped, spaces to
@@ -243,10 +253,7 @@ const createMarked = (headings: Heading[]) => {
     },
     async walkTokens(token) {
       if (token.type !== "code") return;
-      const shiki = await (highlighter ??= createHighlighter({
-        themes: ["github-light", "github-dark"],
-        langs: ["ts", "tsx", "js", "jsx", "json", "sh", "md"],
-      }));
+      const shiki = await (highlighter ??= createHighlighter(SHIKI_OPTIONS));
       const lang = token.lang?.split(/\s/)[0] ?? "";
       const known = shiki.getLoadedLanguages().includes(lang);
       // Shiki emits the `<pre>`; hand it through as raw HTML so marked does not
@@ -265,9 +272,17 @@ const createMarked = (headings: Heading[]) => {
   });
 };
 
-export const renderMarkdown = async (markdown: string): Promise<Rendered> => {
+export const renderMarkdownEffect = Effect.fn("docs.render")(function* (markdown: string) {
+  // marked's `walkTokens` runs in Promise land, so the highlighter is primed
+  // here where its cost gets its own span instead of hiding in the parse.
+  if (highlighter === undefined) {
+    yield* Effect.promise(() => (highlighter ??= createHighlighter(SHIKI_OPTIONS))).pipe(
+      Effect.withSpan("shiki.init"),
+    );
+  }
   const headings: Heading[] = [];
-  const html = await createMarked(headings).parse(markdown);
+  const html = yield* Effect.promise(() => Promise.resolve(createMarked(headings).parse(markdown)));
+  yield* Effect.annotateCurrentSpan("docs.headings", headings.length);
   // A wide table scrolls inside its own box instead of the page. Shiki
   // escapes `<` inside code, so this only matches real tables.
   return {
@@ -275,5 +290,8 @@ export const renderMarkdown = async (markdown: string): Promise<Rendered> => {
       .replace(/<table>/g, '<div class="overflow-x-auto"><table>')
       .replace(/<\/table>/g, "</table></div>"),
     headings,
-  };
-};
+  } satisfies Rendered;
+});
+
+export const renderMarkdown = (markdown: string): Promise<Rendered> =>
+  run(renderMarkdownEffect(markdown));

@@ -1,5 +1,7 @@
+import { Effect } from "effect";
 import { lexer, Parser, TextRenderer, type Token, type Tokens } from "marked";
-import { allDocs, decodeEntities, headingId, SECTIONS, type Doc } from "@/lib/docs";
+import { allDocsEffect, decodeEntities, headingId, SECTIONS, type Doc } from "@/lib/docs";
+import { run } from "@/lib/tracing";
 
 /**
  * One searchable unit: a heading and the prose beneath it, up to the next
@@ -133,5 +135,12 @@ export const indexDoc = (doc: Doc): readonly SearchRecord[] => {
 };
 
 /** Every doc, in nav order, split into records. */
-export const buildSearchIndex = async (): Promise<readonly SearchRecord[]> =>
-  (await allDocs()).flatMap(indexDoc);
+export const buildSearchIndexEffect = Effect.fn("search.index.build")(function* () {
+  const docs = yield* allDocsEffect;
+  const records = docs.flatMap(indexDoc);
+  yield* Effect.annotateCurrentSpan("search.records", records.length);
+  return records as readonly SearchRecord[];
+});
+
+export const buildSearchIndex = (): Promise<readonly SearchRecord[]> =>
+  run(buildSearchIndexEffect());

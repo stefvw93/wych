@@ -1,6 +1,8 @@
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import type { Project } from "@stackblitz/sdk";
+import { Effect } from "effect";
+import { run } from "@/lib/tracing";
 
 /**
  * Runnable examples live next to the docs and ship in the library tarball.
@@ -79,25 +81,31 @@ const pickOpenFile = (paths: readonly string[]): string =>
   paths[0]!;
 
 /**
- * Build the StackBlitz project for `docs/examples/<name>`. Throws when the
+ * Build the StackBlitz project for `docs/examples/<name>`. Fails when the
  * directory is missing: an `example:` frontmatter that points nowhere is a
  * build error, not a silently absent button.
  */
-export const loadExample = async (
+export const loadExampleEffect = Effect.fn("example.load")(function* (
   name: string,
   meta: { readonly title: string; readonly description: string },
-): Promise<ExampleProject> => {
-  if (!/^[a-z0-9-]+$/.test(name)) throw new Error(`invalid example name: ${name}`);
+) {
+  yield* Effect.annotateCurrentSpan("example.name", name);
+  if (!/^[a-z0-9-]+$/.test(name))
+    return yield* Effect.fail(new Error(`invalid example name: ${name}`));
   const dir = path.join(EXAMPLES_DIR, name);
-  const paths = await walk(dir);
-  if (paths.length === 0) throw new Error(`example "${name}" has no files under ${dir}`);
+  const paths = yield* Effect.tryPromise(() => walk(dir));
+  if (paths.length === 0) {
+    return yield* Effect.fail(new Error(`example "${name}" has no files under ${dir}`));
+  }
+  yield* Effect.annotateCurrentSpan("example.files", paths.length);
 
   const files: Record<string, string> = {};
   for (const rel of paths) {
-    const text = await readFile(path.join(dir, rel), "utf8");
+    const text = yield* Effect.tryPromise(() => readFile(path.join(dir, rel), "utf8"));
     // StackBlitz renders `README.md`; the tarball convention is lowercase.
     const key = rel === "readme.md" ? "README.md" : rel;
-    files[key] = rel === "package.json" ? await rewritePackageJson(text) : text;
+    files[key] =
+      rel === "package.json" ? yield* Effect.tryPromise(() => rewritePackageJson(text)) : text;
   }
 
   return {
@@ -109,5 +117,10 @@ export const loadExample = async (
       template: "node",
       files,
     },
-  };
-};
+  } satisfies ExampleProject;
+});
+
+export const loadExample = (
+  name: string,
+  meta: { readonly title: string; readonly description: string },
+): Promise<ExampleProject> => run(loadExampleEffect(name, meta));
