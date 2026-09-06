@@ -7,7 +7,7 @@ order: 2
 # Features
 
 A feature is four schemas and three functions. `define` declares the four,
-`create` binds the three, and the result is an inert value with two methods:
+`create` binds the three, and the result is a plain value with two methods:
 `reduce` and `run`.
 
 Every snippet on this page builds on one feature: a note editor that holds
@@ -45,9 +45,9 @@ define({
 `props` and `state` are `Schema.Struct`s. `action` and `output` are
 vocabularies built with `Action.of`. `define` infers `Props`, `State`, the two
 vocabularies and the hooks from that one object literal, so no type argument is
-ever written by hand.
+written by hand.
 
-Three rules are compile errors:
+Two rules are compile errors:
 
 ```ts continue
 const Collides = Action.of([Action.output("Typed", {})]);
@@ -69,8 +69,8 @@ const propCollision = define({
 });
 ```
 
-`Children` in the state schema throws, because state reaches a devtools sink
-verbatim and an opaque value does not encode.
+`Children` in the state schema throws at `define`, because state reaches a
+devtools sink verbatim and an opaque value does not encode.
 
 ```ts continue
 define({
@@ -115,7 +115,7 @@ FeatureDefinition {
 ```
 
 `initialState`, `reducer` and `render` are identity functions at runtime. They
-supply types, which is what lets each piece live in its own file.
+supply types, so each piece can live in its own file.
 
 ```tsx continue
 const initialState = NoteEditor.initialState(() => ({ text: "", dirty: false }));
@@ -141,8 +141,8 @@ export const noteEditor = NoteEditor.create({ initialState, reducer, render });
 ### The reducer
 
 One handler per declared action tag, required and exhaustive. A handler is
-`(payload, snapshot) => Next`. `payload` is the action with `_tag` stripped,
-because the handler key already named the tag.
+`(payload, snapshot) => Next`. `payload` is the action with `_tag` stripped; the
+handler key already names the tag.
 
 A handler that returns a key the state schema does not declare is a compile
 error.
@@ -155,7 +155,7 @@ const excess = NoteEditor.reducer({
 });
 ```
 
-A handler for an output tag is a compile error too: outputs have no handler.
+A handler for an output tag is a compile error too. Outputs have no handler.
 
 ```ts continue
 const outputHandler = NoteEditor.reducer({
@@ -212,19 +212,22 @@ type LazyCommand<State, Action, R> = (state: State) => Command<Action, R>;
 
 Next.state(next): State
 Next.command(next): Command | undefined
+Next.lazy(state, (next) => command): readonly [State, LazyCommand]
 ```
 
 A handler returns a bare state, a `[state, command]` tuple, or a
 `[state, (next) => command]` lazy tuple. The thunk receives the tuple's own
-state, so a handler can write the next state inline and hand it to the command
-without naming it first.
+state, so a handler can write the next state inline and read it in the command
+without a local name. `Next.lazy` names that tuple. It infers the state type
+from its first argument, so the thunk sees the shape the handler built rather
+than the wider state schema.
 
 ```ts continue
 const lazyReducer = NoteEditor.reducer({
-  Typed: ({ text }, { state }) => [
-    { ...state, text, dirty: true },
-    (next) => Command.effect(() => Effect.sync(() => localStorage.setItem("draft", next.text))),
-  ],
+  Typed: ({ text }, { state }) =>
+    Next.lazy({ ...state, text, dirty: true }, (next) =>
+      Command.effect(() => Effect.sync(() => localStorage.setItem("draft", next.text))),
+    ),
   Saved: (_payload, { state }) => state,
 });
 ```
@@ -269,8 +272,8 @@ Three behaviours are specific to `reduce`:
 - For `Unmounted` the handler's returned state is replaced by
   `snapshot.state`. Only the command survives.
 - A missing handler for a non-lifecycle tag throws
-  `TypeError('No reducer handler for action "X"')`. That is reachable only by
-  bypassing the types.
+  `TypeError('No reducer handler for action "X"')`. Only a call that bypasses
+  the types can reach this.
 
 ```ts continue
 const unhandled = noteEditor.reduce(
@@ -323,9 +326,9 @@ The three result fields differ:
 - `outputs`: messages whose tag is a declared output. An output is never
   folded.
 
-`run` resolves at quiescence: nothing queued and nothing in flight, including
-fibers that settle without emitting. A never-completing command pins the
-in-flight count, so `run` never resolves for
+`run` resolves when nothing is queued and nothing is in flight. A fiber that
+settles without emitting counts as in flight until it settles. A command that
+never completes keeps `run` from resolving, so `run` never resolves for
 `Command.effect(() => Effect.never)`.
 
 For a feature with no services pass `layer: Layer.empty` and `hooks: {}`. See
@@ -337,8 +340,8 @@ For a feature with no services pass `layer: Layer.empty` and `hooks: {}`. See
 Children: Schema.declare<ReactNode> & { readonly as: <T>() => Schema.declare<T> }
 ```
 
-`Children` is a props field that validates any value. Declared plainly the key
-is required, because JSX passing no children omits the key. `Schema.optionalKey`
+`Children` is a props field that accepts any value. Declared plainly, the key
+is required, and JSX that passes no children omits the key. `Schema.optionalKey`
 is the optional form, and `Children.as<T>()` fixes another type.
 
 ```tsx continue
@@ -367,8 +370,8 @@ const panel = Panel.create({
 });
 ```
 
-`Children` carries a constantly-true equivalence, so a fresh node from a parent
-render never raises `PropsChanged`. A reducer's `snapshot.props.children` can
+`Children` compares equal to any value, so a fresh node from a parent render
+never raises `PropsChanged`. A reducer's `snapshot.props.children` can
 therefore be stale. `render` always has the current node. Devtools replace an
 opaque prop with `"<children>"`. See
 [Children and opaque props](/docs/explanation/children-and-opaque-props).

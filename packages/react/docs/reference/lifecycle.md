@@ -34,11 +34,12 @@ const watch = (roomId: string) =>
     "watch",
     Command.effect<{ readonly _tag: "Arrived"; readonly members: ReadonlyArray<string> }, Presence>(
       (dispatch) =>
-        Effect.flatMap(Presence, (presence) =>
-          Stream.runForEach(presence.watch(roomId), (members) =>
+        Effect.gen(function* () {
+          const presence = yield* Presence;
+          yield* Stream.runForEach(presence.watch(roomId), (members) =>
             dispatch({ _tag: "Arrived", members }),
-          ),
-        ),
+          );
+        }),
     ),
   );
 
@@ -101,7 +102,10 @@ const room = Room.create({
 
 1. `Mounted`, once per mount, raised from an effect after the commit.
 2. `PropsChanged` and `HookChanged`, whenever their values change.
-3. `Unmounted`, at teardown.
+3. `Error`, at any point from the mount effect on, including during teardown.
+   It fires when a command dies, when a handler throws, or when the feature
+   `layer` fails to build.
+4. `Unmounted`, at teardown.
 
 `Mounted` fires once per effect cycle, so it fires twice under React
 StrictMode in development. Write the handler to be idempotent.
@@ -122,8 +126,8 @@ console.log(Next.command(mounted) !== undefined);
 // => true
 ```
 
-One window is uncovered: a props change landing between the first render and
-the mount effect buffers its command ahead of `Mounted`'s.
+A props change between the first render and the mount effect folds before
+`Mounted`, so its command is queued ahead of the `Mounted` command.
 
 ## `PropsChanged`
 
@@ -157,8 +161,8 @@ console.log(Next.state(newRoom));
 // => { members: [], failed: "" }
 ```
 
-A `Children` prop is opaque and its equivalence is constantly true, so a fresh
-node never raises `PropsChanged`. The reducer's `snapshot.props.children` can
+A `Children` prop is opaque and compares equal to any value, so a fresh node
+never raises `PropsChanged`. The reducer's `snapshot.props.children` can
 be stale. `render` always has the current node.
 
 The reported `previous` in a devtools event has each opaque prop replaced by
@@ -168,7 +172,7 @@ The reported `previous` in a devtools event has each opaque prop replaced by
 
 `useUnsafeHooks: (props, state) => H` is called in render position on every
 render. Its result arrives as `snapshot.hooks`. Hooks are compared per key with
-`Object.is`, and a change in any key raises `HookChanged { previous }`.
+strict equality (`===`), and a change in any key raises `HookChanged { previous }`.
 
 ```ts continue
 const hookChanged = room.reduce(
@@ -197,9 +201,9 @@ until the next dispatch or ambient change.
 Error: (payload: { readonly error: unknown; readonly cause: Cause.Cause<never> }, snapshot) => Next;
 ```
 
-Two things reach this handler as defects: a command that dies, and a feature
-`layer` that fails to build. `error` is the squashed cause. `cause` is the real
-one, for a handler that wants to tell a defect from a typed failure.
+Three things reach this handler as defects: a command that dies, a handler
+that throws, and a feature `layer` that fails to build. `error` is the squashed
+cause. `cause` is `Cause.die(error)`, for a handler that wants a `Cause` value.
 
 ```ts continue
 const failed = room.reduce(
@@ -220,11 +224,18 @@ console.log(Next.state(failed));
 ```
 
 With no `Error` handler declared, the defect is rethrown during render and
-reaches the nearest React error boundary. Interruption is never reported as a
-defect: `Command.cancel` and unmount end fibers on purpose.
+reaches the nearest React error boundary. An `Error` handler that throws goes
+to the boundary too. Interruption is never reported as a defect: `Command.cancel`
+and unmount end fibers on purpose.
 
 A missing `on<Tag>` prop for an output also throws to the boundary, and it does
 not reach this handler.
+
+During teardown, `Error` fires when the `Unmounted` handler throws, when the
+`Unmounted` command dies, or when teardown passes its 5 second bound. For the
+first two, the `Error` handler's command runs in the teardown drain. For the
+5 second bound, the mount has already closed by the time the handler runs, so
+a command it returns is queued and never runs.
 
 ## `Unmounted`
 
@@ -262,6 +273,6 @@ The teardown command is unkeyed, so it books under the group `"Unmounted"`.
 
 ## Server rendering
 
-Nothing folds under `renderToString`: no `Mounted`, no commands. Effects do not
-run on the server, and the store's arming lives in an effect. See
+Nothing folds under `renderToString`: no `Mounted` and no commands. The store
+starts in an effect, and effects do not run on the server. See
 [Render on the server](/docs/how-to/render-on-the-server).

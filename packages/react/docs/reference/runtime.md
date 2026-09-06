@@ -42,9 +42,11 @@ export const cart = Cart.create({
     Added: ({ sku }, { state, props }) => [
       { items: [...state.items, sku] },
       Command.effect((dispatch) =>
-        Effect.flatMap(Checkout, (checkout) => checkout.place(props.customerId)).pipe(
-          Effect.flatMap((orderId) => dispatch({ _tag: "Ordered", orderId })),
-        ),
+        Effect.gen(function* () {
+          const checkout = yield* Checkout;
+          const orderId = yield* checkout.place(props.customerId);
+          yield* dispatch({ _tag: "Ordered", orderId });
+        }),
       ),
     ],
     Ordered: ({ orderId }, { state }) => [state, Command.output(OrderPlaced, { orderId })],
@@ -103,9 +105,9 @@ component(feature, options?: { readonly name?: string }): FeatureComponent
 component(feature, options: { readonly layer: Layer; readonly name?: string }): FeatureComponent
 ```
 
-The first overload takes a feature whose services `R` are covered by the root.
-The second takes a feature that needs more, and a `layer` supplying the
-residue `Exclude<R, RootR>`.
+The first overload takes a feature whose services `R` are all in the root
+layer. The second takes a feature that needs more, and a `layer` that supplies
+the services the root does not: `Exclude<R, RootR>`.
 
 ```tsx continue
 class Analytics extends Context.Service<
@@ -120,7 +122,12 @@ const tracked = Cart.create({
   reducer: Cart.reducer({
     Added: ({ sku }, { state }) => [
       { items: [...state.items, sku] },
-      Command.effect(() => Effect.flatMap(Analytics, (a) => a.track(sku))),
+      Command.effect(() =>
+        Effect.gen(function* () {
+          const analytics = yield* Analytics;
+          yield* analytics.track(sku);
+        }),
+      ),
     ],
     Ordered: ({ orderId }, { state }) => [state, Command.output(OrderPlaced, { orderId })],
   }),
@@ -139,7 +146,7 @@ const Unprovided = component(tracked);
 ```
 
 The feature layer is built once per mount and released when that mount closes.
-Anything that must outlive a mount belongs in the root layer.
+A service that must outlive a mount belongs in the root layer.
 
 ### `name`
 
@@ -159,7 +166,7 @@ console.log(Anonymous.displayName);
 ## Output props
 
 Every declared output becomes a required `on<Tag>` prop. The payload arrives
-with `_tag` stripped, because the prop name already carries the tag.
+with `_tag` stripped; the prop name already carries the tag.
 
 ```ts fragment
 type OutputProps<Output extends { readonly _tag: string }> = {
@@ -178,8 +185,7 @@ A feature that declares no outputs gets `{}`, so the prop set is its props
 schema alone.
 
 An output that leaves while its `on<Tag>` prop is absent throws to the nearest
-React error boundary. Absence is unreachable through JSX, since the prop is
-required.
+React error boundary. JSX cannot omit the prop, because the prop is required.
 
 ```ts fragment
 // throws TypeError: No "onOrderPlaced" prop for output "OrderPlaced"
@@ -202,9 +208,9 @@ renderToString(<CartView customerId={1 as unknown as string} onOrderPlaced={() =
 ```
 
 The `TypeError` reaches the nearest React error boundary. Its message lists
-every problem with its path. Props are validated, never decoded: `define`
-normalizes the props schema to its `Type` side, so a transforming field is
-never re-decoded on a parent render.
+every problem with its path. Validation only checks the props. `define`
+normalizes the props schema to its `Type` side, so a transforming field is not
+decoded again on a parent render.
 
 ## `FeatureComponent.useFeature`
 
@@ -255,24 +261,23 @@ inside `render`; `render` already has the snapshot as its argument.
 useRuntime(): ManagedRuntime.ManagedRuntime<RootR, RootE>
 ```
 
-The escape hatch for plain React components that are not features.
+The root `ManagedRuntime`, for a plain React component outside any feature.
 
 ```tsx continue
+const placeOrder = Effect.gen(function* () {
+  const checkout = yield* Checkout;
+  yield* checkout.place("c_1");
+});
+
 const PlaceOrderButton = () => {
   const runtime = useRuntime();
-  return (
-    <button
-      onClick={() => runtime.runFork(Effect.flatMap(Checkout, (checkout) => checkout.place("c_1")))}
-    >
-      Place order
-    </button>
-  );
+  return <button onClick={() => runtime.runFork(placeOrder)}>Place order</button>;
 };
 ```
 
 ## Server rendering
 
 `renderToString` paints `initialState(props)`, validates props, and resolves
-`useFeature` fragments. Nothing folds: no `Mounted`, no commands, no store
-arming, because the arming lives in an effect. See
+`useFeature` fragments. Nothing folds: no `Mounted` and no commands. The store
+starts in an effect, and effects do not run on the server. See
 [Render on the server](/docs/how-to/render-on-the-server).

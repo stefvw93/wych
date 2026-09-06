@@ -59,18 +59,20 @@ Command.effect<A, R>(
 ): Command<A, R>
 ```
 
-The only leaf. It runs for effects and emits by calling `dispatch`, zero times,
-once, or forever. The effect's error channel is `never`: a command that can
-fail says what it does about the failure inside the effect.
+The only leaf. The effect runs and emits by calling `dispatch`: zero times,
+once, or forever. The effect's error channel is `never`, so the effect handles
+its own failures before it returns.
 
 ```ts continue
 const effectReducer = Search.reducer({
   Queried: ({ text }, { state }) => [
     { ...state, text },
     Command.effect((dispatch) =>
-      Effect.flatMap(SearchApi, (api) => api.query(text)).pipe(
-        Effect.flatMap((hits) => dispatch({ _tag: "Results", hits })),
-      ),
+      Effect.gen(function* () {
+        const api = yield* SearchApi;
+        const hits = yield* api.query(text);
+        yield* dispatch({ _tag: "Results", hits });
+      }),
     ),
   ],
   Cleared: (_payload, { state }) => ({ ...state, hits: [] }),
@@ -126,8 +128,8 @@ Command.keyed(key: string): <A, R>(command: Command<A, R>) => Command<A, R>
 Command.keyed<A, R>(key: string, command: Command<A, R>): Command<A, R>
 ```
 
-`keyed` names the group a command's fibers book under. It does nothing else: no
-interrupting, no deferring, no serialising.
+`keyed` names the group a command's fibers book under. It does nothing else.
+It interrupts nothing, defers nothing, and serialises nothing.
 
 ```ts continue
 const keyedReducer = Search.reducer({
@@ -136,9 +138,11 @@ const keyedReducer = Search.reducer({
     Command.keyed(
       "query",
       Command.effect((dispatch) =>
-        Effect.flatMap(SearchApi, (api) => api.query(text)).pipe(
-          Effect.flatMap((hits) => dispatch({ _tag: "Results", hits })),
-        ),
+        Effect.gen(function* () {
+          const api = yield* SearchApi;
+          const hits = yield* api.query(text);
+          yield* dispatch({ _tag: "Results", hits });
+        }),
       ),
     ),
   ],
@@ -156,9 +160,9 @@ nothing.
 Command.batch<A, R>(...commands: ReadonlyArray<Command<A, R>>): Command<A, R>
 ```
 
-Members are interpreted in order under one context. The one thing `batch` can
-do that `Effect.all` cannot is put a `cancel` before the command that replaces
-it. Compose effects with `Effect.all` inside a single leaf.
+Members are interpreted in order under one context. `batch` is the place for a
+`cancel` that runs before the command that replaces its work. Compose effects
+with `Effect.all` inside a single leaf.
 
 ```ts continue
 const replace = Command.batch(
@@ -188,7 +192,7 @@ const cancelReducer = Search.reducer({
 ```
 
 `Command.cancel("Queried")` reaches only the unkeyed fibers of the `Queried`
-tag. Keyed work answers to its own name.
+tag. Keyed work is reached by its key.
 
 ## `Command.restart`
 
@@ -197,9 +201,9 @@ Command.restart(name: Group): <A, R>(command: Command<A, R>) => Command<A, R>
 Command.restart<A, R>(name: Group, command: Command<A, R>): Command<A, R>
 ```
 
-Take-latest as one word. `restart(name, command)` is exactly
+`restart` is take-latest in one call. `restart(name, command)` is exactly
 `batch(cancel(name), keyed(name, command))`. The interpreter and devtools see
-the desugared batch.
+that batch.
 
 ```ts continue
 const takeLatest = Search.reducer({
@@ -208,10 +212,12 @@ const takeLatest = Search.reducer({
     Command.restart(
       "query",
       Command.effect((dispatch) =>
-        Effect.sleep("300 millis").pipe(
-          Effect.andThen(Effect.flatMap(SearchApi, (api) => api.query(text))),
-          Effect.flatMap((hits) => dispatch({ _tag: "Results", hits })),
-        ),
+        Effect.gen(function* () {
+          yield* Effect.sleep("300 millis");
+          const api = yield* SearchApi;
+          const hits = yield* api.query(text);
+          yield* dispatch({ _tag: "Results", hits });
+        }),
       ),
     ),
   ],
@@ -220,7 +226,7 @@ const takeLatest = Search.reducer({
 });
 ```
 
-The desugaring is visible on the value: `restart` returns a `Batch`.
+`restart` returns that `Batch`.
 
 ```ts continue
 const desugaredRestart = Command.restart("query", Command.none);
@@ -229,8 +235,8 @@ console.log(desugaredRestart._tag);
 // => "Batch"
 ```
 
-The debounce above is written with Effect combinators. Concurrency policy
-lives inside the effect. The runtime owns naming and cancelling. See
+The debounce above is written with Effect combinators inside the effect. The
+runtime owns naming and cancelling. See
 [Debounce and take-latest](/docs/how-to/debounce-and-take-latest).
 
 ## `Command.output`
@@ -242,8 +248,8 @@ Command.output<Tag, Fields>(
 ): Command<{ readonly _tag: Tag } & ...>
 ```
 
-Emits an outbound message, which leaves through its `on<Tag>` prop. Passing an
-internal message is a compile error, shown in
+Emits an outbound message, which leaves through its `on<Tag>` prop. An
+internal message as the argument is a compile error, shown in
 [Actions and outputs](/docs/reference/actions).
 
 ```ts continue
@@ -291,9 +297,9 @@ const grouped = Search.reducer({
 });
 ```
 
-A key equal to some action's tag is deliberate sharing: one namespace means
-one meaning per name. A [task](/docs/reference/tasks) books under
-`Task/${Name}` for that reason. See
+A key equal to an action's tag shares that group with the action's unkeyed
+commands. A [task](/docs/reference/tasks) books under `Task/${Name}` to keep
+its group apart from every action tag. See
 [Groups and cancellation](/docs/explanation/groups-and-cancellation).
 
 ## `Pipeable`
@@ -308,9 +314,10 @@ const pipedRestart = Command.none.pipe(Command.restart("query"));
 
 ## Contextual typing
 
-`A` has no inference site of its own. Inside a handler's return, `dispatch`'s
-action type comes from the contextual type of that return. Written standalone,
-`A` falls back to `never`, so name it with a type argument.
+`A` is inferred from the contextual type alone. Inside a handler's return,
+`dispatch`'s action type comes from the contextual type of that return. A
+standalone leaf has no contextual type, so `A` falls back to `never` unless a
+type argument names it.
 
 ```ts continue
 const named = Command.effect<{ readonly _tag: "Results"; readonly hits: ReadonlyArray<string> }>(
@@ -318,7 +325,7 @@ const named = Command.effect<{ readonly _tag: "Results"; readonly hits: Readonly
 );
 ```
 
-`R` defaults to `never` on the same terms, so a standalone leaf that needs a
+`R` falls back to `never` the same way, so a standalone leaf that needs a
 service names both type arguments.
 
 ```ts continue
@@ -326,9 +333,11 @@ const namedWithService = Command.effect<
   { readonly _tag: "Results"; readonly hits: ReadonlyArray<string> },
   SearchApi
 >((dispatch) =>
-  Effect.flatMap(SearchApi, (api) => api.query("cats")).pipe(
-    Effect.flatMap((hits) => dispatch({ _tag: "Results", hits })),
-  ),
+  Effect.gen(function* () {
+    const api = yield* SearchApi;
+    const hits = yield* api.query("cats");
+    yield* dispatch({ _tag: "Results", hits });
+  }),
 );
 ```
 
@@ -370,23 +379,5 @@ const cancelFirst = Search.reducer({
 });
 ```
 
-## What does not exist
-
-`Command.stream`, `Command.ignore`, `Command.queue` and a `Policy` vocabulary
-were removed. The constructor set is exactly `none`, `effect`, `keyed`,
-`batch`, `cancel`, `restart` and `output`.
-
-```ts continue
-const constructors: ReadonlyArray<keyof typeof Command> = [
-  "none",
-  "effect",
-  "keyed",
-  "batch",
-  "cancel",
-  "restart",
-  "output",
-];
-```
-
-Why the model is shaped this way: [Commands as
-data](/docs/explanation/commands-as-data).
+The reasoning behind this shape is in
+[Commands as data](/docs/explanation/commands-as-data).

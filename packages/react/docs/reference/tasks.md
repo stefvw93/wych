@@ -10,55 +10,60 @@ A task is async work as two actions and a command. `Task(name, config)` declares
 `${Name}Resolved` and `${Name}Rejected` plus the command that produces them.
 The result lands in a `TaskValue` field, which has four cases.
 
-Every snippet on this page builds on one feature: a photo search that queries a
-`PhotoApi`, holds the result in `state.photos`, and can be cancelled.
+Every snippet on this page builds on one feature: a mailbox that loads the
+subjects of a folder through a `MailApi`, holds them in `state.subjects`, and
+can be cancelled.
 
 ```tsx
 import { Cause, Context, Effect, Layer, Option, Schema } from "effect";
 import { Action, Command, define, Next, Task } from "@wych/react";
 import type { TaskMode, TaskOnError, TaskOperation, TaskValue } from "@wych/react";
 
-class PhotoApi extends Context.Service<
-  PhotoApi,
-  { readonly search: (query: string) => Effect.Effect<ReadonlyArray<string>, Error> }
->()("PhotoApi") {}
+class MailApi extends Context.Service<
+  MailApi,
+  { readonly list: (folder: string) => Effect.Effect<ReadonlyArray<string>, Error> }
+>()("MailApi") {}
 
-const PhotoApiLayer = Layer.succeed(PhotoApi)({ search: () => Effect.succeed(["a.jpg"]) });
+const MailApiLayer = Layer.succeed(MailApi)({ list: () => Effect.succeed(["Hello"]) });
 
-const Photos = Schema.Array(Schema.String);
+const Subjects = Schema.Array(Schema.String);
 
-const photoSearch = Task("PhotoSearch", {
-  success: Photos,
+const loadMail = Task("LoadMail", {
+  success: Subjects,
   onError: Task.message,
-  run: (query: string) => Effect.flatMap(PhotoApi, (api) => api.search(query)),
+  run: (folder: string) =>
+    Effect.gen(function* () {
+      const api = yield* MailApi;
+      return yield* api.list(folder);
+    }),
 });
 
-const Searched = Action("Searched", { query: Schema.String });
+const Opened = Action("Opened", { folder: Schema.String });
 const Cancelled = Action("Cancelled", {});
 
-const Gallery = define({
+const Mailbox = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({ query: Schema.String, photos: Task.schema(Photos) }),
-  action: Action.of([Searched, Cancelled, ...photoSearch.actions]),
+  state: Schema.Struct({ folder: Schema.String, subjects: Task.schema(Subjects) }),
+  action: Action.of([Opened, Cancelled, ...loadMail.actions]),
 });
 
-export const gallery = Gallery.create({
-  initialState: Gallery.initialState(() => ({ query: "", photos: Task.idle })),
-  reducer: Gallery.reducer({
-    Searched: ({ query }, { state }) =>
-      Task.start({ ...state, query }, "photos", photoSearch.run(query)),
-    Cancelled: (_payload, { state }) => [{ ...state, photos: Task.idle }, photoSearch.cancel],
-    PhotoSearchResolved: ({ value }, { state }) => ({ ...state, photos: Task.resolved(value) }),
-    PhotoSearchRejected: ({ error }, { state }) => ({ ...state, photos: Task.rejected(error) }),
+export const mailbox = Mailbox.create({
+  initialState: Mailbox.initialState(() => ({ folder: "", subjects: Task.idle })),
+  reducer: Mailbox.reducer({
+    Opened: ({ folder }, { state }) =>
+      Task.start({ ...state, folder }, "subjects", loadMail.run(folder)),
+    Cancelled: (_payload, { state }) => [{ ...state, subjects: Task.idle }, loadMail.cancel],
+    LoadMailResolved: ({ value }, { state }) => ({ ...state, subjects: Task.resolved(value) }),
+    LoadMailRejected: ({ error }, { state }) => ({ ...state, subjects: Task.rejected(error) }),
   }),
-  render: Gallery.render(({ state }) =>
-    Task.match(state.photos, {
+  render: Mailbox.render(({ state }) =>
+    Task.match(state.subjects, {
       Idle: () => null,
-      Pending: () => <p>Searching</p>,
+      Pending: () => <p>Loading</p>,
       Resolved: ({ value }) => (
         <ul>
-          {value.map((url) => (
-            <li key={url}>{url}</li>
+          {value.map((subject) => (
+            <li key={subject}>{subject}</li>
           ))}
         </ul>
       ),
@@ -94,22 +99,26 @@ produces its type.
 ```ts continue
 const NotFound = Schema.Struct({ status: Schema.Number, message: Schema.String });
 
-const typedSearch = Task("TypedSearch", {
-  success: Photos,
+const typedLoad = Task("TypedLoad", {
+  success: Subjects,
   failure: NotFound,
   onError: (cause): typeof NotFound.Type => ({
     status: Cause.hasDies(cause) ? 500 : 404,
     message: String(Cause.squash(cause)),
   }),
-  run: (query: string) => Effect.flatMap(PhotoApi, (api) => api.search(query)),
+  run: (folder: string) =>
+    Effect.gen(function* () {
+      const api = yield* MailApi;
+      return yield* api.list(folder);
+    }),
 });
 ```
 
 `name` must be capitalized, because it prefixes two action tags.
 
 ```ts continue
-// @ts-expect-error "photoSearch" is not Capitalize<string>
-const lowercase = Task("photoSearch", { success: Photos, onError: Task.message });
+// @ts-expect-error "loadMail" is not Capitalize<string>
+const lowercase = Task("loadMail", { success: Subjects, onError: Task.message });
 ```
 
 ## `TaskOperation`
@@ -122,8 +131,8 @@ interface TaskOperation<Name, Success, Failure, Input, R, Ch> {
 }
 ```
 
-Three members, and nothing state-shaped. Where the result lands is the
-feature's business.
+Three members. The operation holds no state; the feature's reducer writes the
+result into a state field.
 
 ### `actions`
 
@@ -131,16 +140,16 @@ Two messages, tagged `${Name}Resolved` with `{ value }` and `${Name}Rejected`
 with `{ error }`. Spread them into the feature's vocabulary.
 
 ```ts continue
-console.log(photoSearch.actions.map((message) => message.make({ value: [], error: "" })._tag));
-// => ["PhotoSearchResolved", "PhotoSearchRejected"]
+console.log(loadMail.actions.map((message) => message.make({ value: [], error: "" })._tag));
+// => ["LoadMailResolved", "LoadMailRejected"]
 
-const vocabulary = Action.of([Searched, Cancelled, ...photoSearch.actions]);
+const vocabulary = Action.of([Opened, Cancelled, ...loadMail.actions]);
 console.log(Object.keys(vocabulary.cases).sort());
-// => ["Cancelled", "PhotoSearchRejected", "PhotoSearchResolved", "Searched"]
+// => ["Cancelled", "LoadMailRejected", "LoadMailResolved", "Opened"]
 ```
 
-The reducer writes the result itself, which is where a handler can derive
-something else from it.
+The `Resolved` and `Rejected` handlers write the result, so a handler can also
+derive other state from it.
 
 ### `run`
 
@@ -151,7 +160,7 @@ it, `op.run(effect)` takes the effect.
 const unbound = Task("Upload", { success: Schema.String, onError: Task.message });
 
 const unboundCommand = unbound.run(Effect.succeed("receipt_1"));
-const boundCommand = photoSearch.run("cats");
+const boundCommand = loadMail.run("inbox");
 ```
 
 A `run` that takes no input is still bound: the operation's `run` is called
@@ -159,26 +168,30 @@ with nothing.
 
 ```ts continue
 const refresh = Task("Refresh", {
-  success: Photos,
+  success: Subjects,
   onError: Task.message,
-  run: () => Effect.flatMap(PhotoApi, (api) => api.search("")),
+  run: () =>
+    Effect.gen(function* () {
+      const api = yield* MailApi;
+      return yield* api.list("inbox");
+    }),
 });
 
 const refreshCommand = refresh.run();
 ```
 
-`run` is returned from the triggering action's handler, which is what keeps the
-effect's `R` visible to the feature's service requirements.
+The handler of the triggering action returns `run`'s command, so the effect's
+`R` reaches the feature's service requirements.
 
 ### `cancel`
 
 ```ts continue
-const stop = photoSearch.cancel; // Command.cancel("Task/PhotoSearch")
+const stop = loadMail.cancel; // Command.cancel("Task/LoadMail")
 ```
 
-Cancelling writes nothing. A cancelled task left `Pending` is a permanently
-disabled button, so clear the field in the same return, as the `Cancelled`
-handler above does.
+`cancel` writes nothing to the field. A field left `Pending` after a cancel
+stays `Pending`, so the handler that returns `cancel` also resets the field, as
+the `Cancelled` handler above does.
 
 ## `Task.output`
 
@@ -188,7 +201,7 @@ const announceUpload = Task.output("Announce", { success: Schema.String, onError
 const Announcer = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ note: Schema.String }),
-  action: Action.of([Searched]),
+  action: Action.of([Opened]),
   output: Action.of([...announceUpload.actions]),
 });
 ```
@@ -208,36 +221,41 @@ the first. `"every"` uses `Command.keyed`: both runs go to completion and the
 last to settle wins.
 
 ```ts continue
-const everySearch = Task("EverySearch", {
-  success: Photos,
+const everyLoad = Task("EveryLoad", {
+  success: Subjects,
   onError: Task.message,
   mode: "every" satisfies TaskMode,
-  run: (query: string) => Effect.flatMap(PhotoApi, (api) => api.search(query)),
+  run: (folder: string) =>
+    Effect.gen(function* () {
+      const api = yield* MailApi;
+      return yield* api.list(folder);
+    }),
 });
 ```
 
-Take-first is a guard in the handler, because it is a question about state.
+Take-first is a guard in the handler: the handler reads the field and returns
+the state unchanged while the task is `Pending`.
 
 ```ts continue
-const takeFirst = Gallery.reducer({
-  Searched: ({ query }, { state }) =>
-    Task.isPending(state.photos)
+const takeFirst = Mailbox.reducer({
+  Opened: ({ folder }, { state }) =>
+    Task.isPending(state.subjects)
       ? state
-      : Task.start({ ...state, query }, "photos", photoSearch.run(query)),
-  Cancelled: (_payload, { state }) => [{ ...state, photos: Task.idle }, photoSearch.cancel],
-  PhotoSearchResolved: ({ value }, { state }) => ({ ...state, photos: Task.resolved(value) }),
-  PhotoSearchRejected: ({ error }, { state }) => ({ ...state, photos: Task.rejected(error) }),
+      : Task.start({ ...state, folder }, "subjects", loadMail.run(folder)),
+  Cancelled: (_payload, { state }) => [{ ...state, subjects: Task.idle }, loadMail.cancel],
+  LoadMailResolved: ({ value }, { state }) => ({ ...state, subjects: Task.resolved(value) }),
+  LoadMailRejected: ({ error }, { state }) => ({ ...state, subjects: Task.rejected(error) }),
 });
 ```
 
 ## The group
 
 Both modes book fibers under `` `Task/${Name}` ``, so `cancel` addresses them
-all. The namespace prefix keeps a feature action tagged `PhotoSearch` from
-sharing an address with this operation.
+all. The `Task/` prefix keeps a feature action tagged `LoadMail` from sharing
+an address with this operation.
 
 ```ts continue
-const groups: ReadonlyArray<string> = ["Task/PhotoSearch", "Task/TypedSearch"];
+const groups: ReadonlyArray<string> = ["Task/LoadMail", "Task/TypedLoad"];
 ```
 
 Group rules are in [Commands](/docs/reference/commands).
@@ -254,25 +272,25 @@ and a defect map to `Failure`.
 
 ```ts continue
 const failed = await Effect.runPromise(
-  gallery.run([Searched.make({ query: "cats" })], {
+  mailbox.run([Opened.make({ folder: "inbox" })], {
     props: {},
     hooks: {},
-    layer: Layer.succeed(PhotoApi)({ search: () => Effect.fail(new Error("offline")) }),
+    layer: Layer.succeed(MailApi)({ list: () => Effect.fail(new Error("offline")) }),
   }),
 );
 
-console.log(failed.state.photos);
+console.log(failed.state.subjects);
 // => { _tag: "Rejected", error: "offline" }
 
 const died = await Effect.runPromise(
-  gallery.run([Searched.make({ query: "cats" })], {
+  mailbox.run([Opened.make({ folder: "inbox" })], {
     props: {},
     hooks: {},
-    layer: Layer.succeed(PhotoApi)({ search: () => Effect.die(new Error("bug")) }),
+    layer: Layer.succeed(MailApi)({ list: () => Effect.die(new Error("bug")) }),
   }),
 );
 
-console.log(died.state.photos);
+console.log(died.state.subjects);
 // => { _tag: "Rejected", error: "bug" }
 ```
 
@@ -284,19 +302,19 @@ Interruption is the one cause `onError` never sees. Cancelled work dispatches
 nothing.
 
 ```ts continue
-const SlowApiLayer = Layer.succeed(PhotoApi)({
-  search: () => Effect.as(Effect.sleep("50 millis"), ["a.jpg"] as ReadonlyArray<string>),
+const SlowApiLayer = Layer.succeed(MailApi)({
+  list: () => Effect.as(Effect.sleep("50 millis"), ["Hello"] as ReadonlyArray<string>),
 });
 
 const cancelledRun = await Effect.runPromise(
-  gallery.run([Searched.make({ query: "cats" }), Cancelled.make({})], {
+  mailbox.run([Opened.make({ folder: "inbox" }), Cancelled.make({})], {
     props: {},
     hooks: {},
     layer: SlowApiLayer,
   }),
 );
 
-console.log(cancelledRun.state.photos);
+console.log(cancelledRun.state.subjects);
 // => { _tag: "Idle" }
 ```
 
@@ -310,8 +328,8 @@ type TaskValue<Success, Failure> =
   | { readonly _tag: "Rejected"; readonly error: Failure };
 ```
 
-`Pending` drops any previous value. A refetch that keeps the last result
-readable needs a fifth case, which nothing here provides.
+`Pending` holds no value. There is no case that keeps the last value readable
+while a refetch is pending.
 
 ### `Task.schema`
 
@@ -325,12 +343,12 @@ The schema of a state field holding a `TaskValue`. The failure defaults to
 
 ```ts continue
 const State = Schema.Struct({
-  photos: Task.schema(Photos),
+  subjects: Task.schema(Subjects),
   upload: Task.schema(Schema.String, NotFound),
 });
 ```
 
-Nothing connects the field to an operation but the handlers you write.
+The handlers are what connect a field to an operation.
 
 ### `Task.idle` and `Task.pending`
 
@@ -356,25 +374,30 @@ Task.start<State, Key extends TaskKeys<State>, Action, R>(
 ): readonly [State, Command<Action, R> | LazyCommand<State, Action, R>]
 ```
 
-`Pending` and the command as one return. `key` is constrained to the state's
-own `TaskValue` fields, so a typo is a compile error.
+`Task.start` returns one tuple: the state with `Pending` written into `key`,
+and the command. `key` is constrained to the state's own `TaskValue` fields,
+so a typo is a compile error.
 
 ```ts continue
-const started = Task.start({ query: "cats", photos: Task.idle }, "photos", photoSearch.run("cats"));
+const started = Task.start(
+  { folder: "inbox", subjects: Task.idle },
+  "subjects",
+  loadMail.run("inbox"),
+);
 
 console.log(started[0]);
-// => { query: "cats", photos: { _tag: "Pending" } }
+// => { folder: "inbox", subjects: { _tag: "Pending" } }
 
-// @ts-expect-error "query" is not a TaskValue field
-const typo = Task.start({ query: "cats", photos: Task.idle }, "query", photoSearch.run("cats"));
+// @ts-expect-error "folder" is not a TaskValue field
+const typo = Task.start({ folder: "inbox", subjects: Task.idle }, "folder", loadMail.run("inbox"));
 ```
 
 The command may be lazy. The thunk receives the state with `Pending` already
 written.
 
 ```ts continue
-const lazyStart = Task.start({ query: "cats", photos: Task.idle }, "photos", (next) =>
-  photoSearch.run(next.query),
+const lazyStart = Task.start({ folder: "inbox", subjects: Task.idle }, "subjects", (next) =>
+  loadMail.run(next.folder),
 );
 ```
 
@@ -383,8 +406,8 @@ const lazyStart = Task.start({ query: "cats", photos: Task.idle }, "photos", (ne
 The two constructors the `Resolved` and `Rejected` handlers write.
 
 ```ts continue
-console.log(Task.resolved(["a.jpg"]));
-// => { _tag: "Resolved", value: ["a.jpg"] }
+console.log(Task.resolved(["Hello"]));
+// => { _tag: "Resolved", value: ["Hello"] }
 console.log(Task.rejected("offline"));
 // => { _tag: "Rejected", error: "offline" }
 ```
@@ -400,13 +423,13 @@ Task.match<Success, Failure, Cases>(
 ): TaskMatched<Cases>
 ```
 
-Total: a missing arm does not compile. Each arm receives the whole member, and
-the result is the union of what the arms return.
+`Task.match` is exhaustive: a missing case does not compile. Each case receives
+the whole member, and the result is the union of the case return types.
 
 ```tsx continue
-const label = Task.match(Task.resolved(["a.jpg"]), {
+const label = Task.match(Task.resolved(["Hello"]), {
   Idle: () => 0,
-  Pending: () => "searching",
+  Pending: () => "loading",
   Resolved: ({ value }) => value.length,
   Rejected: ({ error }) => error,
 });
@@ -416,7 +439,7 @@ console.log(label);
 ```
 
 ```ts continue
-// @ts-expect-error the Rejected arm is missing
+// @ts-expect-error the Rejected case is missing
 const partial = Task.match(Task.idle as TaskValue<ReadonlyArray<string>, string>, {
   Idle: () => null,
   Pending: () => null,
@@ -426,17 +449,17 @@ const partial = Task.match(Task.idle as TaskValue<ReadonlyArray<string>, string>
 
 ### `Task.value`, `Task.error` and `Task.getOrElse`
 
-The partial reads, for a reducer or a guard.
+Reads of one case, for a reducer or a guard.
 
 ```ts continue
-const resolved: TaskValue<ReadonlyArray<string>, string> = Task.resolved(["a.jpg"]);
+const resolved: TaskValue<ReadonlyArray<string>, string> = Task.resolved(["Hello"]);
 
 console.log(Option.isSome(Task.value(resolved)));
 // => true
 console.log(Option.isNone(Task.error(resolved)));
 // => true
 console.log(Task.getOrElse(resolved, () => [] as ReadonlyArray<string>));
-// => ["a.jpg"]
+// => ["Hello"]
 ```
 
 `Task.value` is `Option.some(value)` for `Resolved` and `Option.none()`
@@ -449,7 +472,7 @@ fallback.
 Four guards, each narrowing to one case.
 
 ```ts continue
-const current: TaskValue<ReadonlyArray<string>, string> = failed.state.photos;
+const current: TaskValue<ReadonlyArray<string>, string> = failed.state.subjects;
 
 console.log(Task.isIdle(current));
 // => false

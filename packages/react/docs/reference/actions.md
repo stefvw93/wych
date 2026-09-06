@@ -10,20 +10,20 @@ A message is a `Schema.TaggedStruct` branded with a channel. `Action` builds
 one on the internal channel, and `Action.output` builds one on the outbound
 channel. `Action.of` collects members into a vocabulary.
 
-Every snippet on this page builds on one vocabulary: the messages of a
-checkout cart.
+Every snippet on this page builds on one vocabulary: the messages of a poll
+widget that counts votes and announces the result.
 
 ```ts
 import { Schema } from "effect";
 import { Action, Command, define } from "@wych/react";
 import type { Emit, NoOutputs } from "@wych/react";
 
-const Added = Action("Added", { sku: Schema.String, quantity: Schema.Number });
-const Removed = Action("Removed", { sku: Schema.String });
-const CheckoutRequested = Action("CheckoutRequested", {});
+const Voted = Action("Voted", { option: Schema.String, weight: Schema.Number });
+const Retracted = Action("Retracted", { option: Schema.String });
+const Closed = Action("Closed", {});
 
-const OrderPlaced = Action.output("OrderPlaced", { orderId: Schema.String });
-const Cancelled = Action.output("Cancelled", { reason: Schema.String });
+const Decided = Action.output("Decided", { winner: Schema.String });
+const Abandoned = Action.output("Abandoned", { reason: Schema.String });
 ```
 
 ## `Action`
@@ -39,10 +39,10 @@ An action reaches the reducer. `_tag` is part of the schema, so a message is
 encodable and a union discriminates on it.
 
 ```ts continue
-console.log(Object.keys(Added.fields).sort());
-// => ["_tag", "quantity", "sku"]
-console.log(Added.make({ sku: "sku_1", quantity: 2 }));
-// => { _tag: "Added", sku: "sku_1", quantity: 2 }
+console.log(Object.keys(Voted.fields).sort());
+// => ["_tag", "option", "weight"]
+console.log(Voted.make({ option: "tea", weight: 2 }));
+// => { _tag: "Voted", option: "tea", weight: 2 }
 ```
 
 `make` fills `_tag`. `dispatch` takes the whole tagged message, and a reducer
@@ -51,8 +51,8 @@ handler receives the payload with `_tag` stripped.
 The tag must be capitalized.
 
 ```ts continue
-// @ts-expect-error "added" is not Capitalize<string>
-const lowercase = Action("added", {});
+// @ts-expect-error "voted" is not Capitalize<string>
+const lowercase = Action("voted", {});
 ```
 
 ## `Action.output`
@@ -68,15 +68,15 @@ An output leaves through an `on<Tag>` prop and never reaches the reducer.
 `Command.output` is the only constructor that takes one.
 
 ```ts continue
-const announce = Command.output(OrderPlaced, { orderId: "o_1" });
+const announce = Command.output(Decided, { winner: "tea" });
 
-// @ts-expect-error Added is an internal message
-const wrongChannel = Command.output(Added, { sku: "sku_1", quantity: 1 });
+// @ts-expect-error Voted is an internal message
+const wrongChannel = Command.output(Voted, { option: "tea", weight: 1 });
 ```
 
-`Action.output` has a call signature and nothing else, so `Action.output.of`
-does not exist. Build an outbound vocabulary with `Action.of`, which reads the
-channel off its members.
+`Action.output` is a plain function, so `Action.output.of` does not exist.
+Build an outbound vocabulary with `Action.of`, which reads the channel off its
+members.
 
 ## Channels
 
@@ -121,11 +121,11 @@ Action.of<Members extends ReadonlyArray<AnyMessage<Channel>>>(
 channel; a mixed list is a compile error.
 
 ```ts continue
-const CartActions = Action.of([Added, Removed, CheckoutRequested]);
-const CartOutputs = Action.of([OrderPlaced, Cancelled]);
+const PollActions = Action.of([Voted, Retracted, Closed]);
+const PollOutputs = Action.of([Decided, Abandoned]);
 
 // @ts-expect-error the member list straddles both channels
-const mixed = Action.of([Added, OrderPlaced]);
+const mixed = Action.of([Voted, Decided]);
 ```
 
 ### `cases`
@@ -133,43 +133,43 @@ const mixed = Action.of([Added, OrderPlaced]);
 A record from tag to member, each with its own `make`.
 
 ```ts continue
-console.log(Object.keys(CartActions.cases));
-// => ["Added", "Removed", "CheckoutRequested"]
-console.log(CartActions.cases.Removed.make({ sku: "sku_1" }));
-// => { _tag: "Removed", sku: "sku_1" }
+console.log(Object.keys(PollActions.cases));
+// => ["Voted", "Retracted", "Closed"]
+console.log(PollActions.cases.Retracted.make({ option: "tea" }));
+// => { _tag: "Retracted", option: "tea" }
 ```
 
-The reducer keys off `cases`, so those tags are exactly the handlers a feature
-owes.
+The keys of `cases` are the handler keys the feature's reducer must declare.
 
 ### `guards`
 
 One type guard per tag.
 
 ```ts continue
-const message = CartActions.cases.Added.make({ sku: "sku_1", quantity: 2 });
+const message = PollActions.cases.Voted.make({ option: "tea", weight: 2 });
 
-console.log(CartActions.guards.Added(message));
+console.log(PollActions.guards.Voted(message));
 // => true
-console.log(CartActions.guards.Removed(message));
+console.log(PollActions.guards.Retracted(message));
 // => false
 ```
 
 ### `match`
 
 ```ts continue
-const describe = CartActions.match(message, {
-  Added: (added) => `+${added.quantity} ${added.sku}`,
-  Removed: (removed) => `-${removed.sku}`,
-  CheckoutRequested: () => "checkout",
+const describe = PollActions.match(message, {
+  Voted: (voted) => `+${voted.weight} ${voted.option}`,
+  Retracted: (retracted) => `-${retracted.option}`,
+  Closed: () => "closed",
 });
 
 console.log(describe);
-// => "+2 sku_1"
+// => "+2 tea"
 ```
 
-`match` receives the whole member, `_tag` included. A reducer handler receives
-the payload instead.
+`match` is exhaustive: every case is required. Each case receives the whole
+member, `_tag` included. A reducer handler receives the payload, with `_tag`
+stripped.
 
 ### Nesting
 
@@ -182,16 +182,16 @@ const AsyncActions = Action.of([
   Action("Started", {}),
   Action("Failed", { reason: Schema.String }),
 ]);
-const AllActions = Action.of([AsyncActions, CheckoutRequested]);
+const AllActions = Action.of([AsyncActions, Closed]);
 
 console.log(Object.keys(AllActions.cases).sort());
-// => ["CheckoutRequested", "Failed", "Started"]
+// => ["Closed", "Failed", "Started"]
 console.log(AllActions.cases.Failed.make({ reason: "network" }));
 // => { _tag: "Failed", reason: "network" }
 ```
 
 This is how a [task](/docs/reference/tasks) contributes its two generated
-actions: `Action.of([CheckoutRequested, ...checkout.actions])`.
+actions: `Action.of([Closed, ...tally.actions])`.
 
 ## `Emit` and `NoOutputs`
 
@@ -208,27 +208,24 @@ vocabulary, which is `define`'s default when no `output` is declared. Its
 `Type` is `never`, so `OutputProps` degrades to `{}`.
 
 ```ts continue
-type CartMessage = Emit<typeof CartActions, typeof CartOutputs>;
-type LeafMessage = Emit<typeof CartActions, NoOutputs>;
+type PollMessage = Emit<typeof PollActions, typeof PollOutputs>;
+type LeafMessage = Emit<typeof PollActions, NoOutputs>;
 
-const Cart = define({
-  props: Schema.Struct({ customerId: Schema.String }),
-  state: Schema.Struct({ items: Schema.Number }),
-  action: CartActions,
-  output: CartOutputs,
+const Poll = define({
+  props: Schema.Struct({ question: Schema.String }),
+  state: Schema.Struct({ votes: Schema.Number }),
+  action: PollActions,
+  output: PollOutputs,
 });
 
-const cart = Cart.create({
-  initialState: Cart.initialState(() => ({ items: 0 })),
-  reducer: Cart.reducer({
-    Added: ({ quantity }, { state }) => ({ items: state.items + quantity }),
-    Removed: (_payload, { state }) => ({ items: state.items - 1 }),
-    CheckoutRequested: (_payload, { state }) => [
-      state,
-      Command.output(OrderPlaced, { orderId: "o_1" }),
-    ],
+const poll = Poll.create({
+  initialState: Poll.initialState(() => ({ votes: 0 })),
+  reducer: Poll.reducer({
+    Voted: ({ weight }, { state }) => ({ votes: state.votes + weight }),
+    Retracted: (_payload, { state }) => ({ votes: state.votes - 1 }),
+    Closed: (_payload, { state }) => [state, Command.output(Decided, { winner: "tea" })],
   }),
-  render: Cart.render(() => null),
+  render: Poll.render(() => null),
 });
 ```
 

@@ -8,7 +8,7 @@ order: 7
 
 Devtools are a service. The runtime resolves a `DevtoolsSink` from the root
 layer and reports every transition, command, output and defect to it. With no
-sink installed the runtime allocates nothing at those sites.
+sink installed the runtime builds no events.
 
 Every snippet on this page builds on one feature: a counter that saves through
 a command and announces when it passes a threshold.
@@ -67,9 +67,9 @@ export const counter = Counter.create({
 Devtools: Context.Reference<DevtoolsSink>; // default: noopDevtools
 ```
 
-A `Context.Reference`, so reading it is total and installing one widens no
-service requirement. Adding devtools moves nothing about `RootR` and touches no
-`component` call.
+A `Context.Reference` with a default value, so reading it cannot fail and
+installing a sink adds no service requirement. `RootR` and every `component`
+call stay as they are.
 
 ## `DevtoolsSink`
 
@@ -79,8 +79,8 @@ interface DevtoolsSink {
 }
 ```
 
-One method, called synchronously at the emission point. A sink that throws is
-disabled for the rest of the mount.
+One method, called synchronously at the emission point. A sink that throws
+receives no further events from that component.
 
 ```ts continue
 const tags: Array<string> = [];
@@ -98,9 +98,8 @@ const sink: DevtoolsSink = {
 noopDevtools: DevtoolsSink;
 ```
 
-The default value of the reference, and the signal that nobody installed a
-sink. The runtime compares the resolved reference against this exact frozen
-object by identity.
+The default value of the reference. The runtime compares the resolved sink
+against this object by identity, and reports nothing when they are the same.
 
 ## `devtoolsLayer`
 
@@ -165,9 +164,9 @@ skipUnchanged(event: DevtoolsEvent): boolean
 `skipUnchangedAmbient` is the console default. It drops a `PropsChanged` or
 `HookChanged` transition where `previous === next`, and keeps everything else.
 
-`skipUnchanged` drops any transition where state did not move. It also eats two
-cases the default keeps: `Unmounted`, whose returned state is discarded by
-design, and a dispatch that deliberately no-ops.
+`skipUnchanged` drops any transition where state did not move. It also drops
+two cases the default keeps: `Unmounted`, whose returned state is always
+discarded, and a dispatch whose handler returns the same state.
 
 ```ts continue
 const unchanged = { count: 1 };
@@ -203,8 +202,8 @@ createRecorder(): { readonly sink: DevtoolsSink; readonly events: ReadonlyArray<
 
 An in-memory sink, for asserting on the event stream in a test. `events` is the
 live array as it grows. Emission is synchronous, so by the time an effect
-resolves everything has been recorded. The recorder is not itself a sink;
-install `recorder.sink` through `devtoolsLayer`.
+resolves everything has been recorded. Install `recorder.sink` through
+`devtoolsLayer`; the recorder object holds the sink and the events.
 
 ```ts continue
 const recorder = createRecorder();
@@ -230,11 +229,11 @@ type DevtoolsEvent = DevtoolsTransition | DevtoolsCommand | DevtoolsOutput | Dev
 
 Every event carries `name`, `instance` and `cause`. `name` comes from
 `component(feature, { name })` and is `"WychFeature"` when unnamed. `instance`
-is unique per mount and per page, and it is not gapless: StrictMode
-double-invokes the store initialiser and burns an id.
+is unique per mount on the page. Ids can have gaps: StrictMode calls the store
+initialiser twice and each call takes an id.
 
-There is no timestamp. The sink is called synchronously at the emission point,
-so a receiver that wants a clock has one.
+An event has no timestamp. The sink is called synchronously at the emission
+point, so the sink can read its own clock.
 
 Every field is encodable, so a sink can be a `postMessage` transport or a
 replay log.
@@ -276,14 +275,14 @@ const issued: DevtoolsCommand = {
 unkeyed leaves book. A `Batch` can book members under several names, and those
 names are on the `Keyed` nodes inside `command`.
 
-`dropped: true` means nothing was there to take the work, which happens for a
-command dispatched after unmount. `false` means the work reached a live mount,
-not that it ran to completion.
+`dropped: true` means no mount was there to take the work, which happens for a
+command dispatched after unmount. `false` means the work reached a live mount.
+It says nothing about whether the work completed.
 
 ### `DevtoolsOutput`
 
-An outbound message left the feature. It carries the whole message including
-`_tag`, unlike the `on<Tag>` prop the parent receives.
+An outbound message left the feature. The event carries the whole message,
+`_tag` included. The `on<Tag>` prop receives the payload with `_tag` stripped.
 
 ```ts continue
 const announced: DevtoolsOutput = {
@@ -337,8 +336,8 @@ const causes: ReadonlyArray<DevtoolsCause> = [
 `key` is present when the emitting command was `Command.keyed`. The name a
 `Command.cancel` would use for that fiber is `key ?? action`.
 
-There is no `Output` cause. What a parent does with an output happens in
-user code the runtime cannot observe, so it never asserts that edge.
+There is no `Output` cause. What a parent does with an output happens outside
+the runtime, so no event has that origin.
 
 ## Summaries
 
@@ -354,7 +353,7 @@ const commandSummary: CommandSummary = {
 const defectSummary: DefectSummary = { name: "Error", message: "network down", stack: "..." };
 ```
 
-`CommandSummary` mirrors the command ADT with the leaf's callback erased.
+`CommandSummary` has the shape of the command with the leaf's callback removed.
 `DefectSummary` flattens an unknown thrown value to `{ name?, message, stack? }`,
 because an `Error` serialises to `{}`.
 
@@ -373,8 +372,8 @@ const scrubbed: ReadonlyArray<DevtoolsEvent> = [
 ```
 
 `PropsChanged` keeps its `previous` props, with each opaque prop replaced by
-its placeholder. A `Children` prop reports as `"<children>"`, which is what
-keeps every event JSON round-trippable. The reducer's own snapshot keeps the
+its placeholder. A `Children` prop reports as `"<children>"`, so every event
+survives a JSON round trip. The reducer's own snapshot keeps the
 real node. See
 [Children and opaque props](/docs/explanation/children-and-opaque-props).
 
@@ -388,5 +387,5 @@ const propsChanged: DevtoolsTransition = {
 };
 ```
 
-State is not redacted. It reaches a sink verbatim, which is why `define` throws
+State reaches a sink verbatim, with no redaction. That is why `define` throws
 when the state schema declares an opaque field.
