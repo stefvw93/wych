@@ -7,7 +7,9 @@ example: presence-stream
 
 # Subscribe to a stream
 
-A websocket, a presence feed, an event source: one long-lived `Stream` that dispatches an action per element. Book it under a name on `Mounted` and cancel that name on `Unmounted`.
+A websocket, a presence feed, an event source: one source that outlives every render and dispatches an action per element. In a component this is a `useEffect` with a cleanup function and a dependency array. The handler that folds each event into state lives in a closure the test cannot reach.
+
+In a feature the subscription is a command. Book it under a name on `Mounted`, rebook it on `PropsChanged`, cancel the name on `Unmounted`. The reducer folds every event, and `feature.run` tests the whole thing with a finite stream.
 
 ## Declare the source
 
@@ -35,6 +37,8 @@ const Presence = define({
 });
 ```
 
+One decision here: the stream's element type is the action's payload, so `Changed.make(event)` needs no mapping. Map inside the service when the wire format differs.
+
 ## Wrap the stream in a keyed command
 
 `Stream.runForEach(source, dispatch)` inside `Command.effect` is the whole subscription. `Command.keyed` gives the fiber a name that `Command.cancel` can reach.
@@ -44,9 +48,10 @@ const subscribe = (roomId: string) =>
   Command.keyed(
     "presence",
     Command.effect<typeof Changed.Type, PresenceApi>((dispatch) =>
-      Effect.flatMap(PresenceApi, (api) =>
-        Stream.runForEach(api.events(roomId), (event) => dispatch(Changed.make(event))),
-      ),
+      Effect.gen(function* () {
+        const api = yield* PresenceApi;
+        yield* Stream.runForEach(api.events(roomId), (event) => dispatch(Changed.make(event)));
+      }),
     ),
   );
 ```
@@ -82,13 +87,35 @@ const presence = Presence.create({
 });
 ```
 
+`PropsChanged` fires for any prop, so the handler compares `previous.roomId` with `props.roomId` and returns `state` when the room is the same. Resetting `online` to `[]` on a room change is the second decision: the new room's stream reports its own members, and the old list must not linger until they arrive.
+
 `Unmounted` runs with the services still alive, and its returned state is discarded. Only the command survives, which is why the handler returns `state` unchanged.
 
-React unmount interrupts the fiber anyway. The `Unmounted` handler is what makes the same feature stop cleanly under `feature.run` and under a manual teardown. See the [lifecycle reference](/docs/reference/lifecycle).
+### Why `Unmounted` cancels when unmount already sweeps
+
+Under a mount, teardown interrupts every fiber the feature has in flight before it runs the `Unmounted` command. React unmount does this, and so does `stop()` on a store you drive by hand. The `cancel` in the handler then finds nothing to cancel.
+
+`feature.run` sweeps nothing. It resolves only when nothing is queued and nothing is in flight, so a source that never completes keeps `run` open forever. Seeding `Unmounted` last ends the subscription because the handler says so.
+
+```tsx continue
+const endless = Layer.succeed(PresenceApi)({ events: () => Stream.never });
+
+const stopped = await Effect.runPromise(
+  presence.run([{ _tag: "Mounted" }, { _tag: "Unmounted" }], {
+    props: { roomId: "general" },
+    hooks: {},
+    layer: endless,
+  }),
+);
+console.log(stopped.emitted);
+// => []
+```
+
+Without the `Unmounted` handler this `run` never resolves. The handler is the feature's own statement of how it stops. It holds for every consumer: a React mount, a store driven by hand, `run`, and `reduce`, where the teardown is a `Cancel` command you can read as data. The [lifecycle reference](/docs/reference/lifecycle) shows that read.
 
 ## Test it with a finite stream
 
-`feature.run` resolves at quiescence. A finite stream reaches it; `Stream.never` does not.
+`feature.run` resolves once nothing is queued and nothing is in flight. A finite stream completes on its own, so the test needs no `Unmounted`.
 
 ```tsx continue
 const twoEvents = Layer.succeed(PresenceApi)({
@@ -113,7 +140,7 @@ const result = await Effect.runPromise(
 //    ]
 ```
 
-Seeded actions are folded but never appear in `emitted`. Everything a command dispatched does appear there.
+Seeded actions are folded but never appear in `emitted`. Everything a command dispatched does appear there, so `emitted` is the stream as the reducer saw it.
 
 ## Mount it
 

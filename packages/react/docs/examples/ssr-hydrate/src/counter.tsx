@@ -4,7 +4,7 @@ import { Effect, Layer, Schema } from "effect";
 let folds = 0;
 let commandsRun = 0;
 
-/** How many times `Mounted` folded and how many commands ran. */
+/** How many times `Mounted` folded and how many commands ran. The command bumps once. */
 export const counts = () => [folds, commandsRun] as const;
 
 const Bumped = Action("Bumped", {});
@@ -21,9 +21,10 @@ const counter = define({
       folds += 1;
       return [
         state,
-        Command.effect(() =>
-          Effect.sync(() => {
+        Command.effect((dispatch) =>
+          Effect.gen(function* () {
             commandsRun += 1;
+            yield* dispatch(Bumped.make({}));
           }),
         ),
       ];

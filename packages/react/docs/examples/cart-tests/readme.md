@@ -9,10 +9,12 @@ inspect the devtools stream.
 
 ## Problem
 
-Testing a reducer through mounted components means rendering with
-`@testing-library/react`, clicking buttons, and waiting for effects to
-settle, just to check that one action produces the right state. That is slow
-and couples the test to the view layer.
+A cart's reducer lives behind a component, so its tests go through the
+component: render with `@testing-library/react`, click, await the effect,
+read the DOM. One claim about one transition pays for a renderer. A claim
+about a race, such as a second submit superseding a charge in flight, is
+reachable only through timing, and a failed payment needs a mocked fetch
+wired into the module the component imports.
 
 ## Solution
 

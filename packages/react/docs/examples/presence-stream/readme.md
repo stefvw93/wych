@@ -10,10 +10,12 @@ folds a finite stream to show `run` resolving once it drains.
 
 ## Problem
 
-A subscription that outlives a single render needs to start on mount, restart
-when its parameters change, and stop on unmount, without leaking a fiber or
-double-subscribing. Doing this with `useEffect` means manually tracking
-cleanup functions and dependency arrays.
+A presence feed outlives every render. In a component it is a `useEffect`
+with a cleanup function and a dependency array on `roomId`. The handler
+that folds each event into state is a closure inside that effect. A room
+switch depends on React running the cleanup before the next subscribe. A
+test has to mount the component to reach any of it, and a feed that never
+completes gives the test nothing to wait for.
 
 ## Solution
 

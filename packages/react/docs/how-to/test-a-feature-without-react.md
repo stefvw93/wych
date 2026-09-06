@@ -7,14 +7,20 @@ example: cart-tests
 
 # Test a feature without React
 
-A feature is a value. `feature.reduce` folds one action, `feature.run` folds a sequence and runs the commands. Neither touches the DOM.
+A reducer that lives behind a component is tested through the component: render it, click, await the effect, read the DOM. Every assertion pays for a renderer, and a request race is only reachable through timing.
+
+A feature is a value, so its tests are plain function calls. Three tools cover three kinds of claim:
+
+- `feature.reduce` for one transition: from this state, this action gives this state and asks for this command. Nothing runs.
+- `feature.run` for a sequence: with this layer, these actions end in this state, emitted these actions and these outputs. Commands run.
+- `createRecorder` for what a mount reported: transitions, commands, defects. A component must be mounted.
 
 ## The feature under test
 
 ```ts
 import { Action, Command, define, Next, Task } from "@wych/react";
 import { Context, Effect, Layer, Schema } from "effect";
-import { expect, test } from "vite-plus/test";
+import { expect, test } from "vitest";
 
 const Item = Schema.Struct({ id: Schema.String, price: Schema.Number });
 
@@ -30,7 +36,11 @@ const Ordered = Action.output("Ordered", { total: Schema.Number });
 const charge = Task("Charge", {
   success: Schema.String,
   onError: Task.message,
-  run: (total: number) => Effect.flatMap(Payments, (api) => api.charge(total)),
+  run: (total: number) =>
+    Effect.gen(function* () {
+      const api = yield* Payments;
+      return yield* api.charge(total);
+    }),
 });
 
 const total = (items: ReadonlyArray<{ readonly price: number }>) =>
@@ -59,6 +69,8 @@ const cart = define({
 });
 ```
 
+The payment provider is a service, so each test picks its own `Payments` layer. `render` returns `null`: nothing on this page mounts the feature, and the view is a separate concern.
+
 ## One step with reduce
 
 `reduce` takes an action and a snapshot, and returns a `Next`. `Next.state` and `Next.command` read the two halves, so a test never destructures a tuple.
@@ -79,6 +91,8 @@ test("Added appends and issues no command", () => {
 });
 ```
 
+Pick `reduce` when the claim is about one transition. You supply the snapshot, so any state is one object literal away, and there is no layer to build.
+
 `reduce` runs nothing. A handler that returns a command hands you the command as data, so a test can assert that work was requested without running it.
 
 ```ts continue
@@ -94,11 +108,11 @@ test("Submitted writes Pending and issues a command", () => {
 });
 ```
 
-You supply the snapshot, so there is no initial state to build. `run` builds it from the props.
+A claim about what the command does once it runs is out of reach here. That claim belongs to `run`.
 
 ## A sequence with run
 
-`run` folds the actions you seed, runs every command against the layer, and folds what those commands dispatch. It resolves at quiescence.
+`run` builds the initial state from the props, folds the actions you seed, runs every command against the layer, and folds what those commands dispatch. It resolves once nothing is queued and nothing is in flight.
 
 ```ts continue
 const paid = Layer.succeed(Payments)({
@@ -120,13 +134,43 @@ test("a paid cart resolves the task and announces the order", async () => {
 });
 ```
 
-The three results answer three questions:
+Pick `run` when the claim spans a command and its result. The three results answer three questions:
 
 - `state`: what the fold accumulated.
 - `emitted`: what the commands dispatched back in. Seeded actions are absent.
 - `outputs`: what left through the outbound channel. Outputs are collected and never folded.
 
-A command that never completes never reaches quiescence, so `run` never resolves. Give a long-lived source a finite stream, as in [subscribe to a stream](/docs/how-to/subscribe-to-a-stream).
+After each seeded action is reduced and its command started, `run` yields once, so that command's fiber reaches its first suspension before the next action is reduced. Seeded actions therefore behave like dispatches separated by an event-loop turn, and a race between two of them is testable.
+
+```ts continue
+const slow = Layer.succeed(Payments)({
+  charge: (amount) => Effect.delay(Effect.succeed(`receipt-${amount}`), "10 millis"),
+});
+
+test("a second Submitted supersedes the charge in flight", async () => {
+  const { emitted, outputs } = await Effect.runPromise(
+    cart.run(
+      [
+        Added.make({ id: "a", price: 10 }),
+        Submitted.make({}),
+        Added.make({ id: "b", price: 5 }),
+        Submitted.make({}),
+      ],
+      { props: {}, hooks: {}, layer: slow },
+    ),
+  );
+
+  expect(emitted).toEqual([{ _tag: "ChargeResolved", value: "receipt-15" }]);
+  expect(outputs).toEqual([{ _tag: "Ordered", total: 15 }]);
+});
+```
+
+The first charge is asleep in `Effect.delay` when the second `Submitted` folds. `Task` runs in `"latest"` mode by default, so `Task.start` restarts the group and interrupts that fiber. An interrupted task dispatches nothing, which is why `emitted` holds one `ChargeResolved`.
+
+Two claims stay out of `run`'s reach:
+
+- A command that never completes keeps `run` from resolving. Give a long-lived source a finite stream, or seed `Unmounted` so its handler cancels the group, as in [subscribe to a stream](/docs/how-to/subscribe-to-a-stream).
+- A command that dies is discarded. `run` resolves with the state it already had and an empty `emitted`, so a test of "given a failing command, this feature recovers" passes without checking anything. Route failures through `Task`'s `onError`, which turns them into a `Rejected` action, and test a raw defect with a mounted component and the recorder. [Commands as data](/docs/explanation/commands-as-data) has the reasoning.
 
 ## Supply a test layer
 
@@ -172,7 +216,7 @@ test("the recorder starts empty", () => {
 });
 ```
 
-Events come from a mounted component. `feature.reduce` and `feature.run` report nothing to devtools, so mount `<Cart onOrdered={() => {}} />` with your React test renderer before reading the stream. The event shapes are in the [devtools reference](/docs/reference/devtools).
+Pick the recorder when the claim is about what a mount reported: the order of transitions, the commands issued, a defect a command raised. Events come from a mounted component. `feature.reduce` and `feature.run` report nothing to devtools, so mount `<Cart onOrdered={() => {}} />` with your React test renderer before reading the stream. The event shapes are in the [devtools reference](/docs/reference/devtools).
 
 ```ts continue
 test("transitions are filterable by tag", () => {

@@ -47,7 +47,21 @@ const App = () => {
 
 createRoot(document.getElementById("root")!).render(<App />);
 
-// A finite stream reaches quiescence, so `run` resolves. Open the console.
+// `run` sweeps nothing, so a source that never completes keeps it open. The
+// `Unmounted` handler's `cancel` is what ends this one. Open the console.
+const endless = Layer.succeed(PresenceApi)({ events: () => Stream.never });
+
+const stopped = await Effect.runPromise(
+  presence.run([{ _tag: "Mounted" }, { _tag: "Unmounted" }], {
+    props: { roomId: "general" },
+    hooks: {},
+    layer: endless,
+  }),
+);
+console.log(stopped.emitted);
+// => []
+
+// A finite stream completes on its own, so `run` resolves with no `Unmounted`.
 const twoEvents = Layer.succeed(PresenceApi)({
   events: () =>
     Stream.fromArray([

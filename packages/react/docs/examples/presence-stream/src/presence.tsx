@@ -14,9 +14,10 @@ const subscribe = (roomId: string) =>
   Command.keyed(
     "presence",
     Command.effect<typeof Changed.Type, PresenceApi>((dispatch) =>
-      Effect.flatMap(PresenceApi, (api) =>
-        Stream.runForEach(api.events(roomId), (event) => dispatch(Changed.make(event))),
-      ),
+      Effect.gen(function* () {
+        const api = yield* PresenceApi;
+        yield* Stream.runForEach(api.events(roomId), (event) => dispatch(Changed.make(event)));
+      }),
     ),
   );
 

@@ -15,7 +15,11 @@ const Ordered = Action.output("Ordered", { total: Schema.Number });
 const charge = Task("Charge", {
   success: Schema.String,
   onError: Task.message,
-  run: (total: number) => Effect.flatMap(Payments, (api) => api.charge(total)),
+  run: (total: number) =>
+    Effect.gen(function* () {
+      const api = yield* Payments;
+      return yield* api.charge(total);
+    }),
 });
 
 const total = (items: ReadonlyArray<{ readonly price: number }>) =>

@@ -6,56 +6,25 @@ order: 6
 
 # Use with AI agents
 
-Every page of this site ships inside the published package, as plain markdown, at `node_modules/@wych/react/docs`. Nothing discovers that path on its own. Point at it from your `AGENTS.md` or `CLAUDE.md`.
+A coding agent writes a feature from what it can read: your code and its training data. For a library it has not seen, it guesses at the API. Every page of this site ships inside the published package, as plain markdown, at `node_modules/@wych/react/docs`. Nothing discovers that path on its own. Point at it from your `AGENTS.md` or `CLAUDE.md`.
 
 ```md
 ## @wych/react
 
-This project uses `@wych/react`, a TEA-style feature runtime for React built
-on Effect. The docs are local, as markdown:
+This project uses `@wych/react`, a feature runtime for React built on
+Effect: pure reducers, commands as data, headless tests. The docs are local,
+as markdown:
 
     node_modules/@wych/react/docs
 
 Read `index.md` first. Then `reference/` for the API you are changing,
 `how-to/` for a recipe, `explanation/` for why the model works this way.
 Do not invent APIs: every export is listed under `reference/`.
+Prove async logic with `feature.run` in a vitest file; see
+`how-to/test-a-feature-without-react.md`.
 ```
 
-## Why the model suits an agent
-
-A `define({ props, state, action, output })` block is a feature's whole
-contract on one screen: what comes in, what it holds, what it can do, what it
-tells its parent. An agent reads that one object literal instead of
-reconstructing a `useEffect` graph or hunting for state hidden in closures.
-
-```tsx
-import { Action, define } from "@wych/react";
-import { Schema } from "effect";
-
-const Typed = Action("Typed", { text: Schema.String }); // internal: reaches the reducer
-const Submitted = Action.output("Submitted", { text: Schema.String }); // outbound: leaves via onSubmitted
-
-const SearchBox = define({
-  props: Schema.Struct({ placeholder: Schema.String }), // what the parent passes in
-  state: Schema.Struct({ text: Schema.String }), // what the feature holds
-  action: Action.of([Typed]), // what it can do
-  output: Action.of([Submitted]), // what it tells its parent
-});
-```
-
-Wrong is a type error, not a runtime surprise. Schemas type `props` and
-`state`; the reducer owes one handler per tag in the action vocabulary's
-`cases` (see [`reference/actions.md`](/docs/reference/actions), `cases`);
-every declared output becomes a required `on<Tag>` prop at each JSX call site
-(see [`reference/runtime.md`](/docs/reference/runtime)); and `Command` is
-typed against the reducer's own action and output, not annotated by hand (the
-contextual typing rule, [`reference/commands.md`](/docs/reference/commands)).
-An agent that gets one of these wrong finds out at `tsc`, before running
-anything.
-
-It can also check its own work. `feature.run` folds actions to quiescence in
-Node against a test `Layer`, so an agent verifies async logic without a
-browser (see [`how-to/test-a-feature-without-react.md`](/docs/how-to/test-a-feature-without-react)).
+The last rule is the one that pays. `feature.run` folds actions against a test `Layer` in Node, so the agent's proof runs in your CI. The home page at [wych.build](https://wych.build) says why the model suits an agent, under "Written by agents, checked by the compiler".
 
 ## Check what is on disk
 
@@ -72,7 +41,7 @@ The tarball ships `dist` and `docs`. The version on disk matches the version you
 
 ## Read them over HTTP
 
-Two routes serve the same content over HTTP.
+Two routes serve the same content over HTTP, for an agent that runs outside the repo.
 
 ```sh
 # One line per page, with links. Follows the llms.txt convention.

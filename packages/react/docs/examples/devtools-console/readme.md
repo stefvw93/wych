@@ -9,15 +9,15 @@ alternative sinks to swap in: `verbose`, `quiet`, `onlyCounter`, and `bridge`.
 
 ## Problem
 
-Debugging a feature's transitions by adding `console.log` calls inside the
-reducer means editing production code, and removing every call again before
-shipping. There is also no built-in way to inspect a component's mounts,
-prop changes, or emitted commands.
+A feature moved to a state you did not expect. In a `useReducer` app the way
+to see the action and the state on both sides is a `console.log` inside the
+reducer: production code edited for one debugging session, and edited again
+to take it out. Mounts, prop changes and the commands a handler returned are
+not visible at all that way.
 
 ## Solution
 
-Devtools are a service installed through the root layer, not a runtime
-option:
+Devtools are a service installed through the root layer:
 
 ```ts fragment
 const devtools = import.meta.env.DEV ? consoleDevtoolsLayer() : Layer.empty;

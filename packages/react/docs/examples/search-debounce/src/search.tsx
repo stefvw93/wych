@@ -18,10 +18,12 @@ export const searchFeature = define({
       Command.restart(
         "query",
         Command.effect((dispatch) =>
-          Effect.sleep("300 millis").pipe(
-            Effect.andThen(Effect.flatMap(SearchApi, (api) => api.hits(query))),
-            Effect.flatMap((hits) => dispatch(Loaded.make({ hits }))),
-          ),
+          Effect.gen(function* () {
+            yield* Effect.sleep("300 millis");
+            const api = yield* SearchApi;
+            const hits = yield* api.hits(query);
+            yield* dispatch(Loaded.make({ hits }));
+          }),
         ),
       ),
     ],

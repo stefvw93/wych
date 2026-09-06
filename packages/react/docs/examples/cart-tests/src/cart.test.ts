@@ -49,6 +49,29 @@ test("a paid cart resolves the task and announces the order", async () => {
   expect(outputs).toEqual([{ _tag: "Ordered", total: 10 }]);
 });
 
+// `run` yields once after each seeded action, so the first charge is asleep
+// in `Effect.delay` when the second `Submitted` restarts the task.
+const slow = Layer.succeed(Payments)({
+  charge: (amount) => Effect.delay(Effect.succeed(`receipt-${amount}`), "10 millis"),
+});
+
+test("a second Submitted supersedes the charge in flight", async () => {
+  const { emitted, outputs } = await Effect.runPromise(
+    cart.run(
+      [
+        Added.make({ id: "a", price: 10 }),
+        Submitted.make({}),
+        Added.make({ id: "b", price: 5 }),
+        Submitted.make({}),
+      ],
+      { props: {}, hooks: {}, layer: slow },
+    ),
+  );
+
+  expect(emitted).toEqual([{ _tag: "ChargeResolved", value: "receipt-15" }]);
+  expect(outputs).toEqual([{ _tag: "Ordered", total: 15 }]);
+});
+
 // --- supply a test layer ----------------------------------------------------
 
 const declined = Layer.succeed(Payments)({

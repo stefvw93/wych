@@ -7,7 +7,7 @@ example: search-debounce
 
 # Debounce and take latest
 
-A search box issues work on every keystroke. Wait 300 ms before the request, and interrupt whatever the previous keystroke started.
+A search box in React fires a request on every keystroke. The `useEffect` that fetches grows a timer, the timer grows a cleanup, and a ref drops the response from the keystroke before. Wych puts both rules in the reducer: wait 300 ms before the request, and interrupt whatever the previous keystroke started.
 
 ## Debounce inside the command
 
@@ -39,10 +39,12 @@ const searchFeature = define({
       Command.restart(
         "query",
         Command.effect((dispatch) =>
-          Effect.sleep("300 millis").pipe(
-            Effect.andThen(Effect.flatMap(SearchApi, (api) => api.hits(query))),
-            Effect.flatMap((hits) => dispatch(Loaded.make({ hits }))),
-          ),
+          Effect.gen(function* () {
+            yield* Effect.sleep("300 millis");
+            const api = yield* SearchApi;
+            const hits = yield* api.hits(query);
+            yield* dispatch(Loaded.make({ hits }));
+          }),
         ),
       ),
     ],
@@ -123,7 +125,20 @@ const taskSearch = define({
 
 `Task.start` writes `Pending` into `results` on the same fold that issues the command, so the view never paints a gap. `search.cancel` interrupts the group and dispatches nothing, so the `Cleared` handler writes `Task.idle` itself.
 
-The debounce moves into `run` when you want both: `run: (query) => Effect.sleep("300 millis").pipe(Effect.andThen(...))`. Full signatures are in the [tasks reference](/docs/reference/tasks).
+### Where the delay lives
+
+`mode` is a property of the operation. It is declared once, and every handler that calls `search.run` gets it. A delay in `run` follows the same rule: every trigger of the search waits.
+
+```ts fragment
+run: (query: string) =>
+  Effect.gen(function* () {
+    yield* Effect.sleep("300 millis");
+    const api = yield* SearchApi;
+    return yield* api.hits(query);
+  }),
+```
+
+Put the delay in `run` when the wait belongs to the search itself, wherever it is triggered from. Keep the delay in the handler's leaf, as `searchFeature` does, when the wait belongs to one action. A `Typed` handler waits for the typing to pause; a `Submitted` handler for the Enter key issues the request at once. A task declared without `run` takes the effect at the call site, so each handler can pass its own delay. The [tasks reference](/docs/reference/tasks) shows that form and the full signatures.
 
 ## Compare "latest" and "every"
 
@@ -161,6 +176,10 @@ const everySearch = define({
   render: () => null,
 });
 ```
+
+`mode: "every"` is for work where every run must finish: a save per row, an upload per file, or a result the `Resolved` handler appends to state. Each run dispatches its own `SearchEveryResolved`, in the order the requests settle.
+
+A single `TaskValue` field holds whichever result arrived last. If an older request settles after a newer one, the field shows the older hits. That is why a search box keeps the default `"latest"`. Both modes book under `Task/SearchEvery`, so `searchEvery.cancel` interrupts every run in flight.
 
 `feature.run` folds a sequence of actions and reports what the commands emitted. Two keystrokes, one slow API, and the two modes diverge.
 

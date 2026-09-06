@@ -1,17 +1,15 @@
 ---
 title: Install devtools
-description: Merge a devtools sink into the root layer, tune the console logger, or forward events elsewhere.
+description: Merge a console sink into the root layer, tune what it prints, or forward events to a sink of your own.
 order: 5
 example: devtools-console
 ---
 
 # Install devtools
 
-Devtools are a service. Merge a sink into the root layer and every feature under that runtime reports its transitions, commands, outputs and defects.
+A feature moved to a state you did not expect. In a `useReducer` app the way to see the action and the state on both sides is a `console.log` inside the reducer, which you then remove before shipping. Devtools are a service. Merge a sink into the root layer and every feature under that runtime reports its transitions, commands, outputs and defects, with no change to any reducer.
 
 ## Install the console sink
-
-`consoleDevtoolsLayer()` is `Layer<never>`, so both branches of a `DEV` ternary have one type and the root layer's own requirements do not move.
 
 ```tsx
 import { consoleDevtoolsLayer, createRuntime } from "@wych/react";
@@ -25,6 +23,8 @@ const devtools = import.meta.env.DEV ? consoleDevtoolsLayer() : Layer.empty;
 
 const { component } = createRuntime(Layer.mergeAll(app, devtools));
 ```
+
+`consoleDevtoolsLayer()` is `Layer<never>`, so both branches of the `DEV` ternary have one type and the root layer's own requirements do not move. The one decision here is the condition: `import.meta.env.DEV` keeps the sink out of the production bundle's layer, and a flag of your own works the same way.
 
 Name your components. The name is in every event, and `component(feature)` with no name reports `"WychFeature"`.
 
@@ -68,11 +68,13 @@ const verbose = devtoolsLayer(
 - `collapsed` (default `true`): use `groupCollapsed` for each event group.
 - `predicate` (default `skipUnchangedAmbient`): keep the event?
 - `diff` (default `false`): print a shallow own-keys diff of the two states.
-- `timestamps` (default `true`): wall-clock stamp and elapsed since the last event.
-- `colors`: CSS for the `%c` directives, each field optional.
-- `console` (default `globalThis.console`): the four methods the logger calls.
+- `timestamps` (default `true`): a wall-clock stamp, and the time since that mount's last event.
+- `colors`: CSS for the `%c` directives (`previous`, `action`, `next`, `command`, `output`, `defect`), each optional.
+- `console` (default `globalThis.console`): the five methods the logger calls: `group`, `groupCollapsed`, `groupEnd`, `log`, `error`.
 
 `consoleDevtoolsLayer(options)` is the same pair in one call.
+
+`diff` is shallow on purpose. A change inside a nested object shows as one changed key, and the two full states are printed either way. Turn it on when a state has many keys and you want to see which one moved.
 
 ## Swap the predicate
 
@@ -83,12 +85,14 @@ import { skipUnchanged } from "@wych/react";
 
 const quiet = devtoolsLayer(createConsoleDevtools({ predicate: skipUnchanged }));
 
-const onlyCart = devtoolsLayer(
-  createConsoleDevtools({ predicate: (event) => event.name === "Cart" }),
+const onlyCounter = devtoolsLayer(
+  createConsoleDevtools({ predicate: (event) => event.name === "Counter" }),
 );
 ```
 
-`skipUnchanged` also eats two events worth seeing: `Unmounted`, whose returned state is discarded by design, and a dispatch that deliberately no-ops.
+Pick `skipUnchanged` when a reducer no-ops on most actions and the log is all noise. It also eats two events worth seeing: `Unmounted`, whose returned state is discarded by design, and a dispatch that deliberately no-ops. Keep the default when one of those is what you opened the console for.
+
+A predicate that throws does not take the sink down: the event is kept and the throw is reported through `console.error`.
 
 ## Forward events somewhere else
 
@@ -102,11 +106,11 @@ const bridge = devtoolsLayer({
     window.postMessage({ source: "wych", event }, "*");
   },
 });
-
-const { component: instrumented } = createRuntime(Layer.mergeAll(app, bridge));
 ```
 
-`onEvent` is called at the emission point, so a slow sink slows the fold. Buffer inside your sink if the transport is expensive.
+`bridge` goes into `Layer.mergeAll` in place of `devtools`, and the features do not change.
+
+`onEvent` is called at the emission point, so a slow sink slows the fold. Buffer inside your sink if the transport is expensive. A sink that throws is disabled for the rest of that mount and never called again from it, so catch inside `onEvent` if the transport can fail.
 
 ## What one event looks like
 

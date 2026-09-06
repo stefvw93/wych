@@ -9,10 +9,13 @@ the counter's fold and command count once hydration completes.
 
 ## Problem
 
-Server-rendered React output must match the client's first paint exactly, or
-hydration mismatches occur. A framework that runs effects or async fetches
-during server rendering risks producing markup the client cannot reconcile,
-and invalid props reaching the server should fail loudly, not render garbage.
+A component whose state lives in `useEffect` paints empty on the server and
+fills in after hydration, so the server render is wasted. State the effect
+derives from `window` or `Date.now()` makes the client's first render
+disagree with the HTML, and React reports "Hydration failed because the
+server rendered text didn't match the client" and regenerates the tree. A
+bad prop that reaches the server render has to fail there, in the request,
+where the log is.
 
 ## Solution
 

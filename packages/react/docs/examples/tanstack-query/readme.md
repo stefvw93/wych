@@ -9,14 +9,14 @@ and the runtime's Layer.
 
 ## Problem
 
-A feature's state lives on its mount, but a fetched value often needs a
-cache: dedup across mounts, refetch-on-focus, staleness. Wych does not build
-that. Hand-rolling it inside a `Command.effect` means throwing away
-TanStack Query's cache to reinvent a worse one.
+The app already has TanStack Query for its server cache: dedup across
+mounts, refetch-on-focus, staleness. A new feature has to read that cache and
+write back through it. A fetch inside a `Command.effect` would build a second,
+worse cache next to the one the app already trusts.
 
 The save side has a mirror problem: after a feature saves through its own
 service, a `useQuery` elsewhere in the tree, reading the same data, has no way
-to know it's stale.
+to know it is stale.
 
 ## Solution
 
@@ -42,7 +42,7 @@ const { component } = createRuntime(Layer.succeed(Queries)(queryClient));
 
 `note-editor.tsx`'s `useUnsafeHooks` calls `useQuery` in render position and
 returns two primitives, `text` and `status`, never the query object itself.
-Hooks are compared per key with `Object.is`; returning the result object
+Hooks are compared per key with strict equality (`===`); returning the result object
 would raise `HookChanged` on every render, since TanStack Query returns a new
 object each time.
 
