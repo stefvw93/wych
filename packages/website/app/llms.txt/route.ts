@@ -15,7 +15,7 @@ export async function GET() {
   const body = [
     "# @wych/react",
     "",
-    `> ${index?.description ?? "A TEA-style feature runtime for React, built on Effect."}`,
+    `> ${index?.description ?? "A feature runtime for React. Pure reducers, Effect commands, tests that need no renderer."}`,
     "",
     "These docs also ship inside the npm package, at `node_modules/@wych/react/docs`.",
     "",
