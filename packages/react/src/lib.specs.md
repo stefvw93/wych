@@ -410,7 +410,7 @@ contextual inference are therefore written as direct calls plus
 
 ### Browser coverage (`/e2e`)
 
-`src/lib/tea.browser.test.tsx` covers the React binding: that a feature paints,
+`src/lib.browser.test.tsx` covers the React binding: that a feature paints,
 that a real click repaints, that an output crosses into a parent's `on<Tag>`
 prop. Nothing in the leaf change alters any of that, and it still passes
 unchanged — which is the point of running it.
@@ -435,26 +435,20 @@ today. Four tests, each pinning one criterion the node suite cannot:
 - Two mounts of one component each carry a fragment; each fragment reads its
   own mount's state and a dispatch in one leaves the other untouched.
 
-`src/examples/search.browser.test.tsx` is the leaf change's own browser test, and
-search is the right demo for it: the debounce is only meaningful against real
-typing, where each keystroke is a separate event and the interrupt lands between
-them. It asserts through a counting fake service that four keystrokes inside one
-window send exactly one query — the behaviour the old `"restart"` policy
-provided, then a hand-written `Cancel` ahead of a `keyed` leaf, and now
-`Command.restart` — sugar for exactly that pair. The suite must pass unchanged:
-the sugar changes spelling, not behaviour.
+The debounce story — four keystrokes inside one window send exactly one
+query, first through the old `"restart"` policy, then a hand-written `Cancel`
+ahead of a `keyed` leaf, now `Command.restart` as sugar for that pair — is
+covered by the `restart` cases in `lib.test.ts` and by the docs snippets for
+`how-to/debounce-and-take-latest.md`, which `docs:check --run` executes in a
+real browser. The runnable version is `docs/examples/search-debounce`.
 
-- e2e: not applicable for `src/examples/cart.tsx` and `src/examples/presence.tsx`
-  — **neither can be mounted in any environment.** Both declare their ambient
-  hooks (`useCatalog`, `useOnlineStatus`, `usePageVisible`) with `declare
-function` and no implementation, deliberately: they are illustrations of the
-  boundary, not runnable demos, and `main.tsx` never mounts them. The `declare`s
-  are module-private, so a test cannot inject past them either. Their commands
-  are covered headlessly instead — `cart.tsx` ships
-  `checkoutAnnouncesTheOrder`, a `feature.run` assertion, as its own
-  documented test story. Making them mountable means writing demo behaviour that
-  does not exist today, which is a change to what the examples _say_, not a
-  migration of how they say it.
+- e2e: the in-repo examples that used to live under `src/examples`
+  (`cart.tsx`, `presence.tsx`, `app.tsx`) are gone. Their successors are the
+  self-contained projects under `docs/examples/*` (`cart-tests`,
+  `presence-stream`, `devtools-console`, …), each type-checked by
+  `vpr -r test:types`; `cart-tests` runs its `feature.run` assertions under
+  `vpr -r test`. The docs pages that build them are executed by
+  `docs:check --run`.
 
 ## Technical Requirements
 
@@ -630,14 +624,15 @@ whole-teardown bound rather than a per-hop one.
 
 ### 3. `RuntimeOptions.onEvent` is accepted and ignored — **closed**
 
-`createRuntime` never emitted a `DevtoolsEvent`, but `src/examples/app.tsx` and
-`cart.tsx` presented it as working, so a reader copying the example installed an
-observer that never fired and got no signal.
+`createRuntime` never emitted a `DevtoolsEvent`, but the in-repo examples of
+the time (`src/examples/app.tsx` and `cart.tsx`, since removed) presented it as
+working, so a reader copying the example installed an observer that never
+fired and got no signal.
 
 Closed by the third option — wire it, as a feature. `RuntimeOptions` and the
 second parameter are **removed outright**; observation is a `Context.Reference`
 sink installed through the root layer, resolved synchronously because the fold
-is synchronous. `src/lib/devtools.ts`, spec'd in `src/lib/devtools.specs.md`.
+is synchronous. `src/devtools.ts`, spec'd in `src/devtools.specs.md`.
 The number is kept rather than the item deleted, so the cross-references to
 items #2, #4 and #5 elsewhere in this file keep meaning what they say.
 

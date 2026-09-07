@@ -4,8 +4,9 @@
 
 `lib.ts` declares `DevtoolsEvent` and `RuntimeOptions.onEvent`, and
 `createRuntime` **ignores its options argument entirely**. Nothing in the
-library ever emits. Worse, `src/examples/app.tsx` and `src/examples/cart.tsx`
-both pass an `onEvent` with a `console.debug` inside, so a reader copying the
+library ever emits. Worse, the in-repo examples of the time
+(`src/examples/app.tsx` and `src/examples/cart.tsx`, since removed) both pass
+an `onEvent` with a `console.debug` inside, so a reader copying the
 example installs an observer that never fires and gets no signal that it is
 dead. This is `lib.specs.md` **Open work #3** and one of its Known limitations;
 this feature closes both.
@@ -33,7 +34,7 @@ cached context, and the sink shape is a plain synchronous function.
    examples are updated in the same pass.
 3. All four event categories ship: **transitions, commands issued, outputs
    emitted, defects**.
-4. New module `src/lib/devtools.ts`, re-exported from `src/lib/index.ts`.
+4. New module `src/devtools.ts`, re-exported from `src/index.ts`.
 5. The default console predicate is **`skipUnchangedAmbient`**, not the blunter
    `skipUnchanged` (see Expected Behavior).
 6. `DevtoolsCommand.dropped` ships, and so does `createRecorder`.
@@ -231,10 +232,10 @@ untouched — no existing `component(bp)` call changes.
 
 - [x] `DevtoolsEvent` and `RuntimeOptions` are gone from `lib.ts`; `lib.ts` imports the event type from `./devtools`.
 - [x] `createRuntime` takes one parameter. `__type-tests__/core.tst.ts` already passes one argument at every call site, so this is source-compatible.
-- [x] `src/examples/app.tsx` and `src/examples/cart.tsx` no longer pass a dead `onEvent`.
+- [x] The in-repo examples of the time (`src/examples/app.tsx` and `cart.tsx`, since removed) no longer passed a dead `onEvent`; today's `docs/examples/devtools-console` installs the sink through the root layer.
 - [x] `lib.specs.md` Open work #3 is closed and its `onEvent` known-limitation is replaced.
 
-### Type-level (TSTyche) — `src/lib/__type-tests__/devtools.tst.ts`
+### Type-level (TSTyche) — `src/__type-tests__/devtools.tst.ts`
 
 - [x] `DevtoolsEvent` narrows by `_tag` to each of the four members.
 - [x] `devtoolsLayer(sink)` and `consoleDevtoolsLayer()` are both `Layer.Layer<never>`.
@@ -309,8 +310,8 @@ existing 2934-line `lib.test.ts` goes red — which `/unit-test` forbids. So:
   **type-visible** `lib.ts` edits (delete `DevtoolsEvent`/`RuntimeOptions`, drop
   the `createRuntime` parameter, widen `deps.emit`, add the optional store
   args). **No import from `devtools.ts` in `lib.ts` yet.**
-- Removing `RuntimeOptions` forces `src/examples/app.tsx` and `cart.tsx` to be
-  updated **in that same step** or `vp check` fails.
+- Removing `RuntimeOptions` forced the then-current `src/examples/app.tsx`
+  and `cart.tsx` to be updated **in that same step** or `vp check` failed.
 - `/implement` adds the imports and every emission call site at the moment
   `devtools.ts` gets its bodies.
 
@@ -333,7 +334,7 @@ Elapsed uses `performance.now()` in a `Map` keyed by `${name}#${instance}`.
 
 - `effect@4.0.0-beta.102` — `Context.Reference`, `Context.getReferenceUnsafe`, `Layer.succeed`, `ManagedRuntime.cachedContext`.
 - `src/lib.ts` — type-only import of `Command` and `Group`; the runtime edge goes the other way (`lib → devtools`).
-- `src/lib/index.ts` — `export * from "./devtools"`.
+- `src/index.ts` — `export * from "./devtools"`.
 
 ## Expected Behavior & Edge Cases
 
@@ -370,7 +371,7 @@ fold is a spec decision, not a patch. Recorded here rather than left ambiguous.
 
 ## Browser coverage (`/e2e`)
 
-Applicable, `src/lib/devtools.browser.test.tsx` — eight tests. The node suite
+Applicable, `src/devtools.browser.test.tsx` — eight tests. The node suite
 drives `createFeatureStore` directly and covers every emission site; what it
 cannot cover is the thing devtools is installed _into_, because `component`
 owns when `start` runs and the effect scheduling is React's:
@@ -396,8 +397,7 @@ command emits the output. So the `Output` carries `cause: { _tag: "Command",
 action: "Landed" }` and not the click two hops back. Each event states the one
 edge the runtime can see; walking them is the UI's job.
 
-- e2e: **not applicable for the examples.** `lib.specs.md` already records that
-  `cart.tsx` and `presence.tsx` cannot be mounted in any environment
-  (declare-only ambient hooks, `declare const AppLayer`); `app.tsx` is in the
-  same position for the same reason. Their change here is a two-line deletion,
-  compile-checked by `vp check`.
+- e2e: **not applicable for the examples.** The in-repo examples this pass
+  touched are gone (see `lib.specs.md`, Browser coverage); the devtools
+  example is now `docs/examples/devtools-console`, and the page that builds it
+  is executed by `docs:check --run`.

@@ -232,9 +232,9 @@ vocabulary, `Success`/`Failure` are Effect's) and a schema question for the
 
 Not applicable. The module has no React surface — every behaviour above is
 observable through `Feature.run` headlessly, and `task.test.ts` drives it that
-way. The live consumer is `apps/frontend/src/features/seed`, whose four
-operations (`WallhavenSearch`, `PexelsCurated`, `CreateOmarchyColors`,
-`ApplyOmarchyColors`) exercise bound `run`, point-free `Task.start`, `schema`,
-the constructors, `match` and `isPending`. The partial reads (`value`, `error`,
-`getOrElse`) and the other guards have no frontend caller yet — they are
+way. The consumer this was written against (`apps/frontend/src/features/seed`)
+lived in a repo this package has since left. The in-repo consumers are the
+docs — `reference/tasks.md` and the how-to pages that use `Task`, executed by
+`docs:check --run` — and the examples under `docs/examples/*` built from them.
+The partial reads (`value`, `error`, `getOrElse`) and the other guards are
 covered by the node and type tests alone.
