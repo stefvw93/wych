@@ -880,6 +880,103 @@ describe("Feature.run", () => {
   });
 });
 
+describe("Feature.run — defects", () => {
+  const Boom = Action("Boom", {});
+  const Feature = define({ props: RunProps, state: RunState, action: Action.of([Boom]) });
+  const dying = Command.effect(() => Effect.die(new Error("kaboom")));
+
+  it("folds a dying command through the `Error` handler and records it", async () => {
+    // Was discarded outright: `run` omitted the interpreter's `onExit`, so a
+    // feature whose command died came back with the state it already had and
+    // no trace — "given a failing command, this feature recovers" passed
+    // without checking anything.
+    const feature = Feature.create({
+      initialState: () => ({ count: 0 }),
+      reducer: {
+        Boom: (_action, { state }) => [state, dying],
+        Error: (_action, { state }) => ({ count: state.count + 100 }),
+      },
+      render: () => null,
+    });
+
+    const { state, emitted, defects } = await Effect.runPromise(
+      feature.run([{ _tag: "Boom" }], { props: {}, hooks: {}, layer: Layer.empty }),
+    );
+
+    expect(state).toEqual({ count: 100 });
+    // The `Error` action is the runtime's own, not something a command emitted.
+    expect(emitted).toEqual([]);
+    expect(defects).toEqual([{ from: "Boom", error: expect.any(Error), handled: true }]);
+    expect((defects[0]!.error as Error).message).toBe("kaboom");
+  });
+
+  it("records a dying command without failing when no `Error` handler exists", async () => {
+    const feature = Feature.create({
+      initialState: () => ({ count: 0 }),
+      reducer: { Boom: (_action, { state }) => [state, dying] },
+      render: () => null,
+    });
+
+    const { state, defects } = await Effect.runPromise(
+      feature.run([{ _tag: "Boom" }], { props: {}, hooks: {}, layer: Layer.empty }),
+    );
+
+    expect(state).toEqual({ count: 0 });
+    expect(defects).toEqual([{ from: "Boom", error: expect.any(Error), handled: false }]);
+  });
+
+  it("does not fold `Error` for a death inside the `Error` handler's own command", async () => {
+    // The store's rule: `Error` never re-enters `Error`. Otherwise a handler
+    // whose recovery command fails would loop forever and `run` never resolve.
+    const feature = Feature.create({
+      initialState: () => ({ count: 0 }),
+      reducer: {
+        Boom: (_action, { state }) => [state, dying],
+        Error: (_action, { state }) => [{ count: state.count + 1 }, dying],
+      },
+      render: () => null,
+    });
+
+    const { state, defects } = await Effect.runPromise(
+      feature.run([{ _tag: "Boom" }], { props: {}, hooks: {}, layer: Layer.empty }),
+    );
+
+    expect(state).toEqual({ count: 1 });
+    expect(defects.map((d) => [d.from, d.handled])).toEqual([
+      ["Boom", true],
+      ["Error", false],
+    ]);
+  });
+
+  it("does not mistake an interrupted command for a defect", async () => {
+    const feature = Feature.create({
+      initialState: () => ({ count: 0 }),
+      reducer: {
+        Boom: (_action, { state }) => [
+          { count: state.count + 1 },
+          Command.restart(
+            "slow",
+            Command.effect(() => Effect.sleep("50 millis")),
+          ),
+        ],
+        Error: (_action, { state }) => ({ count: state.count + 100 }),
+      },
+      render: () => null,
+    });
+
+    const { state, defects } = await Effect.runPromise(
+      feature.run([{ _tag: "Boom" }, { _tag: "Boom" }], {
+        props: {},
+        hooks: {},
+        layer: Layer.empty,
+      }),
+    );
+
+    expect(state).toEqual({ count: 2 });
+    expect(defects).toEqual([]);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // React binding — the headless half
 //

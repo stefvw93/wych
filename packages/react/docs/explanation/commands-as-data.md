@@ -253,21 +253,24 @@ console.log(failed.state.status);
 ```
 
 What remains is a defect: a bug in the effect, or a feature layer that fails
-to build. Under a mount both reach the `Error` lifecycle handler. With no
-handler the defect is rethrown during render, which is the only place a
-React error boundary can catch it. Interruption is how commands normally
-end, so a cancelled or unmounted fiber is never reported as a defect.
+to build. Under a mount and under `run`, both reach the `Error` lifecycle
+handler. A mount with no handler rethrows the defect during render, which is
+the only place a React error boundary can catch it; `run` has no render to
+rethrow into, so it stays total and records the defect instead. Interruption
+is how commands normally end, so a cancelled or unmounted fiber is never
+reported as a defect.
 
-## Two limits
+## One limit
 
 `run` counts in-flight work to decide when it is finished, so a command that
 never completes keeps it from resolving. Test a subscription by cancelling
 it, as `stopped` does above, or fold it through `reduce` and read the
 command.
 
-`run` also discards a command that dies. The store routes a dying command to
-the `Error` handler; `run` does not, so a test of "given a failing command,
-this feature recovers" passes without checking anything. That is an open
-item in the runtime, and until it closes the honest test for a defect is a
-mounted component with a recorder. Constructor signatures are in
+A command that dies is a defect, not this limit: `run` routes it to the
+`Error` handler on the store's own rule and records it in `defects`, so
+"given a failing command, this feature recovers" is a `state` assertion and
+"this command failed" is a `defects` assertion. See
+[test a feature without React](/docs/how-to/test-a-feature-without-react)
+for the recipe. Constructor signatures are in
 [commands](/docs/reference/commands).

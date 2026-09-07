@@ -876,6 +876,12 @@ export interface Feature<in Props, State, Action, Output, H extends AnyHooks = {
   /**
    * Fold a sequence, run each command against `layer`, feed what it emits back
    * in, and report what left.
+   *
+   * A command that dies is recorded in `defects` and, when the feature has an
+   * `Error` handler, folded through it exactly as the store would — so "given
+   * a failing command, this feature recovers" is a `state` assertion, and
+   * "this command failed" is a `defects` assertion. `run` stays total either
+   * way: a defect never fails the returned Effect.
    */
   readonly run: (
     actions: Iterable<Action | LifecycleAction<Props, H>>,
@@ -888,7 +894,26 @@ export interface Feature<in Props, State, Action, Output, H extends AnyHooks = {
     readonly state: State;
     readonly emitted: ReadonlyArray<Action>;
     readonly outputs: ReadonlyArray<Output>;
+    readonly defects: ReadonlyArray<RunDefect>;
   }>;
+}
+
+/**
+ * One command death observed by `Feature.run`, in the order it was seen.
+ * Interruption (`Cancel`, `restart`) is how commands normally end and is not
+ * a defect.
+ */
+export interface RunDefect {
+  /** The tag of the action whose command died. */
+  readonly from: string;
+  /** The squashed cause: the thrown value, or what `Effect.die` was given. */
+  readonly error: unknown;
+  /**
+   * Whether the feature's `Error` handler folded it. `false` when there is no
+   * handler, or when the dying command was the `Error` handler's own — the
+   * same rule the store applies before it throws to the boundary.
+   */
+  readonly handled: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -1031,14 +1056,16 @@ export const define: <
           discharge(
             Effect.gen(function* () {
               type Entry = {
-                readonly msg: { _tag: string };
-                readonly origin: "seed" | "command" | "settled";
+                readonly msg: { readonly _tag: string; readonly [key: string]: unknown };
+                readonly origin: "seed" | "command" | "settled" | "runtime";
               };
 
               const queue = yield* Queue.unbounded<Entry>();
               const book = fiberBook();
               const emitted: { _tag: string }[] = [];
               const outputs: { _tag: string }[] = [];
+              const defects: RunDefect[] = [];
+              const handlesError = handlerFor(parts.reducer, "Error") !== undefined;
               const snapshot = { props: options.props, hooks: options.hooks };
               let state = parts.initialState(options.props);
 
@@ -1059,6 +1086,25 @@ export const define: <
                   msg: { _tag: "__settled__" },
                   origin: "settled",
                 }).pipe(Effect.asVoid),
+                // The store's rule, minus the sink and the boundary: record
+                // the death, and fold `Error` when the feature handles it.
+                // The fold is queued before `settled` and while the fiber is
+                // still booked, so the drain loop cannot reach quiescence
+                // between the death and its `Error` fold. `"runtime"` origin:
+                // the action is the runtime's own, so it is not `emitted`.
+                onExit: (exit, ctx) => {
+                  if (!Exit.isFailure(exit) || Cause.hasInterruptsOnly(exit.cause)) {
+                    return Effect.void;
+                  }
+                  const error = Cause.squash(exit.cause);
+                  const handled = ctx.tag !== "Error" && handlesError;
+                  defects.push({ from: ctx.tag, error, handled });
+                  if (!handled) return Effect.void;
+                  return Queue.offer(queue, {
+                    msg: { _tag: "Error", error, cause: Cause.die(error) },
+                    origin: "runtime",
+                  }).pipe(Effect.asVoid);
+                },
               });
 
               // Drain until quiescent: nothing queued and nothing running. The
@@ -1085,7 +1131,7 @@ export const define: <
                 yield* Effect.yieldNow;
               }
 
-              return { state, emitted, outputs };
+              return { state, emitted, outputs, defects };
             }).pipe(Effect.provide(options.layer)),
           ),
       };

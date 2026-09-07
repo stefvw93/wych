@@ -315,6 +315,8 @@ landed with every box checked again.
 - [x] Services a command requests (`R`) are satisfied from `options.layer`.
 - [x] `run` resolves only at quiescence: nothing queued, nothing in flight — including fibers that settle without emitting.
 - [x] **`run` does not terminate on a never-completing command**, and its test asserts that deliberately. See Known limitations.
+- [x] A command that dies is recorded in `defects` — `{ from, error, handled }`, in the order observed — and `run` stays total: a defect never fails the returned Effect. Interruption is not a defect.
+- [x] When the feature has an `Error` handler, a dying command folds `Error` through it before `run` resolves, on the store's rule: a death inside the `Error` handler's own command is recorded with `handled: false` and not re-folded. The `Error` action is the runtime's own and is not `emitted`.
 
 ### React binding (`createRuntime` → `component`)
 
@@ -567,12 +569,12 @@ function` and no implementation, deliberately: they are illustrations of the
 
 ## Open work
 
-Five items. Item 3 now has its decision and its own spec; the other four each
-still need a decision before they need code. Items 4 and 5 were
-found by the review of the command-leaf pass and **rejected for that pass**: both
-are byte-identical at the commit before it, so neither is a regression the leaf
-change introduced, and both need a decision about intended behaviour rather than
-a patch.
+Five items. Items 3 and 4 are closed and kept for their cross-references; the
+other three each still need a decision before they need code. Items 4 and 5
+were found by the review of the command-leaf pass and **rejected for that
+pass**: both are byte-identical at the commit before it, so neither is a
+regression the leaf change introduced, and both needed a decision about
+intended behaviour rather than a patch.
 
 ### 1. Re-arming a mount that died, from `component`
 
@@ -627,9 +629,9 @@ Two things it did **not** close, both recorded under Known limitations in
 fiber _died_ emits no `Unmounted` — which is item #1's to fix, since the same
 `release()` is why the store cannot re-arm from `component` either.
 
-### 4. `Feature.run` discards a dying command
+### 4. `Feature.run` discards a dying command — **closed**
 
-`commandInterpreter`'s `onExit` is optional, and `run` is the caller that omits
+`commandInterpreter`'s `onExit` is optional, and `run` was the caller that omitted
 it. `forkLeaf` forks and returns, so nothing awaits the fiber: a feature whose
 command dies comes back from `run` with the state it already had, an empty
 `emitted`, and no failure. Confirmed by running it —
@@ -649,7 +651,17 @@ identical either way from the outside. Fail the returned Effect, and a test can
 assert on it, but `run` stops being total and every existing caller's type
 changes. Collect into a `defects` array beside `emitted` and `outputs`, and it
 stays total and stays assertable, at the cost of a third output nobody asked for
-yet. The third is the current favourite; none is a patch.
+yet.
+
+Closed by the third option, plus the first: `run` passes `onExit`, collects
+every non-interrupt death into `defects` (`RunDefect`: `from`, the squashed
+`error`, `handled`), and — when the feature has an `Error` handler and the
+dying command was not that handler's own — queues the `Error` fold before the
+fiber's `settled` entry, so the drain loop cannot reach quiescence between the
+death and the recovery. "This feature recovers" is now a `state` assertion and
+"this command failed" a `defects` assertion; the return type gains one field
+and every existing caller still compiles. What `run` still does not do is
+report to devtools — that is `devtools.specs.md`'s open item, unchanged.
 
 ### 5. Buffered work can precede `Mounted`
 

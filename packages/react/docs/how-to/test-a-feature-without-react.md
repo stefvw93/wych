@@ -167,10 +167,42 @@ test("a second Submitted supersedes the charge in flight", async () => {
 
 The first charge is asleep in `Effect.delay` when the second `Submitted` folds. `Task` runs in `"latest"` mode by default, so `Task.start` restarts the group and interrupts that fiber. An interrupted task dispatches nothing, which is why `emitted` holds one `ChargeResolved`.
 
-Two claims stay out of `run`'s reach:
+One claim stays out of `run`'s reach: a command that never completes keeps `run` from resolving. Give a long-lived source a finite stream, or seed `Unmounted` so its handler cancels the group, as in [subscribe to a stream](/docs/how-to/subscribe-to-a-stream).
 
-- A command that never completes keeps `run` from resolving. Give a long-lived source a finite stream, or seed `Unmounted` so its handler cancels the group, as in [subscribe to a stream](/docs/how-to/subscribe-to-a-stream).
-- A command that dies is discarded. `run` resolves with the state it already had and an empty `emitted`, so a test of "given a failing command, this feature recovers" passes without checking anything. Route failures through `Task`'s `onError`, which turns them into a `Rejected` action, and test a raw defect with a mounted component and the recorder. [Commands as data](/docs/explanation/commands-as-data) has the reasoning.
+## Assert on a dying command
+
+A command can die: a bug in the effect, or a layer that fails to build. `run` records every death in `defects`, in order, as `{ from, error, handled }`. `from` is the tag of the action whose command died, and `handled` says whether the feature's `Error` handler folded it.
+
+```ts continue
+const dying = Command.effect(() => Effect.die(new Error("card reader offline")));
+
+const Scanned = Action("Scanned", {});
+const scanner = define({
+  props: Schema.Struct({}),
+  state: Schema.Struct({ status: Schema.String }),
+  action: Action.of([Scanned]),
+}).create({
+  initialState: () => ({ status: "idle" }),
+  reducer: {
+    Scanned: (_action, { state }) => [state, dying],
+    Error: (_action, { state }) => ({ ...state, status: "failed" }),
+  },
+  render: () => null,
+});
+
+test("a dying command recovers through Error and is recorded as a defect", async () => {
+  const { state, defects } = await Effect.runPromise(
+    scanner.run([Scanned.make({})], { props: {}, hooks: {}, layer: Layer.empty }),
+  );
+
+  expect(state).toEqual({ status: "failed" });
+  expect(defects).toEqual([{ from: "Scanned", error: expect.any(Error), handled: true }]);
+});
+```
+
+"Given a failing command, this feature recovers" is a `state` assertion; "this command failed" is a `defects` assertion. `run` stays total either way, so the test never needs `await expect(...).rejects`.
+
+Route a typed failure through `Task`'s `onError` instead, which turns it into a `Rejected` action: that never reaches `defects`, because it never leaves the reducer as a death. Reserve `defects` for the bugs `onError` was not written to catch.
 
 ## Supply a test layer
 

@@ -116,10 +116,9 @@ console.log(result.state.results);
 
 Alpha. The API is small and stable enough to build on; the version number
 says what it says. Effect v4 is a release candidate, so the peer range is
-`^4.0.0-rc`. Two known limits, both documented in
+`^4.0.0-rc`. One known limit, documented in
 [commands as data](https://wych.build/docs/explanation/commands-as-data):
-`run` never resolves while a never-completing command is in flight, and `run`
-discards a command that dies instead of routing it to the `Error` handler.
+`run` never resolves while a never-completing command is in flight.
 
 ## Docs
 

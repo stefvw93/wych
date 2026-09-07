@@ -126,10 +126,9 @@ behaviour the mounted component has.
 
 ## Status
 
-Alpha, on Effect v4 release candidates. Two limits worth knowing before you
-start: `run` never resolves while a never-completing command is in flight,
-and `run` discards a command that dies. Both are explained in
-[commands as data](/docs/explanation/commands-as-data).
+Alpha, on Effect v4 release candidates. One limit worth knowing before you
+start: `run` never resolves while a never-completing command is in flight.
+Explained in [commands as data](/docs/explanation/commands-as-data).
 
 ## Install
 

@@ -295,7 +295,12 @@ console.log(Next.state(unhandled));
 feature.run(
   actions: Iterable<Action | LifecycleAction<Props, H>>,
   options: { readonly props: Props; readonly hooks: H; readonly layer: Layer.Layer<R> },
-): Effect.Effect<{ state: State; emitted: ReadonlyArray<Action>; outputs: ReadonlyArray<Output> }>
+): Effect.Effect<{
+  state: State;
+  emitted: ReadonlyArray<Action>;
+  outputs: ReadonlyArray<Output>;
+  defects: ReadonlyArray<RunDefect>;
+}>
 ```
 
 `run` folds a sequence of actions, interprets each command against `layer`,
@@ -316,15 +321,18 @@ console.log(result.emitted);
 // => []
 console.log(result.outputs);
 // => [{ _tag: "NoteSaved", noteId: "n_1", text: "hi" }]
+console.log(result.defects);
+// => []
 ```
 
-The three result fields differ:
+The four result fields differ:
 
 - `state`: the state after the last fold.
 - `emitted`: actions a command emitted. Seeded actions are folded and are
   absent here.
 - `outputs`: messages whose tag is a declared output. An output is never
   folded.
+- `defects`: every command that died, in the order observed.
 
 `run` resolves when nothing is queued and nothing is in flight. A fiber that
 settles without emitting counts as in flight until it settles. A command that
@@ -333,6 +341,55 @@ never completes keeps `run` from resolving, so `run` never resolves for
 
 For a feature with no services pass `layer: Layer.empty` and `hooks: {}`. See
 [Test a feature without React](/docs/how-to/test-a-feature-without-react).
+
+### `RunDefect`
+
+```ts fragment
+interface RunDefect {
+  readonly from: string;
+  readonly error: unknown;
+  readonly handled: boolean;
+}
+```
+
+One command death observed by `run`, in the order it was seen. `from` is the
+tag of the action whose command died. `error` is the squashed cause: the
+thrown value, or what `Effect.die` was given. `handled` is whether the
+feature's `Error` handler folded it: `false` with no handler, or when the
+dying command was the `Error` handler's own. Interruption (`Command.cancel`,
+`Command.restart`) is how a command normally ends and is never a defect.
+
+```ts continue
+const Boomed = Action("Boomed", {});
+const dying = Command.effect(() => Effect.die(new Error("kaboom")));
+
+const flaky = define({
+  props: Schema.Struct({}),
+  state: Schema.Struct({ crashed: Schema.Boolean }),
+  action: Action.of([Boomed]),
+}).create({
+  initialState: () => ({ crashed: false }),
+  reducer: {
+    Boomed: (_action, { state }) => [state, dying],
+    Error: (_action, { state }) => ({ ...state, crashed: true }),
+  },
+  render: () => null,
+});
+
+const withError = await Effect.runPromise(
+  flaky.run([Boomed.make({})], { props: {}, hooks: {}, layer: Layer.empty }),
+);
+
+console.log(withError.state);
+// => { crashed: true }
+console.log(withError.defects);
+// => [{ from: "Boomed", error: Error: kaboom, handled: true }]
+```
+
+The `Error` handler folds before `run` resolves, on the same rule the store
+uses: `state` shows the recovery, and `defects` shows the death that caused
+it. `handled` is `true` because the feature declared an `Error` handler and
+the death was not inside that handler's own command.
 
 ## `Children`
 

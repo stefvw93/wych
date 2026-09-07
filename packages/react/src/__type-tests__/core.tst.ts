@@ -18,6 +18,7 @@ import {
   Next,
   type LazyCommand,
   type NoPropCollision,
+  type RunDefect,
   type OutputProps,
   type RenderSnapshot,
   type ServicesOf,
@@ -956,6 +957,24 @@ test("a feature's string-keyed surface stays exactly `reduce` and `run`", () => 
   // Asserted on the string keys specifically: a slot added as a plain property
   // would show up here, which is the regression this pins.
   expect<Extract<keyof typeof cart, string>>().type.toBe<"reduce" | "run">();
+});
+
+test("`run` reports `defects` beside `emitted` and `outputs`, and stays total", () => {
+  const result = cart.run([{ _tag: "Added" }], {
+    props: { customerId: "c_1" },
+    hooks: {},
+    layer: Layer.empty,
+  });
+
+  // Total: a dying command lands in `defects`, never in the error channel.
+  expect(result).type.toBe<
+    Effect.Effect<{
+      readonly state: { readonly count: number };
+      readonly emitted: ReadonlyArray<{ readonly _tag: "Added" }>;
+      readonly outputs: ReadonlyArray<{ readonly _tag: "OrderPlaced"; readonly orderId: string }>;
+      readonly defects: ReadonlyArray<RunDefect>;
+    }>
+  >();
 });
 
 // ---------------------------------------------------------------------------

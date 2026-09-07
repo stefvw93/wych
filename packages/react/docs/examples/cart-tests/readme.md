@@ -36,9 +36,10 @@ test("Added appends and issues no command", () => {
 ```
 
 `cart.run` folds a sequence of actions through a real layer, resolving once
-every command settles, and returns `state`, `emitted` actions, and
-`outputs`. Swapping `Payments` between a `paid` layer and a `declined` layer
-tests the resolved and rejected paths without touching the feature.
+every command settles, and returns `state`, `emitted` actions, `outputs`,
+and `defects` (a dying command, recorded even after its feature recovers).
+Swapping `Payments` between a `paid` layer and a `declined` layer tests the
+resolved and rejected paths without touching the feature.
 
 ## How It Works
 
