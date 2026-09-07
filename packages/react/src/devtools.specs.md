@@ -62,7 +62,8 @@ export type DevtoolsCause =
   | { readonly _tag: "Dispatch" }
   | { readonly _tag: "Command"; readonly action: string; readonly key?: string }
   | { readonly _tag: "Lifecycle" }
-  | { readonly _tag: "Defect"; readonly from: string };
+  | { readonly _tag: "Defect"; readonly from: string }
+  | { readonly _tag: "Subscription"; readonly key: string }; // subscriptions.specs.md
 
 export interface DevtoolsEnvelope {
   readonly name: string; // from `component(bp, { name })`; "WychFeature" when unnamed
@@ -92,7 +93,24 @@ export interface DevtoolsDefect extends DevtoolsEnvelope {
   readonly defect: DefectSummary;
   readonly handled: boolean; // an Error handler took it, vs React's boundary
 }
-export type DevtoolsEvent = DevtoolsTransition | DevtoolsCommand | DevtoolsOutput | DevtoolsDefect;
+// Added by subscriptions.specs.md. `Started`/`Undeclared`/`Unmounted` are
+// emitted synchronously at the diff; `Completed`/`Died` from the fiber's watcher.
+export interface DevtoolsSubscriptionStarted extends DevtoolsEnvelope {
+  readonly _tag: "SubscriptionStarted";
+  readonly key: string;
+}
+export interface DevtoolsSubscriptionStopped extends DevtoolsEnvelope {
+  readonly _tag: "SubscriptionStopped";
+  readonly key: string;
+  readonly reason: "Undeclared" | "Completed" | "Died" | "Unmounted";
+}
+export type DevtoolsEvent =
+  | DevtoolsTransition
+  | DevtoolsCommand
+  | DevtoolsOutput
+  | DevtoolsDefect
+  | DevtoolsSubscriptionStarted
+  | DevtoolsSubscriptionStopped;
 
 // --- encodable summaries ---
 export type CommandSummary =
@@ -133,6 +151,7 @@ export interface DevtoolsColors {
   readonly command?: string;
   readonly output?: string;
   readonly defect?: string;
+  readonly subscription?: string; // subscriptions.specs.md
 }
 export interface ConsoleDevtoolsOptions {
   readonly collapsed?: boolean; // default true
@@ -171,9 +190,9 @@ untouched — no existing `component(bp)` call changes.
 
 ### The event and its summaries
 
-- [x] `DevtoolsEvent` is a four-member tagged union (`Transition`, `Command`, `Output`, `Defect`) and narrows by `_tag`.
+- [x] `DevtoolsEvent` is a four-member tagged union (`Transition`, `Command`, `Output`, `Defect`) and narrows by `_tag`. _Becomes six with the two subscription members below._
 - [x] `cause` is **required** on every member; every emission site knows its cause.
-- [x] `DevtoolsCause` has exactly four variants: `Dispatch`, `Command` (with `action` and optional `key`), `Lifecycle`, `Defect` (with `from`). The old `cause: { _tag: "Output" }` variant is **deleted, not made optional** — see Expected Behavior.
+- [x] `DevtoolsCause` has exactly four variants: `Dispatch`, `Command` (with `action` and optional `key`), `Lifecycle`, `Defect` (with `from`). The old `cause: { _tag: "Output" }` variant is **deleted, not made optional** — see Expected Behavior. _Becomes five with `Subscription` below._
 - [x] `summarizeCommand` erases the effect (`{ _tag: "Effect" }` carries no function), preserves `Keyed` nesting and `Batch` order, and passes `Cancel`'s target through.
 - [x] `summarizeCommand(Command.restart(name, cmd))` is the desugared batch summary — `Batch [ Cancel name, Keyed name … ]` — identical to summarizing the hand-written pair. The sugar adds no `CommandSummary` member.
 - [x] `summarizeDefect` produces `{ message }` plus optional `name`/`stack` from an `Error`, from a string, from a symbol, and from `undefined`, and never throws.
@@ -205,6 +224,24 @@ untouched — no existing `component(bp)` call changes.
 - [x] `summarizeDefect` is total **including for an `Error` subclass with a throwing `message` or `stack` getter**. `instanceof Error` is not a guarantee that reading a property is safe, and both funnels call the summarizer before routing — see Expected Behavior.
 - [x] `instance` is stable across `stop(); start()` on one store, and differs between two stores of the same `name`.
 - [x] `name` comes from `component(bp, { name })` and falls back to `"WychFeature"`.
+
+### Subscriptions (`subscriptions.specs.md`)
+
+Unchecked until that spec's implementation lands. The node harness is
+`createFeatureStore` plus `createRecorder`, as for every site above.
+
+- [ ] `DevtoolsEvent` gains `SubscriptionStarted { key }` and `SubscriptionStopped { key, reason }`, both narrowing by `_tag`, both carrying the envelope.
+- [ ] `DevtoolsCause` gains `{ _tag: "Subscription", key }`: every `Transition` for an action a subscription dispatched, every `Output` it emitted, and the `Defect` for its death carry it. Its `from` on the `Defect` is the key.
+- [ ] `SubscriptionStarted` and `SubscriptionStopped { reason: "Undeclared" }` are emitted **synchronously at the diff**, before the mount fiber forks or interrupts anything, with the cause of the fold that produced the declared set — `Lifecycle` from `start()` and `sync`, `Dispatch`/`Command`/`Defect`/`Subscription` otherwise.
+- [ ] `stop()` emits `SubscriptionStopped { reason: "Unmounted" }` per running key **before** the `Unmounted` transition, so the console logger's elapsed eviction on that transition is not undone by a later subscription event — the same trap the teardown `Command` event hit.
+- [ ] `SubscriptionStopped { reason: "Completed" }` is emitted when the effect returns, and `{ reason: "Died" }` after the `Defect` for a death, both with `cause: { _tag: "Subscription", key }`.
+- [ ] A key kept across a diff emits nothing.
+- [ ] The two events and the fifth cause are JSON round-trippable; a `Subscription` value never reaches an event (there is no `SubscriptionSummary` because there is nothing but a function to summarise — the key is the summary).
+- [ ] The console logger prints `⇉ <key> started` and `⇉ <key> stopped (<reason, lower-cased>)` as one line each, `%c`-coloured with a new `subscription` colour, through the injected console; neither touches the elapsed map.
+- [ ] `skipUnchangedAmbient` and `skipUnchanged` pass both events through unchanged.
+- [ ] `createRecorder` records them in emission order like any other event.
+- [ ] With no sink installed the diff allocates no event — by construction, same shape as every site.
+- [ ] Type-level: both members narrow by `_tag`, `DevtoolsColors` gains `subscription?`, and the fifth cause satisfies the local `Json` type.
 
 ### Robustness and cost
 
@@ -326,7 +363,12 @@ existing 2934-line `lib.test.ts` goes red — which `/unit-test` forbids. So:
 ▸ cart#1  ⟶ Bump  batch(cancel(query), keyed(query, effect))    %c #9C27B0
 ▸ cart#1  ⇢ OrderPlaced                                     %c #009688
 ▸ cart#1  ✖ CheckoutRequested: network down (unhandled)     %c #F20404
+▸ room#2  ⇉ presence:general started                        %c #FF9800
+▸ room#2  ⇉ presence:general stopped (undeclared)           %c #FF9800
 ```
+
+The last two lines are specified by `subscriptions.specs.md` and not yet
+printed.
 
 Elapsed uses `performance.now()` in a `Map` keyed by `${name}#${instance}`.
 
@@ -358,6 +400,8 @@ Elapsed uses `performance.now()` in a `Map` keyed by `${name}#${instance}`.
 
 - **The blind window before the root context exists.** With a synchronous root layer, only folds _before_ `start()` are lost — a descendant's `useLayoutEffect` dispatch (the buffered path) and the first render's `sync`. With an **asynchronous** root layer, everything until the layer resolves is lost. Warming the context with a `runFork(Effect.void)` inside `createRuntime` would close the sync window, but it moves _when the root layer builds_, which is observable through any layer's acquire side effects — not a debugging tool's call to make.
 - **The console logger prints a stack string, not clickable frames.** The price of an encodable `DefectSummary`.
+
+- **A subscription's lifetime shows as two events, never as a fiber.** `SubscriptionStarted` is emitted when the key is declared, before the fiber exists; a fiber that never got scheduled before its key was undeclared still shows a `Started` and a `Stopped`. The events describe the declared set, which is what the feature controls. Specified in `subscriptions.specs.md`.
 
 ## Open work
 

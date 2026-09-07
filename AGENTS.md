@@ -37,6 +37,10 @@ release. Add a tool name to select part of the graph. For example, run
   `vpr test` fans out with `-r`. Plain `vp check` is the built-in and skips the
   tstyche type tests.
 - To work on one package: `vp -C packages/react <command>`.
+- `vp check` is cwd-scoped: from the root it covers every package and the
+  package-level config files (`vite.config.ts`); from inside a package only
+  that package's own files. A pass in one place is not a pass in the other;
+  validate from the root before calling a change green.
 - `vp run test:types` runs tstyche over `src/**/*.tst.ts`; task defined in
   `packages/react/vite.config.ts` under `run.tasks`, cached.
 - TypeScript: shared `compilerOptions` in root `tsconfig.base.json`; root
