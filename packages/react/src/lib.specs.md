@@ -336,7 +336,8 @@ landed with every box checked again.
 - [x] `store.sync` folds during render, so a props-driven change paints on the render that carried the props. Moving the fold into an effect is **deferred** — see Deferred decisions.
 - [x] `store.sync` is idempotent: called twice with equivalent props and hooks it raises nothing the second time, so a discarded render costs nothing.
 - [x] `renderToString` renders a feature server-side: `initialState(props)` paints, `validateProps` still throws on bad props, `useFeature` fragments resolve their provider, and **nothing folds** — no `Mounted`, no commands, no store arming, because the arming lives in an effect and effects do not run on the server. `useSyncExternalStore` is passed its server snapshot, without which React throws under `renderToString`.
-- [x] A defect from a command, a handler that throws, or a feature `layer` that fails to build reaches the `Error` handler, with `cause` always `Cause.die(error)`; with none declared it is rethrown during render, the only place a boundary can catch it.
+- [x] A defect from a command, a handler that throws, or a feature `layer` that fails to build reaches the `Error` handler, with `cause` always `Cause.die(error)` and `from` naming the origin — the tag of the action whose command died or whose handler threw, `"Mounted"` for a layer that failed to build, `"Unmounted"` for a teardown that threw or overran; with none declared it is rethrown during render, the only place a boundary can catch it.
+- [x] **A mount whose fiber died re-arms on demand.** After a layer failure the store is `dead`, not stopped: the next command a **dispatch** produces calls `start` again, which rebuilds the layer and hands the command to the new mount. Work caused by a lifecycle action or by a command never re-arms, so `Mounted`'s own command on the rebuilt mount cannot re-enter `start`, and a permanently failing layer rebuilds exactly once per dispatch — each failure reaching the `Error` handler again — rather than spinning. `stop` on a dead mount still folds and reports `Unmounted` (its command reported `dropped: true`, there being no scope to run it in) and clears `dead`, so a dispatch after unmount drops as it always did.
 - [x] Services come from the root `ManagedRuntime`; `component(bp, { layer })` satisfies the residue `Exclude<R, RootR>`.
 - [x] `createRuntime` takes **one** parameter. `RuntimeOptions` and its unwired `onEvent` are removed; observation is a service installed through the root layer instead. Spec'd in `devtools.specs.md`.
 - [x] The store reports transitions, commands issued, outputs emitted and defects to a synchronously-resolved `Devtools` sink, and allocates nothing at those sites when no sink is installed. Emission points are listed in `devtools.specs.md`.
@@ -569,14 +570,14 @@ function` and no implementation, deliberately: they are illustrations of the
 
 ## Open work
 
-Five items. Items 3 and 4 are closed and kept for their cross-references; the
-other three each still need a decision before they need code. Items 4 and 5
+Five items. Items 1, 3 and 4 are closed and kept for their cross-references;
+the other two each still need a decision before they need code. Items 4 and 5
 were found by the review of the command-leaf pass and **rejected for that
 pass**: both are byte-identical at the commit before it, so neither is a
 regression the leaf change introduced, and both needed a decision about
 intended behaviour rather than a patch.
 
-### 1. Re-arming a mount that died, from `component`
+### 1. Re-arming a mount that died, from `component` — **closed**
 
 A feature layer that fails to build kills the mount fiber. The store clears its
 mount and arm flag, so a following `start()` _can_ build fresh cells — but
@@ -593,6 +594,23 @@ inside a fold, so the guard has to be shown to hold).
 Must not break: the silent drop after a _normal_ unmount. Done when a browser
 test drives a failing layer, clicks Retry, and the retried command runs — plus a
 test that a permanently failing layer does not spin.
+
+Closed by the demand-driven candidate, narrowed to **dispatch-caused** work.
+`catchCause` marks the store `dead` beside `release()`; `offer` re-arms only
+when `dead`, not `active`, and the command's fold was caused by a `Dispatch`.
+That one narrowing settles both worries at once: `Mounted`'s own command on
+the rebuilt mount is lifecycle-caused and cannot re-enter `start`, and a
+permanently failing layer rebuilds once per user action, never on its own.
+The re-entrancy guard holds because `start`'s `fold({ _tag: "Mounted" })`
+lands in `pending` and folds after the action that re-armed, with the
+retried command already on the new queue. A layer that fails synchronously
+has released the mount again by the time `start` returns; `offer` reads
+`mount` afresh and drops. `stop` on a dead mount now folds and reports
+`Unmounted` and clears `dead`, which also closes the devtools known
+limitation about a dead mount's missing terminal event. The `Error` action
+gained `from` in the same pass, so a handler can back off on `"Mounted"` and
+carry on for one bad command. Browser test: `lib.browser.test.tsx`, "a Retry
+from the `Error` handler rebuilds a failed layer".
 
 ### 2. What unmount owes work already in flight
 

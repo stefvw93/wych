@@ -351,7 +351,12 @@ describe("Feature.reduce", () => {
     const unhandled: ReadonlyArray<Parameters<typeof counter.reduce>[0]> = [
       { _tag: "PropsChanged", previous: snapshot.props },
       { _tag: "HookChanged", previous: {} },
-      { _tag: "Error", error: new Error("boom"), cause: Cause.die(new Error("boom")) },
+      {
+        _tag: "Error",
+        error: new Error("boom"),
+        cause: Cause.die(new Error("boom")),
+        from: "Incremented",
+      },
       { _tag: "Unmounted" },
     ];
 
@@ -2175,52 +2180,158 @@ describe("Command.batch grouping (review iteration 3)", () => {
   });
 });
 
-describe("createFeatureStore — a dead mount does not swallow work", () => {
+describe("createFeatureStore — a dead mount re-arms on demand", () => {
   const equivalence = {
     props: Schema.toEquivalence(Schema.Struct({})),
     hooks: Equivalence.Record(Equivalence.strictEqual<unknown>()),
   } as any;
 
-  it("does not buffer commands without bound after the mount fiber dies", async () => {
-    const failing = Layer.effectDiscard(Effect.fail("nope"));
+  /**
+   * A layer that fails `failures` times, then builds. `attempts` counts
+   * builds; `ran` records commands that reached a live layer.
+   */
+  const setup = (failures: number, reducerExtra: Record<string, any> = {}) => {
+    const attempts = { count: 0 };
     const ran: Array<string> = [];
+    const defects: Array<unknown> = [];
+    const layer = Layer.effectDiscard(
+      Effect.suspend(() => {
+        attempts.count += 1;
+        return attempts.count <= failures ? Effect.fail("nope") : Effect.void;
+      }),
+    );
 
     const feature = define({
       props: Schema.Struct({}),
-      state: Schema.Struct({ count: Schema.Number }),
+      state: Schema.Struct({ count: Schema.Number, errors: Schema.Number }),
       action: Action.of([Action("Go", {})]),
     }).create({
-      initialState: () => ({ count: 0 }),
+      initialState: () => ({ count: 0, errors: 0 }),
       reducer: {
         Go: (_a: unknown, snap: { readonly state: { readonly count: number } }) => [
-          { count: snap.state.count + 1 },
+          { ...snap.state, count: snap.state.count + 1 },
           Command.effect(() => Effect.sync(() => void ran.push("go"))),
         ],
+        Error: (_a: unknown, snap: { readonly state: { readonly errors: number } }) => ({
+          ...snap.state,
+          errors: snap.state.errors + 1,
+        }),
+        ...reducerExtra,
       } as any,
       render: () => null,
     });
 
-    const s = createFeatureStore({
+    const store = createFeatureStore({
       feature: feature as any,
       props: {},
       equivalence,
       runtime: testRuntime(),
-      layer: failing as unknown as Layer.Layer<any, any, any>,
+      layer: layer as unknown as Layer.Layer<any, any, any>,
       emit: () => {},
-      defect: () => {},
+      defect: (error) => void defects.push(error),
     });
 
-    s.start();
-    await Effect.runPromise(Effect.sleep("30 millis"));
+    return { store, attempts, ran, defects };
+  };
 
-    // The fiber is dead. State still folds; the command is dropped rather than
-    // piling into a buffer nothing drains.
-    s.dispatch({ _tag: "Go" } as never);
-    s.dispatch({ _tag: "Go" } as never);
-    await Effect.runPromise(Effect.sleep("20 millis"));
+  const settle = () => Effect.runPromise(Effect.sleep("30 millis"));
 
-    expect(s.getSnapshot()).toEqual({ count: 2 });
+  it("a dispatch after the mount died rebuilds the layer and runs its command", async () => {
+    // Open work #1. Was: `release()` cleared the mount, `everStarted` was
+    // already true, so `offer` dropped every command for the life of the
+    // component — including the Retry the `Error` handler had just rendered.
+    const { store, attempts, ran } = setup(1);
+
+    store.start();
+    await settle();
+    expect(store.getSnapshot()).toEqual({ count: 0, errors: 1 });
+    expect(attempts.count).toBe(1);
+
+    store.dispatch({ _tag: "Go" } as never);
+    await settle();
+
+    expect(attempts.count).toBe(2);
+    expect(ran).toEqual(["go"]);
+    expect(store.getSnapshot()).toEqual({ count: 1, errors: 1 });
+
+    // Alive for good: the next dispatch goes to the rebuilt mount, no rebuild.
+    store.dispatch({ _tag: "Go" } as never);
+    await settle();
+    expect(attempts.count).toBe(2);
+    expect(ran).toEqual(["go", "go"]);
+  });
+
+  it("a permanently failing layer rebuilds once per dispatch and never spins", async () => {
+    const { store, attempts, ran, defects } = setup(Number.POSITIVE_INFINITY);
+
+    store.start();
+    await settle();
+    expect(attempts.count).toBe(1);
+
+    store.dispatch({ _tag: "Go" } as never);
+    store.dispatch({ _tag: "Go" } as never);
+    await settle();
+
+    // One rebuild per demand, each reported to the handler; state still folds;
+    // the commands are dropped, not buffered.
+    expect(attempts.count).toBe(3);
     expect(ran).toEqual([]);
+    expect(defects).toEqual([]);
+    expect(store.getSnapshot()).toEqual({ count: 2, errors: 3 });
+  });
+
+  it("`Mounted`'s own command on re-arm does not re-arm again", async () => {
+    // The re-entrancy hazard: `start` folds `Mounted`, whose command hits
+    // `offer` while the freshly re-armed mount may already be dead again.
+    // Lifecycle-caused work never re-arms, so the chain ends there.
+    const { store, attempts } = setup(Number.POSITIVE_INFINITY, {
+      Mounted: (_a: unknown, snap: { readonly state: unknown }) => [
+        snap.state,
+        Command.effect(() => Effect.void),
+      ],
+    });
+
+    store.start();
+    await settle();
+    store.dispatch({ _tag: "Go" } as never);
+    await settle();
+
+    expect(attempts.count).toBe(2);
+  });
+
+  it("`stop` on a dead mount folds `Unmounted` and a later dispatch drops", async () => {
+    const log: Array<string> = [];
+    const { store, attempts, ran } = setup(1, {
+      Unmounted: (_a: unknown, snap: { readonly state: unknown }) => {
+        log.push("unmounted");
+        return snap.state;
+      },
+    });
+
+    store.start();
+    await settle();
+    store.stop();
+    expect(log).toEqual(["unmounted"]);
+
+    // The component is gone: no re-arm, however good the layer would be now.
+    store.dispatch({ _tag: "Go" } as never);
+    await settle();
+    expect(attempts.count).toBe(1);
+    expect(ran).toEqual([]);
+  });
+
+  it("the `Error` handler can tell a layer failure from a dying command by `from`", async () => {
+    const froms: Array<string> = [];
+    const { store } = setup(1, {
+      Error: (payload: { readonly from: string }, snap: { readonly state: unknown }) => {
+        froms.push(payload.from);
+        return snap.state;
+      },
+    });
+
+    store.start();
+    await settle();
+    expect(froms).toEqual(["Mounted"]);
   });
 });
 
@@ -4202,7 +4313,7 @@ describe("createFeatureStore — devtools", () => {
     expect(JSON.parse(JSON.stringify(changed))).toEqual(changed);
   });
 
-  it("reports the runtime's own `Error` action as its tag alone", async () => {
+  it("reports the runtime's own `Error` action as its tag and `from` alone", async () => {
     // The one action in the system the runtime builds rather than the user:
     // `raiseDefect` attaches the live `error` and a `Cause`, and neither
     // survives `JSON.stringify`. Reporting the tag alone is what keeps the
@@ -4224,8 +4335,9 @@ describe("createFeatureStore — devtools", () => {
     await settle();
 
     const errorFold = only(recorder, "Transition").find((event) => event.action._tag === "Error");
-    expect(errorFold!.action).toEqual({ _tag: "Error" });
-    expect(Object.keys(errorFold!.action)).toEqual(["_tag"]);
+    expect(errorFold!.action).toEqual({ _tag: "Error", from: "Bump" });
+    // `error` and `cause` do not encode; the origin tag does.
+    expect(Object.keys(errorFold!.action)).toEqual(["_tag", "from"]);
   });
 
   it("behaves identically with no devtools layer installed", async () => {

@@ -738,6 +738,13 @@ export type LifecycleAction<Props, H extends AnyHooks> =
       readonly _tag: "Error";
       readonly error: unknown;
       readonly cause: Cause.Cause<never>;
+      /**
+       * Where the defect came from: the tag of the action whose command died
+       * or whose handler threw, or `"Mounted"` for a feature layer that failed
+       * to build, or `"Unmounted"` for a teardown that threw or overran. Lets
+       * a handler tell an infrastructure failure from one bad command.
+       */
+      readonly from: string;
     }
   | { readonly _tag: "Unmounted" };
 
@@ -1101,7 +1108,7 @@ export const define: <
                   defects.push({ from: ctx.tag, error, handled });
                   if (!handled) return Effect.void;
                   return Queue.offer(queue, {
-                    msg: { _tag: "Error", error, cause: Cause.die(error) },
+                    msg: { _tag: "Error", error, cause: Cause.die(error), from: ctx.tag },
                     origin: "runtime",
                   }).pipe(Effect.asVoid);
                 },
@@ -1182,14 +1189,14 @@ let instanceCount = 0;
 
 const DISPATCH: DevtoolsCause = Object.freeze({ _tag: "Dispatch" as const });
 const LIFECYCLE: DevtoolsCause = Object.freeze({ _tag: "Lifecycle" as const });
-const ERROR_ACTION = Object.freeze({ _tag: "Error" as const });
 const HOOK_CHANGED_ACTION = Object.freeze({ _tag: "HookChanged" as const });
 
 /**
  * What a devtools sink is allowed to see of an action.
  *
- * `Error` and `HookChanged` are scrubbed to their tag: one holds a live `Error`
- * and a `Cause`, the other a record that routinely holds functions.
+ * `Error` is scrubbed to its tag and `from` (a live `Error` and a `Cause` do
+ * not encode; the origin tag does), `HookChanged` to its tag alone (a record
+ * that routinely holds functions).
  * `PropsChanged` keeps its `previous` props — they are schema values and they
  * encode — except for the ones declared opaque, which are replaced by their
  * placeholder. That is what keeps every event JSON round-trippable once a
@@ -1199,7 +1206,13 @@ const reportableAction = (
   action: { readonly _tag: string },
   opaqueFields: ReadonlyArray<readonly [string, unknown]>,
 ): { readonly _tag: string } => {
-  if (action._tag === "Error") return ERROR_ACTION;
+  if (action._tag === "Error") {
+    const scrubbed: { readonly _tag: string; readonly from?: string } = {
+      _tag: "Error",
+      from: (action as { readonly from?: string }).from,
+    };
+    return scrubbed;
+  }
   if (action._tag === "HookChanged") return HOOK_CHANGED_ACTION;
   if (action._tag !== "PropsChanged" || opaqueFields.length === 0) return action;
 
@@ -1308,6 +1321,12 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
 
   let active = false;
   let everStarted = false;
+  /**
+   * Set when the mount fiber died on its own — a feature layer that failed to
+   * build — as opposed to being stopped. The one state in which new work may
+   * re-arm the store: see `offer`.
+   */
+  let dead = false;
   let state = initialState(args.props);
   let props = args.props;
   let hooks: H | undefined;
@@ -1320,7 +1339,16 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
     hooks: hooks ?? ({} as H),
   });
 
-  const offer = (work: Work, target: Mount | undefined): boolean => {
+  /**
+   * Hand work to a mount. Before the first `start` it is buffered; after a
+   * `stop` it is dropped; after the mount *died* it re-arms — but only for
+   * work a `dispatch` produced. A layer failure folds `Error`, the handler
+   * renders a Retry, and the click is the demand that rebuilds the layer.
+   * Lifecycle- and command-caused work never re-arms: `Mounted`'s own command
+   * would otherwise re-enter `start` from inside the fold `start` queued, and
+   * a permanently failing layer would spin without anyone asking.
+   */
+  const offer = (work: Work, target: Mount | undefined, demand: boolean): boolean => {
     const to = target ?? mount;
     if (to !== undefined) {
       Queue.offerUnsafe(to.queue, work);
@@ -1328,6 +1356,16 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
     }
     if (!everStarted) {
       buffered.push(work);
+      return true;
+    }
+    if (dead && !active && demand) {
+      start();
+      // A layer that fails synchronously has already released the mount
+      // again by the time `start` returns; the work is dropped and the
+      // handler has its second `Error`.
+      const rearmed = mount;
+      if (rearmed === undefined) return false;
+      Queue.offerUnsafe(rearmed.queue, work);
       return true;
     }
     return false;
@@ -1392,7 +1430,7 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
 
     if (command) {
       const ctx = { tag: action._tag };
-      const accepted = offer({ _tag: "Run", command, ctx }, routeTo);
+      const accepted = offer({ _tag: "Run", command, ctx }, routeTo, cause._tag === "Dispatch");
       if (target !== undefined) {
         report({
           _tag: "Command",
@@ -1451,7 +1489,7 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
     }
 
     fold(
-      { _tag: "Error", error, cause: Cause.die(error) } as never,
+      { _tag: "Error", error, cause: Cause.die(error), from } as never,
       { _tag: "Defect", from },
       target,
     );
@@ -1533,11 +1571,33 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
         Effect.sync(() => {
           if (Cause.hasInterruptsOnly(cause)) return;
           release();
+          dead = true;
           raiseDefect(Cause.squash(cause), "Mounted", LIFECYCLE);
         }),
       ),
       Effect.ensuring(Effect.sync(release)),
     );
+  };
+
+  const start = (): void => {
+    if (active) return;
+    active = true;
+    everStarted = true;
+    dead = false;
+
+    // `Queue.unbounded` captures the current fiber's dispatcher, so there is
+    // no synchronous constructor to reach for; `runSync` of a sync effect is
+    // exactly that constructor.
+    const cells: Mount = {
+      queue: Effect.runSync(Queue.unbounded<Work>()),
+      book: fiberBook(),
+    };
+
+    mount = cells;
+
+    for (const work of buffered.splice(0)) Queue.offerUnsafe(cells.queue, work);
+    runtime.runFork(run(cells));
+    fold({ _tag: "Mounted" }, LIFECYCLE);
   };
 
   return {
@@ -1579,32 +1639,19 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
       return state;
     },
 
-    start: () => {
-      if (active) return;
-      active = true;
-      everStarted = true;
-
-      // `Queue.unbounded` captures the current fiber's dispatcher, so there is
-      // no synchronous constructor to reach for; `runSync` of a sync effect is
-      // exactly that constructor.
-      const cells: Mount = {
-        queue: Effect.runSync(Queue.unbounded<Work>()),
-        book: fiberBook(),
-      };
-
-      mount = cells;
-
-      for (const work of buffered.splice(0)) Queue.offerUnsafe(cells.queue, work);
-      runtime.runFork(run(cells));
-      fold({ _tag: "Mounted" }, LIFECYCLE);
-    },
+    start,
 
     stop: () => {
-      if (!active) return;
+      // A dead mount has no fiber to tear down, but the component is going
+      // away all the same: `Unmounted` still folds and is still reported, and
+      // `dead` clears so a later dispatch drops instead of re-arming a
+      // component React has already let go of.
+      const wasDead = dead;
+      dead = false;
+      if (!active && !wasDead) return;
       active = false;
 
       const cells = mount;
-      if (cells === undefined) return;
 
       let teardown: Command<any, any> | undefined;
       let thrown: { readonly error: unknown } | undefined;
@@ -1615,7 +1662,9 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
         thrown = { error };
       }
 
-      Queue.offerUnsafe(cells.queue, { _tag: "Teardown", command: teardown });
+      if (cells !== undefined) {
+        Queue.offerUnsafe(cells.queue, { _tag: "Teardown", command: teardown });
+      }
 
       const target = devtools();
 
@@ -1637,7 +1686,7 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
             cause: LIFECYCLE,
             group: "Unmounted",
             command: summarizeCommand(teardown),
-            dropped: false,
+            dropped: cells === undefined,
           });
         }
       }

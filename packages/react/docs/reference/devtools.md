@@ -232,6 +232,13 @@ Every event carries `name`, `instance` and `cause`. `name` comes from
 is unique per mount on the page. Ids can have gaps: StrictMode calls the store
 initialiser twice and each call takes an id.
 
+A mount whose `layer` fails to build stays dead until a dispatch rebuilds it.
+Unmounting a dead mount still reports an `Unmounted` transition, with its
+teardown `Command` event carrying `dropped: true`, there being no scope left
+to run it in. A dispatch that rebuilds a dead mount reports a second `Mounted`
+transition under the same `instance`, immediately preceded by the `Defect`
+event with `from: "Mounted"` that says the first build died.
+
 An event has no timestamp. The sink is called synchronously at the emission
 point, so the sink can read its own clock.
 
@@ -359,14 +366,20 @@ because an `Error` serialises to `{}`.
 
 ## Redaction
 
-Two actions reach a sink as their tag alone:
+Two actions are scrubbed before a sink sees them:
 
-- `Error`, which holds a live `Error` and a `Cause`.
-- `HookChanged`, which holds a record that routinely holds functions.
+- `Error`, which holds a live `Error` and a `Cause` that do not survive
+  `JSON.stringify`. Only its tag and `from` (a string) reach the sink.
+- `HookChanged`, which holds a record that routinely holds functions. Only
+  its tag reaches the sink.
 
 ```ts continue
-const scrubbed: ReadonlyArray<DevtoolsEvent> = [
-  { ...transition, action: { _tag: "Error" }, cause: { _tag: "Defect", from: "Bumped" } },
+const scrubbed = [
+  {
+    ...transition,
+    action: { _tag: "Error", from: "Bumped" },
+    cause: { _tag: "Defect", from: "Bumped" },
+  },
   { ...transition, action: { _tag: "HookChanged" }, cause: { _tag: "Lifecycle" } },
 ];
 ```

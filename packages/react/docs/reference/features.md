@@ -382,8 +382,10 @@ const withError = await Effect.runPromise(
 
 console.log(withError.state);
 // => { crashed: true }
-console.log(withError.defects);
-// => [{ from: "Boomed", error: Error: kaboom, handled: true }]
+console.log(withError.defects.map(({ from, handled }) => ({ from, handled })));
+// => [{ from: "Boomed", handled: true }]
+console.log(String(withError.defects[0]?.error));
+// => "Error: kaboom"
 ```
 
 The `Error` handler folds before `run` resolves, on the same rule the store

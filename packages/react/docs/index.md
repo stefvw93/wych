@@ -153,6 +153,7 @@ One app, three chapters. Start here.
 - [Test a feature without React](/docs/how-to/test-a-feature-without-react): fold actions, swap the layer, assert on what was emitted.
 - [Render on the server](/docs/how-to/render-on-the-server): paint the initial state with `renderToString`, then hydrate the same feature.
 - [Install devtools](/docs/how-to/install-devtools): log every transition, command and output to the console, or forward them elsewhere.
+- [Recover from a failed layer](/docs/how-to/recover-from-a-failed-layer): handle a feature `layer` that fails to build, count attempts, and give up after a limit.
 - [Use with AI agents](/docs/how-to/use-with-ai-agents): point an agent at the docs that ship in the package.
 - [Use with the React ecosystem](/docs/how-to/use-with-the-react-ecosystem): bring any hook in, hand any client to a Layer, send outputs out. TanStack Query worked through.
 

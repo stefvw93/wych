@@ -9,7 +9,7 @@
  * `on<Tag>` prop, and that a props change costs one render rather than two.
  */
 
-import { Layer, Schema } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import { Component, StrictMode, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
@@ -306,6 +306,61 @@ test("an excess prop is rejected, which no spread would catch at compile time", 
   }
 
   expect(String(errors[0])).toMatch(/rogue|excess|unexpected/i);
+});
+
+// ---------------------------------------------------------------------------
+// A feature whose layer fails to build, and recovers from its own Retry.
+// ---------------------------------------------------------------------------
+
+test("a Retry from the `Error` handler rebuilds a failed layer and runs its command", async () => {
+  // Open work #1. The arming effect's dep is `store`, which never changes, so
+  // nothing in React ever called `start` again after the mount fiber died —
+  // the Retry the handler rendered folded state and its command was dropped.
+  let attempts = 0;
+  const flaky = Layer.effectDiscard(
+    Effect.suspend(() => {
+      attempts += 1;
+      return attempts === 1 ? Effect.fail("not yet") : Effect.void;
+    }),
+  );
+
+  const Flaky = define({
+    props: Schema.Struct({}),
+    state: Schema.Struct({ status: Schema.String, from: Schema.String }),
+    action: Action.of([Action("Retry", {}), Action("Loaded", {})]),
+  });
+
+  const flakyFeature = Flaky.create({
+    initialState: () => ({ status: "idle", from: "" }),
+    reducer: {
+      Retry: (_action, { state }) => [
+        { ...state, status: "loading" },
+        Command.effect((dispatch) => dispatch({ _tag: "Loaded" })),
+      ],
+      Loaded: (_action, { state }) => ({ ...state, status: "loaded" }),
+      Error: ({ from }, { state }) => ({ ...state, status: "failed", from }),
+    },
+    render: ({ state, dispatch }) => (
+      <div>
+        <span data-testid="status">{state.status}</span>
+        <span data-testid="from">{state.from}</span>
+        <button data-testid="retry" onClick={() => dispatch({ _tag: "Retry" })}>
+          retry
+        </button>
+      </div>
+    ),
+  });
+
+  const FlakyView = component(flakyFeature, { name: "Flaky", layer: flaky });
+
+  await mount(<FlakyView />);
+  await vi.waitFor(() => expect(text("status")).toBe("failed"));
+  expect(text("from")).toBe("Mounted");
+  expect(attempts).toBe(1);
+
+  await click("retry");
+  await vi.waitFor(() => expect(text("status")).toBe("loaded"));
+  expect(attempts).toBe(2);
 });
 
 // ---------------------------------------------------------------------------

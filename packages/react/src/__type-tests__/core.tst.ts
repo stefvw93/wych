@@ -977,6 +977,21 @@ test("`run` reports `defects` beside `emitted` and `outputs`, and stays total", 
   >();
 });
 
+test("the `Error` handler's payload carries `from` beside `error` and `cause`", () => {
+  Cart.create({
+    initialState: () => ({ count: 0 }),
+    reducer: {
+      Added: (_action, snapshot) => snapshot.state,
+      Error: (payload, snapshot) => {
+        expect(payload.from).type.toBe<string>();
+        expect(payload.error).type.toBe<unknown>();
+        return snapshot.state;
+      },
+    },
+    render: () => null,
+  });
+});
+
 // ---------------------------------------------------------------------------
 // React binding — `component(bp).useFeature`
 // ---------------------------------------------------------------------------

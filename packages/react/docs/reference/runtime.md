@@ -146,7 +146,10 @@ const Unprovided = component(tracked);
 ```
 
 The feature layer is built once per mount and released when that mount closes.
-A service that must outlive a mount belongs in the root layer.
+A service that must outlive a mount belongs in the root layer. A layer that
+fails to build rebuilds on the next dispatch rather than staying dead for the
+life of the mount; see
+[Recover from a failed layer](/docs/how-to/recover-from-a-failed-layer).
 
 ### `name`
 

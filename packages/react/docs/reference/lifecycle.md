@@ -58,7 +58,12 @@ type LifecycleAction<Props, H> =
   | { readonly _tag: "Mounted" }
   | { readonly _tag: "PropsChanged"; readonly previous: Props }
   | { readonly _tag: "HookChanged"; readonly previous: H }
-  | { readonly _tag: "Error"; readonly error: unknown; readonly cause: Cause.Cause<never> }
+  | {
+      readonly _tag: "Error";
+      readonly error: unknown;
+      readonly cause: Cause.Cause<never>;
+      readonly from: string;
+    }
   | { readonly _tag: "Unmounted" };
 ```
 
@@ -81,9 +86,9 @@ const room = Room.create({
       return state;
     },
 
-    Error: ({ error, cause }, { state }) => ({
+    Error: ({ error, cause, from }, { state }) => ({
       ...state,
-      failed: Cause.hasDies(cause) ? "bug" : String(error),
+      failed: from === "Mounted" ? "connect failed" : Cause.hasDies(cause) ? "bug" : String(error),
     }),
 
     Unmounted: (_payload, { state }) => [state, Command.cancel("watch")],
@@ -198,19 +203,30 @@ until the next dispatch or ambient change.
 ## `Error`
 
 ```ts fragment
-Error: (payload: { readonly error: unknown; readonly cause: Cause.Cause<never> }, snapshot) => Next;
+Error: (
+  payload: { readonly error: unknown; readonly cause: Cause.Cause<never>; readonly from: string },
+  snapshot,
+) => Next;
 ```
 
 Three things reach this handler as defects: a command that dies, a handler
 that throws, and a feature `layer` that fails to build. `error` is the squashed
 cause. `cause` is `Cause.die(error)`, for a handler that wants a `Cause` value.
+`from` names the origin: the tag of the action whose command died or whose
+handler threw, `"Mounted"` for a layer that failed to build, or `"Unmounted"`
+for a teardown that threw or overran.
+
+`from` lets a handler tell infrastructure from a single bad command: back off
+when `from === "Mounted"`, because the layer itself cannot build; carry on
+for anything else, because one command failing does not mean the next will.
 
 ```ts continue
-const failed = room.reduce(
+const connectFailed = room.reduce(
   {
     _tag: "Error",
-    error: new Error("socket closed"),
-    cause: Cause.die(new Error("socket closed")),
+    error: new Error("connection refused"),
+    cause: Cause.die(new Error("connection refused")),
+    from: "Mounted",
   },
   {
     state: { members: [], failed: "" },
@@ -219,7 +235,24 @@ const failed = room.reduce(
   },
 );
 
-console.log(Next.state(failed));
+console.log(Next.state(connectFailed));
+// => { members: [], failed: "connect failed" }
+
+const commandDied = room.reduce(
+  {
+    _tag: "Error",
+    error: new Error("socket closed"),
+    cause: Cause.die(new Error("socket closed")),
+    from: "Arrived",
+  },
+  {
+    state: { members: [], failed: "" },
+    props: { roomId: "r_1" },
+    hooks: { channel: "room:r_1" },
+  },
+);
+
+console.log(Next.state(commandDied));
 // => { members: [], failed: "bug" }
 ```
 
@@ -235,7 +268,25 @@ During teardown, `Error` fires when the `Unmounted` handler throws, when the
 `Unmounted` command dies, or when teardown passes its 5 second bound. For the
 first two, the `Error` handler's command runs in the teardown drain. For the
 5 second bound, the mount has already closed by the time the handler runs, so
-a command it returns is queued and never runs.
+a command it returns is queued and never runs. All three report
+`from: "Unmounted"`.
+
+A mount whose `layer` failed to build stays dead until the next dispatch that
+did not come from a lifecycle action or a running command, such as a click
+handler calling `dispatch`. That dispatch rebuilds the layer and folds
+`Mounted` again; a permanently failing layer rebuilds once per dispatch,
+reaching this handler again with `from: "Mounted"`, rather than looping on its
+own. See [Recover from a failed layer](/docs/how-to/recover-from-a-failed-layer)
+for the Retry and give-up recipe.
+
+A layer that failed to build leaves no mount fiber for a command to run in, so
+a command this handler returns for `from: "Mounted"` is dropped, reported to
+devtools as a `Command` event with `dropped: true`. Only a command a dispatch
+produces rebuilds the layer, which is why the recipe renders a Retry button
+rather than returning a command straight from the handler. Report a layer
+failure itself with `Layer.tapErrorCause` (or `Effect.tapErrorCause` in its
+acquire), which runs under the root runtime, or watch for the `Defect` event
+with `from: "Mounted"` from a devtools sink.
 
 ## `Unmounted`
 
