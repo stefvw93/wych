@@ -127,7 +127,7 @@ export const everySearch = define({
 /** Load the next page: `Task.start` takes a thunk that reads the state the handler built. */
 const searchPage = Task("SearchPage", {
   success: Hits,
-  onError: Task.message,
+  onError: Task.errorMessage,
   run: ({ query, page }: { readonly query: string; readonly page: number }) =>
     Effect.gen(function* () {
       const api = yield* SearchApi;
