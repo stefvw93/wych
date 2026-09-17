@@ -8,7 +8,7 @@ const NoteSaved = Action("NoteSaved", { id: Schema.String, revision: Schema.Stri
 
 const loadNotes = Task("Load", {
   success: Schema.Array(Note),
-  onError: Task.message,
+  onError: Task.errorMessage,
   run: () =>
     Effect.gen(function* () {
       const api = yield* NotesApi;

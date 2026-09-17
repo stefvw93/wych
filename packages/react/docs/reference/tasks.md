@@ -30,7 +30,7 @@ const Subjects = Schema.Array(Schema.String);
 
 const loadMail = Task("LoadMail", {
   success: Subjects,
-  onError: Task.message,
+  onError: Task.errorMessage,
   run: (folder: string) =>
     Effect.gen(function* () {
       const api = yield* MailApi;
@@ -93,7 +93,7 @@ Task<Name, Success, Failure extends Schema.Top, Input, R>(
 ```
 
 The first overload defaults `failure` to `Schema.String` and pairs with
-`Task.message`. The second takes a `failure` schema and an `onError` that
+`Task.errorMessage`. The second takes a `failure` schema and an `onError` that
 produces its type.
 
 ```ts continue
@@ -118,7 +118,7 @@ const typedLoad = Task("TypedLoad", {
 
 ```ts continue
 // @ts-expect-error "loadMail" is not Capitalize<string>
-const lowercase = Task("loadMail", { success: Subjects, onError: Task.message });
+const lowercase = Task("loadMail", { success: Subjects, onError: Task.errorMessage });
 ```
 
 ## `TaskOperation`
@@ -157,7 +157,7 @@ With `run` declared in the config, `op.run(input)` takes that input. Without
 it, `op.run(effect)` takes the effect.
 
 ```ts continue
-const unbound = Task("Upload", { success: Schema.String, onError: Task.message });
+const unbound = Task("Upload", { success: Schema.String, onError: Task.errorMessage });
 
 const unboundCommand = unbound.run(Effect.succeed("receipt_1"));
 const boundCommand = loadMail.run("inbox");
@@ -169,7 +169,7 @@ with nothing.
 ```ts continue
 const refresh = Task("Refresh", {
   success: Subjects,
-  onError: Task.message,
+  onError: Task.errorMessage,
   run: () =>
     Effect.gen(function* () {
       const api = yield* MailApi;
@@ -196,7 +196,10 @@ the `Cancelled` handler above does.
 ## `Task.output`
 
 ```ts continue
-const announceUpload = Task.output("Announce", { success: Schema.String, onError: Task.message });
+const announceUpload = Task.output("Announce", {
+  success: Schema.String,
+  onError: Task.errorMessage,
+});
 
 const Announcer = define({
   props: Schema.Struct({}),
@@ -223,7 +226,7 @@ last to settle wins.
 ```ts continue
 const everyLoad = Task("EveryLoad", {
   success: Subjects,
-  onError: Task.message,
+  onError: Task.errorMessage,
   mode: "every" satisfies TaskMode,
   run: (folder: string) =>
     Effect.gen(function* () {
@@ -260,11 +263,11 @@ const groups: ReadonlyArray<string> = ["Task/LoadMail", "Task/TypedLoad"];
 
 Group rules are in [Commands](/docs/reference/commands).
 
-## `TaskOnError` and `Task.message`
+## `TaskOnError` and `Task.errorMessage`
 
 ```ts fragment
 type TaskOnError<Failure> = (cause: Cause.Cause<unknown>) => Failure;
-Task.message: TaskOnError<string>;
+Task.errorMessage: TaskOnError<string>;
 ```
 
 `onError` is mandatory. It receives the whole `Cause`, so both a typed failure
@@ -297,6 +300,41 @@ console.log(died.state.subjects);
 A defect lands in the field as a rejection and does not reach the
 [`Error` lifecycle handler](/docs/reference/lifecycle). Use `Cause.hasDies` in
 `onError` to tell the two apart.
+
+`Task.errorMessage` is the error's message, or its name when the message is empty.
+A `Schema.TaggedError` declared without a `message` field is an `Error` whose
+message is `""`, and its name is the tag, so the field names the error instead
+of showing nothing. The mapping does not read `cause`. When the wrapped error
+carries the text the UI wants, say so in `onError`.
+
+```ts continue
+class MailApiError extends Schema.TaggedError<MailApiError>()("MailApiError", {
+  cause: Schema.Defect(),
+}) {}
+
+const tagged = await Effect.runPromise(
+  mailbox.run([Opened.make({ folder: "inbox" })], {
+    props: {},
+    hooks: {},
+    layer: Layer.succeed(MailApi)({
+      list: () => Effect.fail(new MailApiError({ cause: new TypeError("Failed to fetch") })),
+    }),
+  }),
+);
+
+console.log(tagged.state.subjects);
+// => { _tag: "Rejected", error: "MailApiError" }
+
+const unwrapped = Task("LoadMailUnwrapped", {
+  success: Subjects,
+  onError: (cause) => {
+    const error = Cause.squash(cause);
+    return error instanceof MailApiError
+      ? Task.errorMessage(Cause.fail(error.cause))
+      : Task.errorMessage(cause);
+  },
+});
+```
 
 Interruption is the one cause `onError` never sees. Cancelled work dispatches
 nothing.
@@ -339,7 +377,7 @@ Task.schema(success: Schema.Top, failure: Schema.Top): TaskSchema<Success, Failu
 ```
 
 The schema of a state field holding a `TaskValue`. The failure defaults to
-`Schema.String`, to pair with `Task.message`.
+`Schema.String`, to pair with `Task.errorMessage`.
 
 ```ts continue
 const State = Schema.Struct({

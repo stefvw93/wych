@@ -47,7 +47,7 @@ export const searchFeature = define({
 /** Take latest with a task: the default `mode: "latest"` books under `Command.restart`. */
 const search = Task("Search", {
   success: Hits,
-  onError: Task.message,
+  onError: Task.errorMessage,
   run: (query: string) =>
     Effect.gen(function* () {
       const api = yield* SearchApi;
@@ -95,7 +95,7 @@ export const taskSearch = define({
 /** `mode: "every"` books with `Command.keyed` and never interrupts. */
 const searchEvery = Task("SearchEvery", {
   success: Hits,
-  onError: Task.message,
+  onError: Task.errorMessage,
   mode: "every",
   run: (query: string) =>
     Effect.gen(function* () {

@@ -64,7 +64,7 @@ const Saved = Action.output("Saved", { id: Schema.String, revision: Schema.Strin
 
 const saveNote = Task("Save", {
   success: Schema.String,
-  onError: Task.message,
+  onError: Task.errorMessage,
   run: (note: { readonly id: string; readonly text: string }) =>
     Effect.gen(function* () {
       const api = yield* NotesApi;
@@ -149,7 +149,7 @@ const NoteSaved = Action("NoteSaved", { id: Schema.String, revision: Schema.Stri
 
 const loadNotes = Task("Load", {
   success: Schema.Array(Note),
-  onError: Task.message,
+  onError: Task.errorMessage,
   run: () =>
     Effect.gen(function* () {
       const api = yield* NotesApi;

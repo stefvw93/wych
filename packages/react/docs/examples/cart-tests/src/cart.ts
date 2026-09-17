@@ -14,7 +14,7 @@ const Ordered = Action.output("Ordered", { total: Schema.Number });
 
 const charge = Task("Charge", {
   success: Schema.String,
-  onError: Task.message,
+  onError: Task.errorMessage,
   run: (total: number) =>
     Effect.gen(function* () {
       const api = yield* Payments;

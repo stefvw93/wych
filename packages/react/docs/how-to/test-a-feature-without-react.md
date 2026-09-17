@@ -35,7 +35,7 @@ const Ordered = Action.output("Ordered", { total: Schema.Number });
 
 const charge = Task("Charge", {
   success: Schema.String,
-  onError: Task.message,
+  onError: Task.errorMessage,
   run: (total: number) =>
     Effect.gen(function* () {
       const api = yield* Payments;
@@ -227,7 +227,7 @@ test("a declined charge rejects the task and announces nothing", async () => {
 });
 ```
 
-`Task.message` mapped the `Cause` to its message. `onError` covers typed failures and defects, so a bug inside the effect lands in the field. The `Error` lifecycle handler never sees it.
+`Task.errorMessage` mapped the `Cause` to its message. `onError` covers typed failures and defects, so a bug inside the effect lands in the field. The `Error` lifecycle handler never sees it.
 
 For a feature with no services, pass `Layer.empty`.
 

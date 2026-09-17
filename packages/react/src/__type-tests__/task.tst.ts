@@ -18,7 +18,7 @@ type LoadAction =
 // ---------------------------------------------------------------------------
 
 test("an operation owns the work and nothing state-shaped", () => {
-  const search = Task("Search", { success: Schema.String, onError: Task.message });
+  const search = Task("Search", { success: Schema.String, onError: Task.errorMessage });
 
   expect(search).type.not.toHaveProperty("field");
   expect(search).type.not.toHaveProperty("initial");
@@ -34,14 +34,14 @@ test("a lower-case name is rejected, the way an action tag is", () => {
   // The name is the tag prefix, so it has to be capitalised.
   expect(Task).type.not.toBeCallableWith("search", {
     success: Schema.String,
-    onError: Task.message,
+    onError: Task.errorMessage,
   });
 });
 
 test("take-first is not a mode — it is a guard the handler writes", () => {
   expect(Task).type.not.toBeCallableWith("Search", {
     success: Schema.String,
-    onError: Task.message,
+    onError: Task.errorMessage,
     mode: "first",
   });
 });
@@ -53,7 +53,7 @@ test("take-first is not a mode — it is a guard the handler writes", () => {
 test("declaring `run` makes the operation's `run` take its input, and only its input", () => {
   const search = Task("Search", {
     success: Schema.String,
-    onError: Task.message,
+    onError: Task.errorMessage,
     run: (query: string) =>
       Effect.map(
         Effect.flatMap(Api, (api) => api.load),
@@ -70,7 +70,7 @@ test("declaring `run` makes the operation's `run` take its input, and only its i
 test("a `run` that takes no input makes the operation's `run` callable with nothing", () => {
   const load = Task("Load", {
     success: Schema.String,
-    onError: Task.message,
+    onError: Task.errorMessage,
     run: () => Effect.flatMap(Api, (api) => api.load),
   });
 
@@ -97,7 +97,7 @@ test("a `run` that takes no input makes the operation's `run` callable with noth
 });
 
 test("without `run`, it takes the effect and carries its services to `ServicesOf`", () => {
-  const search = Task("Search", { success: Schema.String, onError: Task.message });
+  const search = Task("Search", { success: Schema.String, onError: Task.errorMessage });
   const state = { search: Task.idle };
 
   const reducer = {
@@ -206,14 +206,14 @@ test("the partial reads are typed by the field, and the guards narrow it", () =>
 // ---------------------------------------------------------------------------
 
 test("an announced operation is the same shape — only the channel differs", () => {
-  const search = Task.output("Search", { success: Schema.String, onError: Task.message });
+  const search = Task.output("Search", { success: Schema.String, onError: Task.errorMessage });
 
   expect(search.run(Effect.succeed("ok"))).type.toBe<Command<SearchAction, never>>();
   expect(search.cancel).type.toBe<Command<SearchAction, never>>();
 });
 
 test("`Task.start` takes a lazy command, handed the state with `Pending` written", () => {
-  const search = Task("Search", { success: Schema.String, onError: Task.message });
+  const search = Task("Search", { success: Schema.String, onError: Task.errorMessage });
   type State = { readonly q: string; readonly search: TaskValue<string, string> };
   const state = { q: "x", search: Task.idle } as State;
 

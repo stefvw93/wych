@@ -92,7 +92,7 @@ const SignedIn = Action.output("SignedIn", { userId: Schema.String });
 
 const login = Task("Login", {
   success: Schema.String,
-  onError: Task.message,
+  onError: Task.errorMessage,
   run: (credentials: { readonly email: string; readonly password: string }) =>
     Effect.gen(function* () {
       const auth = yield* Auth;

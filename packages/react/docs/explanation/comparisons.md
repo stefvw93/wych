@@ -30,7 +30,7 @@ const Typed = Action("Typed", { query: Schema.String });
 
 const search = Task("Search", {
   success: Hits,
-  onError: Task.message,
+  onError: Task.errorMessage,
   run: (query: string) =>
     Effect.gen(function* () {
       const api = yield* SearchApi;

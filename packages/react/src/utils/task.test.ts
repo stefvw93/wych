@@ -21,7 +21,7 @@ const layerOf = (value: Effect.Effect<string, Error>) => Layer.succeed(Api)({ lo
 const folded = (options?: { readonly mode?: "every"; readonly takeFirst?: boolean }) => {
   const search = Task("Search", {
     success: Schema.String,
-    onError: Task.message,
+    onError: Task.errorMessage,
     mode: options?.mode,
   });
 
@@ -64,7 +64,7 @@ const clicks = (n: number) => Array.from({ length: n }, () => Clicked.make({}));
 
 describe("Task", () => {
   it("declares the two tags from the name, and nothing state-shaped", () => {
-    const search = Task("WallhavenSearch", { success: Schema.String, onError: Task.message });
+    const search = Task("WallhavenSearch", { success: Schema.String, onError: Task.errorMessage });
 
     expect(search.actions.map((a) => (a.make as any)({ value: "x", error: "x" })._tag)).toEqual([
       "WallhavenSearchResolved",
@@ -88,6 +88,17 @@ describe("Task", () => {
   it("maps a defect through onError too — nothing reaches the Error lifecycle", async () => {
     const out = await run(folded().feature, Effect.die(new Error("bug")));
     expect(out.state.search).toEqual({ _tag: "Rejected", error: "bug" });
+  });
+
+  it("Task.errorMessage reads the name when the message is empty — a tagged error's tag, not its cause", async () => {
+    class ServiceError extends Schema.TaggedError<ServiceError>()("ServiceError", {
+      cause: Schema.Defect(),
+    }) {}
+    const out = await run(
+      folded().feature,
+      Effect.fail(new ServiceError({ cause: new TypeError("Failed to fetch") })),
+    );
+    expect(out.state.search).toEqual({ _tag: "Rejected", error: "ServiceError" });
   });
 
   it("writes Pending synchronously, on the fold that issued the command", () => {
@@ -211,7 +222,7 @@ describe("Task", () => {
 describe("Task with `run`", () => {
   const search = Task("Search", {
     success: Schema.String,
-    onError: Task.message,
+    onError: Task.errorMessage,
     run: (query: string) => Effect.map(load, (value) => `${value}:${query}`),
   });
 
@@ -238,7 +249,7 @@ describe("Task with `run`", () => {
 // --- announced ---------------------------------------------------------------
 
 describe("Task.output", () => {
-  const search = Task.output("Search", { success: Schema.String, onError: Task.message });
+  const search = Task.output("Search", { success: Schema.String, onError: Task.errorMessage });
   const State = Schema.Struct({ colorValue: Schema.String });
   const Vocab = Action.of([Clicked]);
   const Outputs = Action.of([...search.actions]);

@@ -16,7 +16,7 @@ export const Saved = Action.output("Saved", { id: Schema.String });
  */
 export const save = Task("Save", {
   success: Schema.String,
-  onError: Task.message,
+  onError: Task.errorMessage,
   run: ({ id, text }: { id: string; text: string }) =>
     Effect.gen(function* () {
       const client = yield* Queries;
