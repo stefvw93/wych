@@ -228,7 +228,7 @@ type DevtoolsEvent = DevtoolsTransition | DevtoolsCommand | DevtoolsOutput | Dev
 ```
 
 Every event carries `name`, `instance` and `cause`. `name` comes from
-`component(feature, { name })` and is `"WychFeature"` when unnamed. `instance`
+`component(feature, { name })`. `instance`
 is unique per mount on the page. Ids can have gaps: StrictMode calls the store
 initialiser twice and each call takes an id.
 

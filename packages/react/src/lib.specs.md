@@ -119,8 +119,41 @@ Design points, each with its reason:
 
 - **It hangs off the FC, not the `Feature` value.** A `Feature`'s public surface is
   `reduce` and `run`, and it knows no runtime. `component` is where React
-  enters, so it is where a React hook belongs. Two `component(bp)` calls — two
-  runtimes, or two names — get two contexts and cannot see each other.
+  enters, so it is where a React hook belongs.
+- **The `name` is the scope, and it is required.** The context is looked up
+  by `name` in a module-level registry in `lib.ts`. Two calls with two names get two contexts and cannot
+  see each other; two calls with one name share one, whatever runtime made
+  them. The reason is Fast Refresh: saving the file that calls `component()`
+  re-evaluates it, and React re-renders the old fibers with the new function
+  while a fragment in another file still holds the old one. A per-call
+  context differed between the two sides and the fragment threw "called
+  outside" for a mount it was correctly nested in. `lib.ts` is never
+  re-evaluated by an app-file save, so a context keyed there survives. With
+  no stable identity to fall back on, an unnamed component would keep the
+  defect, so `name` has no default: omitting it is a compile error and a
+  `TypeError` at the call for untyped callers.
+- **`component()` registers its mount with Fast Refresh when it can.** The
+  refresh Babel plugin registers `const X = component(x, …)` only when the
+  same file renders `<X />`. Babel plugin-react, webpack's refresh plugin
+  and Next put `$RefreshReg$` on the global for the duration of a module's
+  evaluation, which is when `component()` runs; `component()` calls it with
+  the mount and the `name`. Where the global is a stub or scoped to the
+  module (Vite+ and other rolldown-based plugins) the call is a no-op. Two
+  calls with one `name` in one file share a refresh family: the second
+  `render` wins after a refresh.
+- **What a real `@vitejs/plugin-react` server does**, measured against a
+  scratch app (2026-09-18). The plugin wraps a module as a self-accepting
+  refresh boundary only when its Babel pass registered something in that
+  module. A feature file holding nothing but `component()` registers nothing,
+  so a save of it full-reloads the page: no throw, no state kept. A feature
+  file that also holds a registered fragment becomes a boundary; on save the
+  plugin's export registration swaps the exported component, and before
+  this change a fragment in another file threw
+  `Counter.useFeature() called outside <Counter>` on the same save. After it,
+  the save is a Fast Refresh: the marker set on `window` survives, the
+  `render` edit lands, the store keeps its state, and the fragment still
+  dispatches into it. Vite+'s own dev server ships no React refresh plugin,
+  so under it every save is a full reload and none of this applies.
 - **The context value is the per-render snapshot object**, not the store plus a
   selector. The subtree re-renders with the root on every fold regardless — the
   root's `useSyncExternalStore` re-renders it, and its children with it — so a
@@ -344,13 +377,16 @@ landed with every box checked again.
 
 ### Feature context (`component(bp).useFeature`)
 
-- [x] `component(bp, options)` returns `FeatureComponent<Props, State, Action, Output, H>` — `FC<Simplify<Props & OutputProps<Output>>> & { readonly useFeature: () => RenderSnapshot<Props, State, Action | Output, H> }`. Every existing call site compiles unchanged: the intersection adds a member and removes none.
-- [x] `useFeature()` returns the `RenderSnapshot` of the nearest enclosing mount of **that component**: `state`, `props`, `hooks`, `dispatch` — the same object `render` received on the same render, by identity.
+- [x] `component(bp, options)` returns `FeatureComponent<Props, State, Action, Output, H>` — `FC<Simplify<Props & OutputProps<Output>>> & { readonly useFeature: () => RenderSnapshot<Props, State, Action | Output, H> }`. The intersection adds a member and removes none.
+- [x] `options.name` is required on both overloads: `component(bp)`, `component(bp, {})` and `component(bp, { layer })` are compile errors, and a call that reaches the runtime without a string name throws `TypeError` naming the fix.
+- [x] `useFeature()` returns the `RenderSnapshot` of the nearest enclosing mount of **a component with that `name`**: `state`, `props`, `hooks`, `dispatch` — the same object `render` received on the same render, by identity.
 - [x] `dispatch` obtained through `useFeature` is the store's own: reference-stable for the mount, routes a declared output to its `on<Tag>` prop without touching the reducer, and reports `cause: { _tag: "Dispatch" }` — a fragment's dispatch is indistinguishable from `render`'s.
 - [x] After a fold moves state, a fragment reading `state` re-renders and sees the new state on the same render as the root — never one render behind.
-- [x] Two `component()` calls over one feature are independent: `A.useFeature()` under `<B>` throws, even though both wrap the same feature.
-- [x] Nested mounts of one component: a fragment resolves the nearest.
-- [x] Called outside any mount of its component, throws `TypeError` with message `` `${name}.useFeature() called outside <${name}>` ``, `name` being the `component` option or `"WychFeature"`.
+- [x] Two `component()` calls with different names are independent: `A.useFeature()` under `<B>` throws, even when both wrap the same feature. Two calls with one name share the scope: a fragment made against the first resolves a mount of the second.
+- [x] Nested mounts of one name: a fragment resolves the nearest.
+- [x] Called outside any mount of its name, throws `TypeError` with message `` `${name}.useFeature() called outside <${name}>` ``.
+- [x] Re-evaluating the module that calls `component()` — Fast Refresh's save — yields a component whose `useFeature` context is the first call's. Under a refresh, a fragment in another file that still holds the first component keeps reading the mount that now runs the second, the store and its state survive, and the `render` edit lands; a fragment in the same file swapped while an unregistered mount keeps running keeps reading the store too. Pinned by `hmr.browser.test.tsx` against the real `react-refresh` runtime.
+- [x] When `$RefreshReg$` is a function on the global during `component()`, the mount is registered under the `name`, so a bundler that exposes the hook swaps it on refresh and the `render` edit lands even where the Babel plugin registered nothing. Absent the hook, nothing is called.
 - [x] A node the parent passes as `children` and the feature renders inside its tree may call `useFeature()` — the provider is positional, so this is React's compound-component shape (`<Select><SelectItem/></Select>`) and works by construction. Not a target, not prevented.
 - [x] `validateProps`, `sync`, `start`/`stop`, StrictMode behaviour and every devtools emission are untouched. The provider is one element around `render`'s output.
 - [x] `FeatureComponent` is exported, so a fragment can type a prop as `typeof Seed` or the snapshot as `ReturnType<typeof Seed.useFeature>` without reconstructing the generics.
@@ -435,6 +471,17 @@ today. Four tests, each pinning one criterion the node suite cannot:
 - Two mounts of one component each carry a fragment; each fragment reads its
   own mount's state and a dispatch in one leaves the other untouched.
 
+`src/hmr.browser.test.tsx` drives the real `react-refresh` runtime, hooked in
+by `src/__fixtures__/react-refresh.ts` before `react-dom` loads. A function
+stands for one evaluation of a file, `RefreshRuntime.register` for the Babel
+plugin's registration, a `$RefreshReg$` global for a Babel-based bundler's
+hook, and `performReactRefresh` for what Vite calls after the module re-ran.
+It pins the two shapes that used to throw (fragment in another file; same-file
+fragment beside an unregistered mount), the `$RefreshReg$` registration, the
+name-scope rules, and a control where both sides are registered. One limit
+it records rather than fixes: a reducer edit still needs a remount, because
+the store keeps the `feature` it was created with.
+
 The debounce story — four keystrokes inside one window send exactly one
 query, first through the old `"restart"` policy, then a hand-written `Cancel`
 ahead of a `keyed` leaf, now `Command.restart` as sugar for that pair — is
@@ -493,12 +540,17 @@ real browser. The runnable version is `docs/examples/search-debounce`.
   services still alive — then the scope closes. Bounded as a whole; an abandoned
   teardown is reported as a defect rather than silently closing.
 - `useFeature` is one `createContext<RenderSnapshot | undefined>(undefined)`
-  **per `component()` call**, created inside `component` next to `Feature`, so
-  its identity is the component's. `Feature` builds the snapshot once and hands
-  the same object to `render` and to the provider:
-  `createElement(Snapshot.Provider, { value: snapshot }, render(snapshot))`.
+  **per `name`**, held in a module-level `Map<string, Context>` in `lib.ts`
+  and fetched or created by `component()`, so its identity survives a
+  re-evaluation of the calling module. The registry is module-level rather
+  than per `createRuntime` because a save of the file calling `createRuntime`
+  re-runs the feature files that import it and not the fragment files. It
+  grows by one context per distinct name and is never freed. `Feature` builds
+  the snapshot once and hands the same object to `render` and to the
+  provider: `createElement(Snapshot.Provider, { value: snapshot }, render(snapshot))`.
   The hook is attached with `Object.assign(Feature, { useFeature })` after
-  `displayName`, and the throw uses the same `name`.
+  `displayName` and the `$RefreshReg$` call, and the throw uses the same
+  `name`.
 
 ## Expected Behavior & Edge Cases
 
@@ -527,7 +579,7 @@ real browser. The runnable version is `docs/examples/search-debounce`.
   silently wrong.** `render` is a plain call in `Feature`'s body, so a hook in
   it is `Feature`'s hook, and `useContext` there reads the provider _above_
   `Feature` — not the one `Feature` is about to mount. Outside nesting that
-  throws; with an outer mount of the same component it returns the outer
+  throws; with an outer mount of the same name it returns the outer
   snapshot. `render` already has the snapshot as its argument; there is no
   reason to reach for the hook there, and a guard would cost every fragment's
   call to catch a mistake with no motive.

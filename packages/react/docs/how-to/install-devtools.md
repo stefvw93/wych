@@ -26,7 +26,7 @@ const { component } = createRuntime(Layer.mergeAll(app, devtools));
 
 `consoleDevtoolsLayer()` is `Layer<never>`, so both branches of the `DEV` ternary have one type and the root layer's own requirements do not move. The one decision here is the condition: `import.meta.env.DEV` keeps the sink out of the production bundle's layer, and a flag of your own works the same way.
 
-Name your components. The name is in every event, and `component(feature)` with no name reports `"WychFeature"`.
+The `name` you give `component` is in every event, so pick one that tells two features apart.
 
 ```tsx continue
 import { Action, define } from "@wych/react";

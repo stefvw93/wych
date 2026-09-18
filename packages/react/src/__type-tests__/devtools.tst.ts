@@ -119,17 +119,19 @@ test("merging devtools into a root layer leaves every `component` call unchanged
   // exists to catch, and one that would otherwise surface as a wall of errors
   // in application code rather than here.
   const withDevtools = createRuntime(Layer.mergeAll(fooLayer, consoleDevtoolsLayer()));
-  expect(withDevtools.component).type.toBeCallableWith(needsFoo);
+  expect(withDevtools.component).type.toBeCallableWith(needsFoo, { name: "NeedsFoo" });
 
   // The pipe spelling, recorded as the fallback in `devtools.specs.md`.
   expect(
     createRuntime(fooLayer.pipe(Layer.merge(consoleDevtoolsLayer()))).component,
-  ).type.toBeCallableWith(needsFoo);
+  ).type.toBeCallableWith(needsFoo, { name: "NeedsFoo" });
 
   // Positive control: devtools is not what satisfies `FooService`. Without the
   // real root layer this still fails, so the acceptance above is attributable
   // to `fooLayer` and not to a merge that erased the requirement.
-  expect(createRuntime(consoleDevtoolsLayer()).component).type.not.toBeCallableWith(needsFoo);
+  expect(createRuntime(consoleDevtoolsLayer()).component).type.not.toBeCallableWith(needsFoo, {
+    name: "NeedsFoo",
+  });
 });
 
 test("`createRuntime` takes exactly one parameter", () => {

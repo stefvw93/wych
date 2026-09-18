@@ -212,7 +212,7 @@ A "more" button asks for the page after the one on screen. The handler writes `p
 ```tsx continue
 const searchPage = Task("SearchPage", {
   success: Hits,
-  onError: Task.message,
+  onError: Task.errorMessage,
   run: ({ query, page }: { readonly query: string; readonly page: number }) =>
     Effect.gen(function* () {
       const api = yield* SearchApi;
