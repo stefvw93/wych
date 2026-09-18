@@ -16,18 +16,20 @@ const SHORTCUT = "k";
 
 /** Search button plus the cmd/ctrl+K binding; mounts the dialog on first open. */
 export function SearchTrigger() {
+  const mac = React.useMemo(() => /Mac|iPhone|iPad/.test(navigator.userAgent), []);
   const [open, setOpen] = React.useState(false);
   const [opened, setOpened] = React.useState(false);
-  const [mac, setMac] = React.useState<boolean | undefined>(undefined);
   const pathname = usePathname();
+  const [prevPathname, setPrevPathname] = React.useState(pathname);
+
+  if (pathname !== prevPathname) {
+    setPrevPathname(pathname);
+    setOpen(false);
+  }
 
   const show = React.useCallback(() => {
     setOpened(true);
     setOpen(true);
-  }, []);
-
-  React.useEffect(() => {
-    setMac(/Mac|iPhone|iPad/.test(navigator.userAgent));
   }, []);
 
   React.useEffect(() => {
@@ -41,11 +43,6 @@ export function SearchTrigger() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
-
-  // A result was chosen, or the user navigated some other way: close.
-  React.useEffect(() => {
-    setOpen(false);
-  }, [pathname]);
 
   return (
     <>

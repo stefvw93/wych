@@ -271,6 +271,7 @@ test("the sink is synchronous, because the fold is", () => {
   // Contravariance where it is useful: a sink written for one member only is
   // not a `DevtoolsSink`, because the runtime emits all four.
   expect(devtoolsLayer).type.not.toBeCallableWith({
+    // oxlint-disable-next-line no-unused-vars
     onEvent: (_: DevtoolsTransition) => {},
   });
 });
