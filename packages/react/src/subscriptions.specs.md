@@ -359,6 +359,7 @@ cases under Browser coverage are green under
 - [x] Inside the hook, `dispatch` is typed by the feature's vocabulary from the contextual type `create` supplies: an undeclared tag and a declared tag with the wrong payload are compile errors; an output tag is accepted.
 - [x] Written standalone, `Subscription.effect` infers `A = never` and needs the type argument — the same rule and the same `@ts-expect-error` pinning as `Command.effect`.
 - [x] `Subscription.effect` carries `R`; a hook whose subscription needs `PresenceApi` makes `component(feature)` under a root without it a compile error, and `component(feature, { layer })` satisfying it compiles.
+- [x] `R` is inferred through a context-sensitive leaf (`(dispatch) => …` reading a service) with no type argument, at both `Definition.subscriptions` and `create`: the hook's type carries `PresenceApi` and `component` under a root without it is a compile error.
 - [x] A `Command` as a record value in the hook is a compile error, and a `Subscription` returned from a reducer handler is a compile error.
 - [x] The hook's parameter is `Snapshot<Props, State, H>` with `children` as declared and `hooks` as `H`.
 - [x] `run`'s result type has `subscriptions: ReadonlyArray<string>`; `Feature.subscriptions` is `(snapshot) => Subscriptions<…>`.

@@ -81,26 +81,32 @@ A key whose value is `undefined` is not declared, so a conditional source has
 two equivalent spellings.
 
 ```ts continue
-const declareConditionally = (
-  online: boolean,
-): Subscriptions<typeof Changed.Type, PresenceApi> => ({
-  presence: online
+const declareConditionally = Presence.subscriptions(({ props }) => ({
+  [`presence:${props.roomId}`]: props.roomId
     ? Subscription.effect((dispatch) =>
         Effect.gen(function* () {
           const api = yield* PresenceApi;
-          yield* Stream.runForEach(api.events("general"), (event) => dispatch(Changed.make(event)));
+          yield* Stream.runForEach(api.events(props.roomId), (event) =>
+            dispatch(Changed.make(event)),
+          );
         }),
       )
     : undefined,
-});
+}));
 
 const declaredKeys = (subscriptions: Subscriptions<unknown, unknown>) =>
   Object.keys(subscriptions).filter((key) => subscriptions[key] !== undefined);
 
-console.log(declaredKeys(declareConditionally(false)));
+console.log(
+  declaredKeys(declareConditionally({ state: { online: [] }, props: { roomId: "" }, hooks: {} })),
+);
 // => []
-console.log(declaredKeys(declareConditionally(true)));
-// => ["presence"]
+console.log(
+  declaredKeys(
+    declareConditionally({ state: { online: [] }, props: { roomId: "general" }, hooks: {} }),
+  ),
+);
+// => ["presence:general"]
 ```
 
 Plain `Object.keys` still lists a key whose value is `undefined`, so the
@@ -312,11 +318,58 @@ leaves the hook's return.
 ## Contextual typing
 
 `A` comes from the contextual type of the slot a `Subscription` value fills,
-the same rule `Command.effect` follows. Assigned inside a typed
-`Subscriptions` value, `dispatch` is typed without a type argument.
+the same rule `Command.effect` follows, and `R` is read off the effect
+itself. Neither takes a type argument at `Definition.subscriptions`.
 
 ```ts continue
-const contextual: Subscriptions<typeof Changed.Type, PresenceApi> = {
+const inferred = Presence.subscriptions(({ props }) => ({
+  [`presence:${props.roomId}`]: Subscription.effect((dispatch) =>
+    Effect.gen(function* () {
+      const api = yield* PresenceApi;
+      yield* Stream.runForEach(api.events(props.roomId), (event) => dispatch(Changed.make(event)));
+    }),
+  ),
+}));
+```
+
+`dispatch` is typed `Dispatcher<typeof Changed.Type>` from the record
+slot, and `yield* PresenceApi` puts `PresenceApi` into the inferred `R`, with
+no annotation on either. `create` infers the same way.
+
+```ts continue
+const presenceWithSubscriptions = Presence.create({
+  initialState: () => ({ online: [] }),
+  reducer: {
+    Changed: ({ userId }, { state }) => ({ ...state, online: [...state.online, userId] }),
+  },
+  subscriptions: ({ props }) => ({
+    [`presence:${props.roomId}`]: Subscription.effect((dispatch) =>
+      Effect.gen(function* () {
+        const api = yield* PresenceApi;
+        yield* Stream.runForEach(api.events(props.roomId), (event) =>
+          dispatch(Changed.make(event)),
+        );
+      }),
+    ),
+  }),
+  render: () => null,
+});
+```
+
+A value with no slot has no contextual type to read. Written standalone, `A`
+falls back to `never` unless a type argument names it, the same way a bare
+`Effect.Effect<void>` variable needs its own annotation to carry a service.
+
+```ts continue
+// @ts-expect-error dispatch is typed never without a type argument
+const bare = Subscription.effect((dispatch) => dispatch(Changed.make({ userId: "ada" })));
+```
+
+Naming `R` too is the exception, not the rule: reach for it only when a
+`Subscriptions` value has no slot to infer from.
+
+```ts continue
+const standalone: Subscriptions<typeof Changed.Type, PresenceApi> = {
   presence: Subscription.effect((dispatch) =>
     Effect.gen(function* () {
       const api = yield* PresenceApi;
@@ -324,14 +377,6 @@ const contextual: Subscriptions<typeof Changed.Type, PresenceApi> = {
     }),
   ),
 };
-```
-
-Written standalone, with no contextual type to read, `A` falls back to
-`never` unless a type argument names it.
-
-```ts continue
-// @ts-expect-error dispatch is typed never without a type argument
-const bare = Subscription.effect((dispatch) => dispatch(Changed.make({ userId: "ada" })));
 ```
 
 A `.pipe` receiver is checked before the contextual type of the `.pipe` call

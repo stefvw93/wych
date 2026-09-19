@@ -132,6 +132,47 @@ test("`Subscription.effect` carries `R`, and `create` unions it into the feature
   });
 });
 
+// HINT: the leaf above is not context-sensitive, so it is typed in one pass.
+// The real shape — `(dispatch) => Effect.gen(…)` reading a service — defers
+// the leaf to the second pass, where `A` is already fixed from the slot and
+// `R` is still read off the effect. Both `Definition.subscriptions` and
+// `create` must land `R` with no type argument, or the DX is worse than a
+// bare `Effect.gen`.
+test("`R` is inferred through a context-sensitive leaf, with no type argument", () => {
+  const hook = Contextual.subscriptions(({ props }) => ({
+    [`presence:${props.room}`]: Subscription.effect((dispatch) =>
+      Effect.andThen(presenceEffect, dispatch({ _tag: "Pong", at: 1 })),
+    ),
+  }));
+  expect(hook).type.toBe<
+    (
+      snapshot: Snapshot<{ readonly room: string }, { readonly count: number }, {}>,
+    ) => Subscriptions<
+      | { readonly _tag: "Ping" }
+      | { readonly _tag: "Pong"; readonly at: number }
+      | { readonly _tag: "Left"; readonly id: string },
+      PresenceApi
+    >
+  >();
+
+  const feature = Contextual.create({
+    initialState: () => ({ count: 0 }),
+    reducer: { Ping: (_a, s) => s.state, Pong: (_a, s) => s.state },
+    render: () => null,
+    subscriptions: ({ props }) => ({
+      [`presence:${props.room}`]: Subscription.effect((dispatch) =>
+        Effect.andThen(presenceEffect, dispatch({ _tag: "Pong", at: 1 })),
+      ),
+    }),
+  });
+  expect(createRuntime(Layer.empty).component).type.not.toBeCallableWith(feature, {
+    name: "Presence",
+  });
+  expect(createRuntime(presenceLayer).component).type.toBeCallableWith(feature, {
+    name: "Presence",
+  });
+});
+
 // HINT: structurally, `Subscription`'s one variant *is* `Command`'s `Effect`
 // variant, so a `Subscription` would slide into a `Next` tuple unnoticed. Give
 // `Subscription` a nominal marker — a `unique symbol`-keyed phantom field on
