@@ -29,7 +29,8 @@ const { component } = createRuntime(live);
 const Room = component(presence, { name: "Presence" });
 
 // The room switcher is plain React state. A changed `roomId` reaches the
-// feature as `PropsChanged`, which rebooks the subscription.
+// feature as a new key from `subscriptions`, which stops the old room's
+// fiber and starts the new one — no lifecycle handler involved.
 const App = () => {
   const [roomId, setRoomId] = useState("general");
   return (
@@ -46,20 +47,6 @@ const App = () => {
 };
 
 createRoot(document.getElementById("root")!).render(<App />);
-
-// `run` sweeps nothing, so a source that never completes keeps it open. The
-// `Unmounted` handler's `cancel` is what ends this one. Open the console.
-const endless = Layer.succeed(PresenceApi)({ events: () => Stream.never });
-
-const stopped = await Effect.runPromise(
-  presence.run([{ _tag: "Mounted" }, { _tag: "Unmounted" }], {
-    props: { roomId: "general" },
-    hooks: {},
-    layer: endless,
-  }),
-);
-console.log(stopped.emitted);
-// => []
 
 // A finite stream completes on its own, so `run` resolves with no `Unmounted`.
 const twoEvents = Layer.succeed(PresenceApi)({
@@ -84,3 +71,19 @@ console.log(result.emitted);
 //      { _tag: "Changed", userId: "ada", online: true },
 //      { _tag: "Changed", userId: "grace", online: true },
 //    ]
+console.log(result.subscriptions);
+// => ["presence:general"]
+
+// An endless feed resolves too: a subscription counts for nothing toward
+// quiescence, unlike a command. `run` interrupts it before returning.
+const endless = Layer.succeed(PresenceApi)({ events: () => Stream.never });
+
+const stillResolves = await Effect.runPromise(
+  presence.run([{ _tag: "Mounted" }], {
+    props: { roomId: "general" },
+    hooks: {},
+    layer: endless,
+  }),
+);
+console.log(stillResolves.subscriptions);
+// => ["presence:general"]

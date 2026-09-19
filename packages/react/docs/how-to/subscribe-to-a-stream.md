@@ -1,6 +1,6 @@
 ---
 title: Subscribe to a stream
-description: Start a long-lived source on Mounted, rebook it on PropsChanged, cancel it on Unmounted.
+description: Declare a long-lived source as a subscription, keyed on what it depends on, with no lifecycle handlers to manage it by hand.
 order: 2
 example: presence-stream
 ---
@@ -9,15 +9,15 @@ example: presence-stream
 
 A websocket, a presence feed, an event source: one source that outlives every render and dispatches an action per element. In a component this is a `useEffect` with a cleanup function and a dependency array. The handler that folds each event into state lives in a closure the test cannot reach.
 
-In a feature the subscription is a command. Book it under a name on `Mounted`, rebook it on `PropsChanged`, cancel the name on `Unmounted`. The reducer folds every event, and `feature.run` tests the whole thing with a finite stream.
+In a feature the subscription is declared. The `subscriptions` hook on `create` returns the set of sources the current snapshot wants, keyed by string. The runtime starts a new key, stops a missing one, and leaves the rest alone. A room switch is a key change, and the runtime does the rest.
 
 ## Declare the source
 
 The source is a service, so a test can swap it for a finite stream.
 
 ```tsx
-import { Action, Command, define } from "@wych/react";
-import { Context, Effect, Layer, Schema, Stream } from "effect";
+import { Action, Subscription, define } from "@wych/react";
+import { Context, Effect, Schema, Stream } from "effect";
 
 class PresenceApi extends Context.Service<
   PresenceApi,
@@ -39,28 +39,9 @@ const Presence = define({
 
 One decision here: the stream's element type is the action's payload, so `Changed.make(event)` needs no mapping. Map inside the service when the wire format differs.
 
-## Wrap the stream in a keyed command
+## Declare the subscription
 
-`Stream.runForEach(source, dispatch)` inside `Command.effect` is the whole subscription. `Command.keyed` gives the fiber a name that `Command.cancel` can reach.
-
-```tsx continue
-const subscribe = (roomId: string) =>
-  Command.keyed(
-    "presence",
-    Command.effect<typeof Changed.Type, PresenceApi>((dispatch) =>
-      Effect.gen(function* () {
-        const api = yield* PresenceApi;
-        yield* Stream.runForEach(api.events(roomId), (event) => dispatch(Changed.make(event)));
-      }),
-    ),
-  );
-```
-
-Written outside a reducer handler, `Command.effect` loses the contextual action type and infers `never`. The type argument restores it. The [commands reference](/docs/reference/commands) covers the rest of that gotcha.
-
-## Start, rebook and cancel
-
-Three lifecycle handlers own the subscription. `Command.restart` is `cancel` then `keyed` under one name, which is what a changed `roomId` needs.
+`Subscription.effect((dispatch) => Effect<...>)` is the one constructor. `Stream.runForEach(source, dispatch)` inside it is the whole subscription, the same leaf `Command.effect` uses.
 
 ```tsx continue
 const presence = Presence.create({
@@ -70,13 +51,19 @@ const presence = Presence.create({
       ...state,
       online: online ? [...state.online, userId] : state.online.filter((id) => id !== userId),
     }),
-    Mounted: (_payload, { state, props }) => [state, subscribe(props.roomId)],
     PropsChanged: ({ previous }, { state, props }) =>
-      previous.roomId === props.roomId
-        ? state
-        : [{ ...state, online: [] }, Command.restart("presence", subscribe(props.roomId))],
-    Unmounted: (_payload, { state }) => [state, Command.cancel("presence")],
+      previous.roomId === props.roomId ? state : { ...state, online: [] },
   },
+  subscriptions: ({ props }) => ({
+    [`presence:${props.roomId}`]: Subscription.effect((dispatch) =>
+      Effect.gen(function* () {
+        const api = yield* PresenceApi;
+        yield* Stream.runForEach(api.events(props.roomId), (event) =>
+          dispatch(Changed.make(event)),
+        );
+      }),
+    ),
+  }),
   render: ({ state }) => (
     <ul>
       {state.online.map((userId) => (
@@ -87,37 +74,19 @@ const presence = Presence.create({
 });
 ```
 
-`PropsChanged` fires for any prop, so the handler compares `previous.roomId` with `props.roomId` and returns `state` when the room is the same. Resetting `online` to `[]` on a room change is the second decision: the new room's stream reports its own members, and the old list must not linger until they arrive.
+The key carries everything the effect depends on. `` `presence:${props.roomId}` `` is the identity: two folds that return the same key keep the same fiber, closure and all, even if a room switch would have built a different closure. A key of plain `"presence"` would never change on a room switch, so the runtime would keep the old room's fiber. Put every dependency in the key.
 
-`Unmounted` runs with the services still alive, and its returned state is discarded. Only the command survives, which is why the handler returns `state` unchanged.
+`Mounted` and `Unmounted` are gone from this feature. `PropsChanged` still resets `online` to `[]` on a room change, since the new room's feed reports its own members and the old list must not linger until they arrive. It returns `state` unchanged for any other prop change.
 
-### Why `Unmounted` cancels when unmount already sweeps
-
-Under a mount, teardown interrupts every fiber the feature has in flight before it runs the `Unmounted` command. React unmount does this, and so does `stop()` on a store you drive by hand. The `cancel` in the handler then finds nothing to cancel.
-
-`feature.run` sweeps nothing. It resolves only when nothing is queued and nothing is in flight, so a source that never completes keeps `run` open forever. Seeding `Unmounted` last ends the subscription because the handler says so.
-
-```tsx continue
-const endless = Layer.succeed(PresenceApi)({ events: () => Stream.never });
-
-const stopped = await Effect.runPromise(
-  presence.run([{ _tag: "Mounted" }, { _tag: "Unmounted" }], {
-    props: { roomId: "general" },
-    hooks: {},
-    layer: endless,
-  }),
-);
-console.log(stopped.emitted);
-// => []
-```
-
-Without the `Unmounted` handler this `run` never resolves. The handler is the feature's own statement of how it stops. It holds for every consumer: a React mount, a store driven by hand, `run`, and `reduce`, where the teardown is a `Cancel` command you can read as data. The [lifecycle reference](/docs/reference/lifecycle) shows that read.
+`dispatch` is typed by the feature's vocabulary and `PresenceApi` is read off the effect, with no type argument: the hook's slot supplies the contextual type, the same rule `Command.effect` follows in a handler. A `Subscription.effect` written outside the hook needs the type argument. See [Subscriptions](/docs/reference/subscriptions#contextual-typing) for the rule.
 
 ## Test it with a finite stream
 
-`feature.run` resolves once nothing is queued and nothing is in flight. A finite stream completes on its own, so the test needs no `Unmounted`.
+`feature.run` resolves at command quiescence: nothing queued, no command fiber in flight. Subscription fibers count for nothing, so a finite stream needs no `Unmounted` to make `run` resolve.
 
 ```tsx continue
+import { Layer } from "effect";
+
 const twoEvents = Layer.succeed(PresenceApi)({
   events: () =>
     Stream.fromArray([
@@ -133,14 +102,36 @@ const result = await Effect.runPromise(
     layer: twoEvents,
   }),
 );
-// => result.state: { online: ["ada", "grace"] }
-// => result.emitted: [
+console.log(result.state);
+// => { online: ["ada", "grace"] }
+console.log(result.emitted);
+// => [
 //      { _tag: "Changed", userId: "ada", online: true },
 //      { _tag: "Changed", userId: "grace", online: true },
 //    ]
+console.log(result.subscriptions);
+// => ["presence:general"]
 ```
 
-Seeded actions are folded but never appear in `emitted`. Everything a command dispatched does appear there, so `emitted` is the stream as the reducer saw it.
+Seeded actions are folded but never appear in `emitted`. `subscriptions` lists the keys declared when `run` resolved, in record order.
+
+An endless source resolves too, because a subscription never holds `run` open.
+
+```tsx continue
+const endless = Layer.succeed(PresenceApi)({ events: () => Stream.never });
+
+const stillResolves = await Effect.runPromise(
+  presence.run([{ _tag: "Mounted" }], {
+    props: { roomId: "general" },
+    hooks: {},
+    layer: endless,
+  }),
+);
+console.log(stillResolves.subscriptions);
+// => ["presence:general"]
+```
+
+`run` interrupts every subscription fiber before it returns, finalizers awaited. A command written with `Command.effect(() => Effect.never)` still keeps `run` open: that is what a command is. A long-lived source belongs in `subscriptions` instead.
 
 ## Mount it
 
@@ -159,4 +150,4 @@ const Room = component(presence, { name: "Presence" });
 createRoot(document.getElementById("root")!).render(<Room roomId="general" />);
 ```
 
-One group name per mount. Two `<Room>` elements are two mounts with two separate books, so `"presence"` in one never reaches the other.
+A room switch changes the key returned by `subscriptions`. The runtime stops the old room's fiber and starts the new one on the same render pass that carries the new prop, no lifecycle handler involved.

@@ -31,8 +31,11 @@ release. Add a tool name to select part of the graph. For example, run
 - pnpm + Vite+ monorepo. Packages live in `packages/*`; the library is
   `@wych/react` at `packages/react`. Root `package.json` is private.
 - Root `vite.config.ts` owns repo-wide `lint`/`fmt` and `defaultPackage`
-  (`./packages/react`), so bare `vp pack` / `vp build` target the library.
-  Each package's `vite.config.ts` owns its Vitest, pack, and run tasks.
+  (`./packages/react`), so bare `vp` commands run against the library.
+  Build it with `vp pack` (or `vpr build`, the package script). Bare
+  `vp build` is the Vite app build and fails with "Cannot resolve entry
+  module index.html". Each package's `vite.config.ts` owns its Vitest,
+  pack, and run tasks.
 - Run commands from the repo root. `vpr check` = `vp check && vpr -r test:types`;
   `vpr test` fans out with `-r`. Plain `vp check` is the built-in and skips the
   tstyche type tests.

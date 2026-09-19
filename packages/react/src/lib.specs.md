@@ -278,13 +278,13 @@ Added: (action, { state }) => [
   Command.effect(() => Effect.all([persist(next), track(action)])),
 ];
 
-// a long-lived subscription — the form `subscriptions.specs.md` replaces
-Mounted: (_action, { props, state }) => [
-  { ...state, connected: true },
-  Command.effect((dispatch) =>
+// a long-lived source: not a command — `subscriptions.specs.md` gives it its
+// own hook on `create`, keyed and diffed by the runtime
+subscriptions: ({ props }) => ({
+  [`presence:${props.roomId}`]: Subscription.effect((dispatch) =>
     Stream.runForEach(presenceEvents(props.roomId), (event) => dispatch(toAction(event))),
   ),
-];
+});
 ```
 
 ## Acceptance Criteria
@@ -347,7 +347,7 @@ landed with every box checked again.
 - [x] `Command.batch` members run in order, sharing the issuing action's context.
 - [x] Services a command requests (`R`) are satisfied from `options.layer`.
 - [x] `run` resolves only at quiescence: nothing queued, nothing in flight — including fibers that settle without emitting.
-- [x] **`run` does not terminate on a never-completing command**, and its test asserts that deliberately. Until the split in `subscriptions.specs.md` lands this is a limitation; after it, it is the definition of a command — work that finishes — and the never-completing effect belongs in a subscription. That spec inverts the test's subject and keeps this form as the control.
+- [x] **`run` does not terminate on a never-completing command**, and its test asserts that deliberately. Since the split in `subscriptions.specs.md` this is the definition of a command — work that finishes — and a never-completing effect belongs in a subscription, which `run` does not wait for. That spec inverted the test's subject and keeps this form as the control.
 - [x] A command that dies is recorded in `defects` — `{ from, error, handled }`, in the order observed — and `run` stays total: a defect never fails the returned Effect. Interruption is not a defect.
 - [x] When the feature has an `Error` handler, a dying command folds `Error` through it before `run` resolves, on the store's rule: a death inside the `Error` handler's own command is recorded with `handled: false` and not re-folded. The `Error` action is the runtime's own and is not `emitted`.
 
@@ -528,9 +528,8 @@ real browser. The runnable version is `docs/examples/search-debounce`.
   fiber in the group is **signalled before any is awaited**, so a slow or hung
   finalizer on one member no longer delays — or blocks forever — the interrupt
   signal to its siblings, and no member can keep emitting during another's
-  finalizer window. _The teardown sweep over command fibers is removed by
-  `subscriptions.specs.md`; the same `interruptAll` then covers subscription
-  fibers only._
+  finalizer window. The teardown sweep covers subscription fibers only, per
+  `subscriptions.specs.md`; command fibers finish.
 - The mount loop runs inside `Effect.scoped`, so the mount's own scope is
   ambient to command fibers: a command's `Effect.addFinalizer` lands on it and
   runs when the mount closes, before the feature layer is released.
@@ -566,15 +565,16 @@ real browser. The runnable version is `docs/examples/search-debounce`.
   it was tried and reverted: `component`'s defect sink throws to the error
   boundary, so it replaced a feature's recovery UI with a crash on exactly the
   failure its `Error` handler existed to handle.
-- Unmount interrupts in-flight work **before** running the `Unmounted` command.
-  Flush-on-exit therefore belongs in the `Unmounted` handler. _Today's
-  behaviour; open work #2 records the decision that replaces it — commands
-  finish, subscriptions stop — and `subscriptions.specs.md` owns the
-  criteria._
+- Unmount interrupts subscription fibers, runs the `Unmounted` command with
+  services alive, then drains: in-flight commands finish and what they emit
+  folds, the whole under the 5s bound. Flush-on-exit is the default;
+  kill-on-exit is `Command.cancel` from the `Unmounted` handler. Open work #2
+  records the decision; `subscriptions.specs.md` owns the criteria.
 - Teardown's `Unmounted` command is unkeyed, so it books under `"Unmounted"` in
-  the flat namespace. A user group named `"Unmounted"` cannot collide
-  observably: the teardown sweep interrupts every user fiber before that
-  command is interpreted.
+  the flat namespace. A user group named `"Unmounted"` shares that entry with
+  the teardown command and both drain to completion; the two only meet when
+  the `Unmounted` handler itself returns `Command.cancel("Unmounted")`, which
+  then interrupts the user's fibers as asked.
 - **`useFeature` inside `render` itself is wrong, and under nesting it is
   silently wrong.** `render` is a plain call in `Feature`'s body, so a hook in
   it is `Feature`'s hook, and `useContext` there reads the provider _above_
@@ -604,15 +604,14 @@ real browser. The runnable version is `docs/examples/search-debounce`.
   that hangs stalls all subsequent command processing for that feature.
   Finalizers are expected to be brief; the 5s teardown bound catches the
   unmount case, and nothing bounds the in-mount case today.
-- **`run` cannot terminate while a never-completing command is in flight.**
-  `Command.effect((d) => Effect.never)` pins the in-flight count exactly as
-  `Command.stream(Stream.never)` did, so the leaf change does not fix this.
-  The fix is the `Cmd`/`Sub` split, now specified in `subscriptions.specs.md`:
-  `run` resolves at _command_ quiescence, a subscription fiber counts for
-  nothing, and a command that never completes is a subscription written in
-  the wrong place. The test asserting today's behaviour is inverted there —
-  the subject moves to `Subscription.effect(() => Effect.never)`, the command
-  form stays as the control — rather than deleted.
+- **`run` resolves at _command_ quiescence, so a never-completing command
+  holds it open.** `Command.effect((d) => Effect.never)` pins the in-flight
+  count and `run` never resolves. This is the definition of a command since
+  the `Cmd`/`Sub` split (`subscriptions.specs.md`): a subscription fiber
+  counts for nothing, and a command that never completes is a subscription
+  written in the wrong place. The test asserts it as the control beside the
+  subscription subject. What `run` does not do for subscriptions — await an
+  asynchronous emission — is that spec's known limitation.
 - **An action a parent takes in response to a child's output is not attributable
   to that output.** An output leaves through a plain React callback into
   arbitrary user code, so the runtime cannot know what the parent did next. The
@@ -624,9 +623,8 @@ real browser. The runnable version is `docs/examples/search-debounce`.
 
 ## Open work
 
-Five items. Items 1, 3 and 4 are closed and kept for their cross-references;
-item 2 is decided in `subscriptions.specs.md` and waits on its code; item 5
-still needs a decision before it needs code. Items 4 and 5
+Five items. Items 1, 2, 3 and 4 are closed and kept for their
+cross-references; item 5 still needs a decision before it needs code. Items 4 and 5
 were found by the review of the command-leaf pass and **rejected for that
 pass**: both are byte-identical at the commit before it, so neither is a
 regression the leaf change introduced, and both needed a decision about
@@ -667,7 +665,7 @@ gained `from` in the same pass, so a handler can back off on `"Mounted"` and
 carry on for one bad command. Browser test: `lib.browser.test.tsx`, "a Retry
 from the `Error` handler rebuilds a failed layer".
 
-### 2. What unmount owes work already in flight — **decided**, specified in `subscriptions.specs.md`
+### 2. What unmount owes work already in flight — **closed**, by `subscriptions.specs.md`
 
 Teardown interrupts every in-flight fiber before interpreting the `Unmounted`
 command, unconditionally, so `start(); dispatch(Go); stop()` loses a 50ms effect
@@ -696,8 +694,10 @@ hold: the sweep over subscriptions is what terminates teardown, and the
 bound stays whole-teardown. What it costs is recorded there under Expected
 Behavior — a command finishing during a StrictMode remount folds into the
 remounted store, so `Mounted`'s command must fold idempotently — and under
-Known limitations. Done when that spec's "Store and teardown" boxes are
-checked; this item stays open until then.
+Known limitations. Closed: that spec's "Store and teardown" boxes are
+checked (`subscriptions.test.ts` part four; under React,
+`subscriptions.browser.test.tsx` "unmount stops the subscription and lets a
+pending command finish").
 
 ### 3. `RuntimeOptions.onEvent` is accepted and ignored — **closed**
 
@@ -810,12 +810,23 @@ effect but not whether the _comparison baseline_ moves with it, and the baseline
 advance is itself a render-phase mutation, so leaving it behind fixes nothing.
 It needs its own `/spec` pass rather than a box on this one.
 
+**Known limitation, inherited by subscriptions.** An emitting subscription
+during a suspending transition churns: `sync` folds the transition's props in
+the render body and the diff starts the new key, the subscription's first
+`dispatch` makes `useSyncExternalStore` force a synchronous re-render on the
+sync lane, and that render commits the props React was about to discard, so
+the key flips back and forth once per abandoned render. The browser case
+"a discarded render's subscription is stopped by the committed one" uses a
+non-emitting feed for that reason: with an emission the render is never
+discarded and the case has nothing to show. Bounded by the keys involved;
+fixed by this redesign, not before it.
+
 This supersedes old open item #5 ("the `useSyncExternalStore`-after-`sync`
 ordering has no discriminating test"), which the previous spec rewrite promoted
 into an acceptance criterion. The untested-ordering observation stands and is
 recorded there; the redesign it proposed is what is deferred here.
 
-### Subscriptions split from commands (`Cmd` / `Sub`) — **retired**, specified
+### Subscriptions split from commands (`Cmd` / `Sub`) — **retired**, landed
 
 Elm's runtime asks the feature for its subscriptions on every update and
 diffs them: a subscription is a _declaration_, and stopping one means no longer
@@ -829,7 +840,7 @@ guess (open work #2).
 
 Was deferred because it is a second ADT, a diffing step, and a second hook,
 and it should land against the `Effect` leaf rather than at the same time as
-it. The leaf landed; the split is now `subscriptions.specs.md`: a
+it. The leaf landed, then the split, as `subscriptions.specs.md`: a
 `Subscription` value with `Command.effect`'s leaf, a `subscriptions(snapshot)`
 hook on `create` returning a string-keyed record, a keys-only diff after every
 drain, `run` resolving at command quiescence, and the teardown order above.

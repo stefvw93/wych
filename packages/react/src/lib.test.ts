@@ -30,7 +30,7 @@ import {
   type DevtoolsSink,
 } from "./devtools";
 import { createElement, type ReactNode } from "react";
-import { Action, Children, Command, createFeatureStore, define, Next } from "./lib";
+import { Action, Children, Command, createFeatureStore, define, Next, Subscription } from "./lib";
 
 // ---------------------------------------------------------------------------
 // Vocabularies (Action, Action.output, Action.of)
@@ -1001,8 +1001,8 @@ describe("Feature internals slot", () => {
     render: () => null,
   });
 
-  it("keeps `reduce` and `run` as the only enumerable surface", () => {
-    expect(Object.keys(feature).sort()).toEqual(["reduce", "run"]);
+  it("keeps `reduce`, `run` and `subscriptions` as the only enumerable surface", () => {
+    expect(Object.keys(feature).sort()).toEqual(["reduce", "run", "subscriptions"]);
   });
 
   it("carries the pieces `component` needs behind a symbol key", () => {
@@ -1826,11 +1826,15 @@ describe("createFeatureStore — remount races (review regression)", () => {
 
     await Effect.runPromise(Effect.sleep("60 millis"));
 
-    // One completion, from the mount that survived. The first mount's command
-    // is interrupted by its own `stop`, which is correct — that mount ended.
-    // What matters is that the *second* mount's command is not the casualty,
-    // which is what happened when both mounts shared one queue.
-    expect(ran).toEqual(["loaded"]);
+    // Two completions, one per mount. Rewritten for `subscriptions.specs.md`:
+    // unmount no longer interrupts in-flight commands, so the first mount's
+    // `Mounted` command runs to completion during the second mount's life and
+    // folds into the shared store — which is why `Mounted`'s command must be
+    // idempotent (`Task.resolved(value)` replaces; an append does not). What
+    // this pins is that the *second* mount's command is not the casualty,
+    // which is what happened when both mounts shared one queue: before the
+    // fix this was `[]`, never `["loaded", "loaded"]`. Was `["loaded"]`.
+    expect(ran).toEqual(["loaded", "loaded"]);
   });
 
   it("runs teardown with the feature layer still alive", async () => {
@@ -2859,22 +2863,23 @@ describe("createFeatureStore — teardown drains to quiescence (review iteration
     store.stop();
     await Effect.runPromise(Effect.sleep("80 millis"));
 
-    // In-flight work is interrupted by unmount, which is the documented
-    // ownership rule — but the drain must still reach quiescence rather than
-    // hang, and must not report the interruption as a defect.
-    expect(ran).toEqual([]);
+    // Rewritten for `subscriptions.specs.md`: in-flight work is no longer
+    // interrupted by unmount. Commands finish, subscriptions stop, and the
+    // drain still reaches quiescence without reporting a defect. Was
+    // `expect(ran).toEqual([])`.
+    expect(ran).toEqual(["late-write"]);
   });
 
   it("terminates even with a never-completing command in flight", async () => {
-    // `run` cannot reach quiescence here — a known limitation. Teardown can,
-    // because unmount interrupts outstanding work before draining.
+    // Rewritten for `subscriptions.specs.md`: unmount no longer sweeps
+    // in-flight commands, so a never-completing one would hold teardown to
+    // the 5s bound and raise its defect. Kill-on-exit is the opt-in now —
+    // `Unmounted` cancels the group it does not want to wait for. Was a
+    // no-op `Unmounted` command.
     const { store, defects } = make({
       Go: (_a: unknown, s: any) => [s.state, Command.effect(() => Effect.never)],
       Flushed: (_a: unknown, s: any) => s.state,
-      Unmounted: (_a: unknown, s: any) => [
-        s.state,
-        Command.effect(() => Effect.sync(() => void 0)),
-      ],
+      Unmounted: (_a: unknown, s: any) => [s.state, Command.cancel("Go")],
     });
 
     store.start();
@@ -3581,19 +3586,28 @@ describe("Feature.run — the effect leaf", () => {
     expect(log).toContain("second:done");
   });
 
-  it("does not terminate while a never-completing command is in flight", async () => {
-    // Pins today's behaviour deliberately — the leaf change does not fix it.
-    // `Command.effect(() => Effect.never)` pins `inFlight` exactly as
-    // `Command.stream(Stream.never)` did, so quiescence is never reached. The
-    // fix is the deferred `Cmd`/`Sub` split; whoever lands it inverts this
-    // test rather than deleting it. The timeout is load-bearing: without it a
-    // plain `it` hangs the suite instead of failing it.
-    const runWith = (command: Command<never, never>) => {
+  it("terminates with a never-completing subscription in flight, and not with a never-completing command", async () => {
+    // Inverted for `subscriptions.specs.md`. `run` resolves at *command*
+    // quiescence: a subscription fiber counts for nothing, so the never-
+    // completing effect that used to pin `inFlight` now belongs in a
+    // subscription and `run` resolves. The command form stays as the control
+    // and still hangs — that is now the definition of a command, work that
+    // finishes, rather than a limitation. The timeout is load-bearing:
+    // without it a plain `it` hangs the suite instead of failing it.
+    const runWith = (parts: {
+      readonly command?: Command<never, never>;
+      readonly subscription?: Subscription<never, never>;
+    }) => {
       const Feature = define({ props: RunProps, state: RunState, action: Action.of([Bump]) });
       const feature = Feature.create({
         initialState: () => ({ count: 0 }),
-        reducer: { Bump: () => [{ count: 1 }, command] as const },
+        reducer: {
+          Bump: () =>
+            parts.command === undefined ? { count: 1 } : ([{ count: 1 }, parts.command] as const),
+        },
         render: () => null,
+        subscriptions: () =>
+          parts.subscription === undefined ? {} : { forever: parts.subscription },
       });
 
       return Effect.runPromise(
@@ -3603,13 +3617,16 @@ describe("Feature.run — the effect leaf", () => {
       );
     };
 
-    // Control first: the same harness on the same budget with an effect that
-    // completes. Without it the timeout assertion below passes for any reason
-    // at all, including a harness that never ran the feature.
-    expect(Option.isSome(await runWith(Command.effect(() => Effect.void)))).toBe(true);
+    // Control: a command that completes resolves.
+    expect(Option.isSome(await runWith({ command: Command.effect(() => Effect.void) }))).toBe(true);
 
-    // Subject: identical but for the effect, and it never settles.
-    expect(await runWith(Command.effect(() => Effect.never))).toEqual(Option.none());
+    // Subject: a subscription that never settles does not hold `run` open.
+    expect(
+      Option.isSome(await runWith({ subscription: Subscription.effect(() => Effect.never) })),
+    ).toBe(true);
+
+    // Control: a command that never settles still does — by definition now.
+    expect(await runWith({ command: Command.effect(() => Effect.never) })).toEqual(Option.none());
   });
 });
 

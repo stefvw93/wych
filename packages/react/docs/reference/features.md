@@ -7,8 +7,8 @@ order: 2
 # Features
 
 A feature is four schemas and three functions. `define` declares the four,
-`create` binds the three, and the result is a plain value with two methods:
-`reduce` and `run`.
+`create` binds the three, and the result is a plain value with three methods:
+`reduce`, `run` and `subscriptions`.
 
 Every snippet on this page builds on one feature: a note editor that holds
 draft text and announces a saved note.
@@ -110,7 +110,8 @@ FeatureDefinition {
   initialState(fn): (props) => State
   reducer(obj): Reducer
   render(fn): Render
-  create({ initialState, reducer, render }): Feature
+  subscriptions(fn): SubscriptionsHook
+  create({ initialState, reducer, render, subscriptions? }): Feature
 }
 ```
 
@@ -168,6 +169,14 @@ const outputHandler = NoteEditor.reducer({
 
 Lifecycle handlers are optional. They are listed in
 [Lifecycle](/docs/reference/lifecycle).
+
+### `subscriptions`
+
+`create` takes an optional fourth piece, `subscriptions`, for a long-lived
+source declared by key rather than started by a handler. It lives beside
+`reducer`, not inside it, and does not return a `Next`. See
+[Subscriptions](/docs/reference/subscriptions) for the hook, the key rule and
+the diff that starts and stops fibers.
 
 ## `Snapshot` and `RenderSnapshot`
 
@@ -289,6 +298,25 @@ console.log(Next.state(unhandled));
 // => { text: "draft", dirty: true }
 ```
 
+`feature.subscriptions(snapshot)` reads the same way: what a snapshot
+declares, as a record, without a mount.
+
+```ts continue
+console.log(
+  Object.keys(
+    noteEditor.subscriptions({
+      state: { text: "hi", dirty: true },
+      props: { noteId: "n_1", autosave: true },
+      hooks: {},
+    }),
+  ),
+);
+// => []
+```
+
+`noteEditor` has no `subscriptions` hook, so every snapshot declares `{}`. See
+[Subscriptions](/docs/reference/subscriptions) for a feature that does.
+
 ## `Feature.run`
 
 ```ts fragment
@@ -300,6 +328,7 @@ feature.run(
   emitted: ReadonlyArray<Action>;
   outputs: ReadonlyArray<Output>;
   defects: ReadonlyArray<RunDefect>;
+  subscriptions: ReadonlyArray<string>;
 }>
 ```
 
@@ -325,19 +354,26 @@ console.log(result.defects);
 // => []
 ```
 
-The four result fields differ:
+The five result fields differ:
 
 - `state`: the state after the last fold.
-- `emitted`: actions a command emitted. Seeded actions are folded and are
-  absent here.
+- `emitted`: actions a command or a subscription emitted. Seeded actions are
+  folded and are absent here.
 - `outputs`: messages whose tag is a declared output. An output is never
   folded.
-- `defects`: every command that died, in the order observed.
+- `defects`: every command or subscription that died, in the order observed.
+- `subscriptions`: the keys declared when `run` resolved, in record order.
 
-`run` resolves when nothing is queued and nothing is in flight. A fiber that
-settles without emitting counts as in flight until it settles. A command that
-never completes keeps `run` from resolving, so `run` never resolves for
-`Command.effect(() => Effect.never)`.
+`run` resolves at command quiescence: nothing queued, no command fiber in
+flight. A command that never completes keeps `run` from resolving, so `run`
+never resolves for `Command.effect(() => Effect.never)`. That is what a
+command is: work that finishes.
+
+A subscription fiber counts for nothing toward quiescence. A long-lived
+source belongs in `subscriptions`: `run` resolves with one in flight,
+interrupting it and recording its key in the result. See
+[Subscriptions](/docs/reference/subscriptions) for the diff, the key rule and
+how `run` treats a synchronous versus an asynchronous stub.
 
 For a feature with no services pass `layer: Layer.empty` and `hooks: {}`. See
 [Test a feature without React](/docs/how-to/test-a-feature-without-react).
@@ -352,12 +388,13 @@ interface RunDefect {
 }
 ```
 
-One command death observed by `run`, in the order it was seen. `from` is the
-tag of the action whose command died. `error` is the squashed cause: the
-thrown value, or what `Effect.die` was given. `handled` is whether the
-feature's `Error` handler folded it: `false` with no handler, or when the
-dying command was the `Error` handler's own. Interruption (`Command.cancel`,
-`Command.restart`) is how a command normally ends and is never a defect.
+One command or subscription death observed by `run`, in the order it was
+seen. `from` is the tag of the action whose command died, or the key of the
+subscription that died. `error` is the squashed cause: the thrown value, or
+what `Effect.die` was given. `handled` is whether the feature's `Error`
+handler folded it: `false` with no handler, or when the dying command was the
+`Error` handler's own. Interruption (`Command.cancel`, `Command.restart`, an
+undeclared subscription key) is how work normally ends and is never a defect.
 
 ```ts continue
 const Boomed = Action("Boomed", {});

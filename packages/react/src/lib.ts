@@ -328,9 +328,20 @@ export type ServicesOf<U> = {
 export type Dispatcher<A> = (action: A) => Effect.Effect<void>;
 
 /**
+ * The nominal marker that keeps a {@link Subscription} out of a `Next` tuple
+ * and a {@link Command} out of a subscriptions record. Structurally the one
+ * subscription variant *is* the command's `Effect` variant, so without it
+ * either would slide into the other's slot unnoticed. A subscription carries
+ * the key; a command forbids it.
+ */
+const subscription: unique symbol = Symbol("@wych/subscription");
+
+/**
  * The async work a state change kicks off.
  */
-export type Command<A, R = never> = Pipeable.Pipeable &
+export type Command<A, R = never> = Pipeable.Pipeable & {
+  readonly [subscription]?: never;
+} &
   /** Explicit no-op, for when a bare `state` return reads worse. */
   (
     | { readonly _tag: "None" }
@@ -472,6 +483,79 @@ export const Command: {
     ) as any,
 };
 
+// ---------------------------------------------------------------------------
+// Subscriptions
+// ---------------------------------------------------------------------------
+
+/**
+ * A long-lived source, *declared* rather than issued: the feature's
+ * `subscriptions` hook returns the set it wants for the current snapshot, and
+ * the runtime diffs that set by key against what is running — starts the new
+ * keys, stops the missing ones, leaves the rest alone. Stopping one means no
+ * longer declaring it.
+ *
+ * One variant, and it is `Command.effect`'s leaf: everything Effect can
+ * express is left to Effect — `Stream.runForEach` for a stream,
+ * `Effect.acquireRelease` then `Effect.never` for a listener,
+ * `Effect.retry(Schedule.exponential(…))` for reconnect. The error channel is
+ * `never` on the same terms as a command's; what still dies is a defect, and
+ * the runtime does not restart it.
+ *
+ * The record key is the whole identity. Two values under one key across two
+ * folds are the same subscription, closures and all — so anything the effect
+ * depends on belongs in the key: `` `presence:${props.roomId}` ``, not
+ * `presence`.
+ */
+export type Subscription<A, R = never> = Pipeable.Pipeable & {
+  readonly [subscription]: true;
+  readonly _tag: "Effect";
+  readonly effect: (dispatch: Dispatcher<A>) => Effect.Effect<unknown, never, R>;
+};
+
+/**
+ * What the `subscriptions` hook returns: own keys only, in the order the
+ * runtime starts them. A key whose value is `undefined` is not declared — so
+ * `{ feed: online ? sub : undefined }` and `online ? { feed: sub } : {}` both
+ * type-check and both mean the same thing.
+ */
+export type Subscriptions<A, R = never> = Readonly<Record<string, Subscription<A, R> | undefined>>;
+
+/**
+ * The hook itself — the pure read from a settled snapshot to the set of
+ * subscriptions that snapshot wants. Called after every fold that moved
+ * state or ambient inputs, so it should be cheap.
+ */
+export type SubscriptionsHook<Props, State, H extends AnyHooks, A, R = never> = (
+  snapshot: Snapshot<Props, State, H>,
+) => Subscriptions<A, R>;
+
+/**
+ * The one constructor. `dispatch` is how the subscription emits — actions
+ * fold, outputs leave through `on<Tag>` — exactly as a command's leaf.
+ */
+export const Subscription: {
+  readonly effect: <A = never, R = never>(
+    effect: (dispatch: Dispatcher<A>) => Effect.Effect<unknown, never, R>,
+  ) => Subscription<A, R>;
+} = {
+  effect: (effect) => pipeable({ [subscription]: true as const, _tag: "Effect", effect }),
+};
+
+/** The frozen empty set, for a feature that declared no hook. */
+const NO_SUBSCRIPTIONS: Subscriptions<never, never> = Object.freeze({});
+
+/** The keys a record declares: own keys, record order, `undefined` values skipped. */
+const declaredKeys = (subscriptions: Subscriptions<any, any>): Array<string> =>
+  Object.keys(subscriptions).filter((key) => subscriptions[key] !== undefined);
+
+/**
+ * The second book a mount (or a `run`) keeps beside its fiber book: one fiber
+ * per declared key. A fiber that completed or died stays booked until its key
+ * leaves the declared set, so a declared key that is done is unchanged, not
+ * restarted. Never counted in `inFlight`.
+ */
+type SubscriptionBook = Map<string, Fiber.Fiber<void>>;
+
 /**
  * Attribution for a command's fibers. `tag` is the issuing action's, filled by
  * the runtime; `key` is whatever a `Keyed` node named it. The booking address
@@ -495,9 +579,6 @@ type FiberBook = {
 };
 
 const fiberBook = (): FiberBook => ({ groups: new Map(), inFlight: 0 });
-
-const allFibers = (book: FiberBook): Array<Fiber.Fiber<void>> =>
-  [...book.groups.values()].flatMap((set) => [...set]);
 
 /**
  * The command interpreter, shared by `Feature.run` and `createFeatureStore`.
@@ -742,8 +823,10 @@ export type LifecycleAction<Props, H extends AnyHooks> =
       /**
        * Where the defect came from: the tag of the action whose command died
        * or whose handler threw, or `"Mounted"` for a feature layer that failed
-       * to build, or `"Unmounted"` for a teardown that threw or overran. Lets
-       * a handler tell an infrastructure failure from one bad command.
+       * to build, or `"Unmounted"` for a teardown that threw or overran, or
+       * the key of a subscription that died. Lets a handler tell an
+       * infrastructure failure from one bad command. Two namespaces in one
+       * string, accepted: a devtools sink sees the cause, the action does not.
        */
       readonly from: string;
     }
@@ -802,12 +885,22 @@ export type StatePart<N> = N extends readonly [infer S, unknown] ? S : N;
 
 export type Excess<N, State> = N extends unknown ? Exclude<keyof StatePart<N>, keyof State> : never;
 
-export type Exhaustive<U, State> = {
-  readonly [K in keyof U]: U[K] extends (...args: never) => infer N
-    ? [Excess<N, State>] extends [never]
-      ? unknown
-      : `state has no property ${Excess<N, State> & string}`
-    : unknown;
+/**
+ * Two guards `Reducer`'s constraint cannot express, both surfaced as an error
+ * string on the offending key: a handler whose returned state has a property
+ * `State` does not, and a key that is neither an action tag nor a lifecycle
+ * tag — excess-property checking never sees `U`, since it is inferred from the
+ * literal, so `subscriptions: () => …` under `reducer` would otherwise
+ * compile as an ignored handler.
+ */
+export type Exhaustive<U, State, Allowed extends string = string> = {
+  readonly [K in keyof U]: K extends Allowed
+    ? U[K] extends (...args: never) => infer N
+      ? [Excess<N, State>] extends [never]
+        ? unknown
+        : `state has no property ${Excess<N, State> & string}`
+      : unknown
+    : `not a handler: "${K & string}" is neither an action tag nor a lifecycle tag`;
 };
 
 /**
@@ -841,6 +934,12 @@ export interface FeatureInternals<Props, State, Action, H extends AnyHooks> {
   readonly initialState: (props: Props) => State;
   readonly render: Render<Props, State, Action, H>;
   readonly useUnsafeHooks: HookSpec<Props, State, H> | undefined;
+
+  /**
+   * Whether the feature declared a `subscriptions` hook. The store checks it
+   * once and, when `false`, never evaluates a diff.
+   */
+  readonly subscribes: boolean;
 
   /**
    * The props schema on its `Type` side alone. Props are **validated, never
@@ -882,6 +981,13 @@ export interface Feature<in Props, State, Action, Output, H extends AnyHooks = {
   ) => Next<State, Action | Output, R>;
 
   /**
+   * The subscriptions hook as one pure function: what this snapshot declares,
+   * as a record, `{}` for a feature with no hook. "Which keys does this state
+   * want" is then a test with no runtime, on the same terms as `reduce`.
+   */
+  readonly subscriptions: SubscriptionsHook<Props, State, H, Action | Output, R>;
+
+  /**
    * Fold a sequence, run each command against `layer`, feed what it emits back
    * in, and report what left.
    *
@@ -890,6 +996,16 @@ export interface Feature<in Props, State, Action, Output, H extends AnyHooks = {
    * a failing command, this feature recovers" is a `state` assertion, and
    * "this command failed" is a `defects` assertion. `run` stays total either
    * way: a defect never fails the returned Effect.
+   *
+   * Resolves at *command* quiescence: nothing queued and no command fiber in
+   * flight. The hook is evaluated after each reduced action and its diff
+   * applied on the store's rules, so a subscription over a synchronous stub
+   * (`Stream.fromArray`) has emitted before the next action is reduced; a
+   * subscription that never completes holds nothing open. At resolve the
+   * declared keys are reported in `subscriptions` and every subscription
+   * fiber is interrupted, finalizers awaited. A source that emits on a timer
+   * loses its late emission with that interrupt — drive `createFeatureStore`
+   * by hand for timing claims.
    */
   readonly run: (
     actions: Iterable<Action | LifecycleAction<Props, H>>,
@@ -903,16 +1019,21 @@ export interface Feature<in Props, State, Action, Output, H extends AnyHooks = {
     readonly emitted: ReadonlyArray<Action>;
     readonly outputs: ReadonlyArray<Output>;
     readonly defects: ReadonlyArray<RunDefect>;
+    /** The keys declared when `run` resolved, in record order. */
+    readonly subscriptions: ReadonlyArray<string>;
   }>;
 }
 
 /**
- * One command death observed by `Feature.run`, in the order it was seen.
- * Interruption (`Cancel`, `restart`) is how commands normally end and is not
- * a defect.
+ * One command or subscription death observed by `Feature.run`, in the order
+ * it was seen. Interruption (`Cancel`, `restart`, an undeclared key) is how
+ * work normally ends and is not a defect.
  */
 export interface RunDefect {
-  /** The tag of the action whose command died. */
+  /**
+   * The tag of the action whose command died or whose hook evaluation threw,
+   * or the key of the subscription that died.
+   */
   readonly from: string;
   /** The squashed cause: the thrown value, or what `Effect.die` was given. */
   readonly error: unknown;
@@ -929,12 +1050,12 @@ export interface RunDefect {
 // ---------------------------------------------------------------------------
 
 /**
- * What `define` hands back: the four pieces of a feature, each already bound
- * to this feature's `Props`, `State`, vocabularies and hooks.
+ * What `define` hands back: the pieces of a feature, each already bound to
+ * this feature's `Props`, `State`, vocabularies and hooks.
  *
- * `initialState`, `reducer` and `render` are identity functions at runtime.
- * They exist only to *supply* those types, which is what makes a piece
- * writable on its own.
+ * `initialState`, `reducer`, `render` and `subscriptions` are identity
+ * functions at runtime. They exist only to *supply* those types, which is
+ * what makes a piece writable on its own.
  */
 export interface FeatureDefinition<
   Props,
@@ -946,8 +1067,17 @@ export interface FeatureDefinition<
   readonly initialState: (initialState: (props: Props) => State) => (props: Props) => State;
 
   readonly reducer: <U extends Reducer<Props, State, A, O, H, any>>(
-    reducer: U & Exhaustive<U, State>,
+    reducer: U & Exhaustive<U, State, TagsOf<A> | LifecycleTag>,
   ) => U;
+
+  /**
+   * The subscriptions hook, typed: `dispatch` inside each leaf carries the
+   * feature's vocabulary, `snapshot` is the feature's `Snapshot`, and `R` is
+   * read off the record's values.
+   */
+  readonly subscriptions: <R = never>(
+    subscriptions: SubscriptionsHook<Props, State, H, Emit<A, O>, R>,
+  ) => SubscriptionsHook<Props, State, H, Emit<A, O>, R>;
 
   /**
    * `render`'s dispatch carries the outbound vocabulary too: the store routes
@@ -959,11 +1089,21 @@ export interface FeatureDefinition<
     render: Render<Props, State, Emit<A, O>, H>,
   ) => Render<Props, State, Emit<A, O>, H>;
 
-  readonly create: <U extends Reducer<Props, State, A, O, H, any>>(parts: {
+  /**
+   * Build the feature. `subscriptions` is optional, and absent means nothing
+   * runs and nothing is paid: the store never evaluates a diff. The
+   * parameter's type is what gives each leaf's `dispatch` its contextual
+   * type — as `U extends Reducer<…>` does for `Command.effect` — so written
+   * standalone a subscription needs the type argument. `SR` is inferred from
+   * the record's values and unioned into the feature's `R`, so a service a
+   * subscription needs is a compile error at `component`.
+   */
+  readonly create: <U extends Reducer<Props, State, A, O, H, any>, SR = never>(parts: {
     readonly initialState: (props: Props) => State;
-    readonly reducer: U & Exhaustive<U, State>;
+    readonly reducer: U & Exhaustive<U, State, TagsOf<A> | LifecycleTag>;
     readonly render: Render<Props, State, Emit<A, O>, H>;
-  }) => Feature<Props, State, MemberOf<A>, MemberOf<O>, H, ServicesOf<U>>;
+    readonly subscriptions?: SubscriptionsHook<Props, State, H, Emit<A, O>, SR>;
+  }) => Feature<Props, State, MemberOf<A>, MemberOf<O>, H, ServicesOf<U> | SR>;
 }
 
 /**
@@ -1012,9 +1152,12 @@ export const define: <
     initialState: (initialState) => (props) => initialState(props),
     reducer: identity,
     render: identity,
+    subscriptions: identity,
     create: (parts) => {
       const outputTags = spec.output ? Object.keys(spec.output.cases) : [];
       const outputTagSet = new Set(outputTags);
+      const subscriptions: SubscriptionsHook<any, any, any, any, any> =
+        parts.subscriptions ?? (() => NO_SUBSCRIPTIONS);
 
       /**
        * A missing handler is the documented no-op only for a *lifecycle* tag —
@@ -1052,6 +1195,7 @@ export const define: <
           initialState: parts.initialState,
           render: parts.render,
           useUnsafeHooks: spec.useUnsafeHooks,
+          subscribes: parts.subscriptions !== undefined,
           props: Schema.toType(spec.props as AnyPropsSchema),
           outputTags,
           opaqueProps: opaqueProps(spec.props),
@@ -1060,16 +1204,23 @@ export const define: <
 
         reduce,
 
+        subscriptions,
+
         run: (actions, options) =>
           discharge(
             Effect.gen(function* () {
               type Entry = {
                 readonly msg: { readonly _tag: string; readonly [key: string]: unknown };
-                readonly origin: "seed" | "command" | "settled" | "runtime";
+                readonly origin: "seed" | "command" | "subscription" | "settled" | "runtime";
               };
 
               const queue = yield* Queue.unbounded<Entry>();
               const book = fiberBook();
+              // The second book. Never counted in `inFlight`, so a subscription
+              // that never completes holds nothing open — that is the whole
+              // point of the split.
+              const running: SubscriptionBook = new Map();
+              let declared: ReadonlyArray<string> = [];
               const emitted: { _tag: string }[] = [];
               const outputs: { _tag: string }[] = [];
               const defects: RunDefect[] = [];
@@ -1083,6 +1234,19 @@ export const define: <
 
               const isOutput = (action: { _tag: string }): boolean => outputTagSet.has(action._tag);
 
+              // The store's rule, minus the sink and the boundary: record the
+              // death, and fold `Error` when the feature handles it. `"runtime"`
+              // origin: the action is the runtime's own, so it is not `emitted`.
+              const raise = (error: unknown, from: string): Effect.Effect<void> => {
+                const handled = from !== "Error" && handlesError;
+                defects.push({ from, error, handled });
+                if (!handled) return Effect.void;
+                return Queue.offer(queue, {
+                  msg: { _tag: "Error", error, cause: Cause.die(error), from },
+                  origin: "runtime",
+                }).pipe(Effect.asVoid);
+              };
+
               const { interpret } = commandInterpreter({
                 book,
                 emit: (msg) => Queue.offer(queue, { msg, origin: "command" }).pipe(Effect.asVoid),
@@ -1094,26 +1258,78 @@ export const define: <
                   msg: { _tag: "__settled__" },
                   origin: "settled",
                 }).pipe(Effect.asVoid),
-                // The store's rule, minus the sink and the boundary: record
-                // the death, and fold `Error` when the feature handles it.
                 // The fold is queued before `settled` and while the fiber is
                 // still booked, so the drain loop cannot reach quiescence
-                // between the death and its `Error` fold. `"runtime"` origin:
-                // the action is the runtime's own, so it is not `emitted`.
-                onExit: (exit, ctx) => {
-                  if (!Exit.isFailure(exit) || Cause.hasInterruptsOnly(exit.cause)) {
-                    return Effect.void;
-                  }
-                  const error = Cause.squash(exit.cause);
-                  const handled = ctx.tag !== "Error" && handlesError;
-                  defects.push({ from: ctx.tag, error, handled });
-                  if (!handled) return Effect.void;
-                  return Queue.offer(queue, {
-                    msg: { _tag: "Error", error, cause: Cause.die(error), from: ctx.tag },
-                    origin: "runtime",
-                  }).pipe(Effect.asVoid);
-                },
+                // between the death and its `Error` fold.
+                onExit: (exit, ctx) =>
+                  !Exit.isFailure(exit) || Cause.hasInterruptsOnly(exit.cause)
+                    ? Effect.void
+                    : raise(Cause.squash(exit.cause), ctx.tag),
               });
+
+              // One fork per key. The exit is observed inside the fiber's own
+              // body (`onExit`), not by a watcher on `Fiber.await`: nothing
+              // counts a subscription as in flight, so a death has to queue its
+              // `Error` before the fiber completes, or the drain loop reaches
+              // quiescence between the two. A fiber interrupted before it
+              // starts never runs the body, and has nothing to report. The
+              // body starts on the scheduler, never inside `forkChild`, so
+              // `fiber` is booked before the closure can read it; the guard
+              // keeps a fiber that died as its key was being stopped from
+              // reporting after its stop.
+              const fork = (key: string, sub: Subscription<any, any>) =>
+                Effect.gen(function* () {
+                  const fiber: Fiber.Fiber<void> = yield* Effect.forkChild(
+                    Effect.suspend(() =>
+                      sub.effect((msg) =>
+                        Queue.offer(queue, { msg, origin: "subscription" }).pipe(Effect.asVoid),
+                      ),
+                    ).pipe(
+                      Effect.asVoid,
+                      Effect.onExit((exit) =>
+                        running.get(key) !== fiber ||
+                        !Exit.isFailure(exit) ||
+                        Cause.hasInterruptsOnly(exit.cause)
+                          ? Effect.void
+                          : raise(Cause.squash(exit.cause), key),
+                      ),
+                    ),
+                  );
+                  running.set(key, fiber);
+                });
+
+              const stopAll = (keys: ReadonlyArray<string>) =>
+                Effect.gen(function* () {
+                  const fibers: Array<Fiber.Fiber<void>> = [];
+                  for (const key of keys) {
+                    const fiber = running.get(key);
+                    if (fiber === undefined) continue;
+                    running.delete(key);
+                    fibers.push(fiber);
+                  }
+                  // Awaited, so a stopped subscription's finalizer has run and
+                  // its last emission cannot land after its key is gone.
+                  yield* Fiber.interruptAll(fibers);
+                });
+
+              // The diff, on the store's rules: keys only, stops before starts,
+              // a key still in the book — running, done or died — is unchanged.
+              const reconcile = (from: string) =>
+                Effect.gen(function* () {
+                  let next: Subscriptions<any, any>;
+                  try {
+                    next = subscriptions({ ...snapshot, state });
+                  } catch (error) {
+                    return yield* raise(error, from);
+                  }
+                  const keys = declaredKeys(next);
+                  const wanted = new Set(keys);
+                  yield* stopAll(declared.filter((key) => !wanted.has(key)));
+                  for (const key of keys) {
+                    if (!running.has(key)) yield* fork(key, next[key]!);
+                  }
+                  declared = keys;
+                });
 
               // Drain until quiescent: nothing queued and nothing running. The
               // two reads are synchronous back to back, so no fiber can settle
@@ -1125,21 +1341,38 @@ export const define: <
                   outputs.push(entry.msg);
                   continue;
                 }
-                if (entry.origin === "command") emitted.push(entry.msg);
+                if (entry.origin === "command" || entry.origin === "subscription") {
+                  emitted.push(entry.msg);
+                }
 
                 const next = reduce(entry.msg, { ...snapshot, state });
                 const command = Next.command(next);
                 state = Next.state(next);
                 if (command) yield* interpret(command, { tag: entry.msg._tag });
+                // `Unmounted` empties the declared set, as `stop()` does on the
+                // store; every other action re-evaluates the hook.
+                if (entry.msg._tag === "Unmounted") {
+                  yield* stopAll(declared);
+                  declared = [];
+                } else if (parts.subscriptions !== undefined) {
+                  yield* reconcile(entry.msg._tag);
+                }
                 // Let the fibers this action forked run to their first
                 // suspension before the next action is reduced. Seeded actions
                 // then behave like dispatches separated by an event-loop turn:
                 // a `restart` from the second seed interrupts a request the
                 // first seed already sent, rather than one that never started.
+                // A subscription over a synchronous stub emits here too.
                 yield* Effect.yieldNow;
               }
 
-              return { state, emitted, outputs, defects };
+              // The report is the declared set at resolve; then nothing leaks
+              // past the returned Effect — awaited, so a finalizer inside a
+              // subscription has run by the time the caller reads the result.
+              const subscriptionKeys = declared;
+              yield* stopAll(declared);
+
+              return { state, emitted, outputs, defects, subscriptions: subscriptionKeys };
             }).pipe(Effect.provide(options.layer)),
           ),
       };
@@ -1251,7 +1484,13 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
   readonly instance?: string;
 }): FeatureStore<Props, State, Action, H> => {
   const { feature, equivalence, runtime, layer, emit, defect } = args;
-  const { initialState, outputTags, opaqueProps: opaqueFields, handles } = feature[internals];
+  const {
+    initialState,
+    outputTags,
+    opaqueProps: opaqueFields,
+    handles,
+    subscribes,
+  } = feature[internals];
 
   const name = args.name ?? "WychFeature";
   const instance = args.instance ?? String(++instanceCount);
@@ -1295,14 +1534,43 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
   type Work =
     | { readonly _tag: "Run"; readonly command: Command<any, any>; readonly ctx: CommandContext }
     | { readonly _tag: "Teardown"; readonly command: Command<any, any> | undefined }
-    | { readonly _tag: "Settled" };
+    | { readonly _tag: "Settled" }
+    /**
+     * One diff of the declared set, computed in the fold and interpreted on
+     * the mount fiber — the fork needs the mount's scope and services. Stops
+     * first, awaited, then starts in record order.
+     */
+    | {
+        readonly _tag: "Subscriptions";
+        readonly stop: ReadonlyArray<string>;
+        readonly start: ReadonlyArray<readonly [string, Subscription<any, any>]>;
+      };
 
   type Mount = {
     readonly queue: Queue.Queue<Work>;
     readonly book: FiberBook;
+    /** The second book: subscription fibers, never counted in `inFlight`. */
+    readonly subscriptions: SubscriptionBook;
   };
 
   let mount: Mount | undefined;
+
+  /**
+   * The keys the last diff declared — the set the next diff is computed
+   * against. Kept on the store rather than read off the mount's book: two
+   * back-to-back dispatches fold before the mount fiber has interpreted the
+   * first's `Subscriptions` item, so the book is stale at the second diff.
+   * Cleared by `stop()` and when the mount dies.
+   */
+  let declared: ReadonlySet<string> = new Set();
+
+  /**
+   * Set by `start()` so the drain that folds `Mounted` reconciles whether or
+   * not `Mounted` moved state. A re-arm calls `start()` from inside a fold,
+   * where its `Mounted` is queued rather than folded, so the flag has to
+   * outlive the call.
+   */
+  let dirty = false;
 
   const buffered: Array<Work> = [];
   const subscribers = new Set<() => void>();
@@ -1453,9 +1721,11 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
 
     folding = true;
     let moved = false;
+    let last = pending[pending.length - 1]!;
     try {
       while (pending.length > 0) {
         const next = pending.shift()!;
+        last = next;
         try {
           if (foldOne(next.action, next.cause, next.target)) moved = true;
         } catch (error) {
@@ -1465,8 +1735,78 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
     } finally {
       folding = false;
       if (moved && !syncing) for (const subscriber of subscribers) subscriber();
+      // Once per drain, against the settled state, outside the `folding`
+      // guard: the hook is pure and `reconcile` offers rather than folds. A
+      // `sync` reconciles itself, once, after its own folds.
+      if ((moved || dirty) && !syncing) {
+        dirty = false;
+        reconcile(last.action._tag, last.cause);
+      }
     }
   };
+
+  /**
+   * Evaluate the hook against the current snapshot and diff its keys against
+   * `declared`: start `declared ∖ running`, stop `running ∖ declared`, leave
+   * the rest alone. Only while a mount is live. The events are reported here,
+   * synchronously, before any fiber runs; the work goes to the mount fiber.
+   * A throwing hook is a defect `from` the action whose fold triggered the
+   * diff, and the previous set stands.
+   */
+  function reconcile(from: string, cause: DevtoolsCause): void {
+    if (!subscribes) return;
+    const cells = mount;
+
+    // A dead mount re-arms on demand, on `offer`'s rule: a dispatch whose
+    // fold declares a key is work a dispatch produced, as much as a command
+    // is. `start()` folds `Mounted` and reconciles from scratch against the
+    // rebuilt layer, so nothing is diffed here. Lifecycle-, command- and
+    // defect-caused folds never re-arm, for the reasons `offer` gives.
+    if (cells === undefined || !active) {
+      if (dead && !active && cause._tag === "Dispatch" && declares(from, cause)) start();
+      return;
+    }
+
+    let next: Subscriptions<any, any>;
+    try {
+      next = feature.subscriptions(snapshot());
+    } catch (error) {
+      raiseDefect(error, from, cause, cells);
+      return;
+    }
+
+    const keys = declaredKeys(next);
+    const wanted = new Set(keys);
+    const stopping: Array<string> = [];
+    for (const key of declared) if (!wanted.has(key)) stopping.push(key);
+    const starting: Array<readonly [string, Subscription<any, any>]> = [];
+    for (const key of keys) if (!declared.has(key)) starting.push([key, next[key]!]);
+
+    declared = wanted;
+    if (stopping.length === 0 && starting.length === 0) return;
+
+    const target = devtools();
+    if (target !== undefined) {
+      for (const key of stopping) {
+        report({ _tag: "SubscriptionStopped", name, instance, cause, key, reason: "Undeclared" });
+      }
+      for (const [key] of starting) {
+        report({ _tag: "SubscriptionStarted", name, instance, cause, key });
+      }
+    }
+
+    Queue.offerUnsafe(cells.queue, { _tag: "Subscriptions", stop: stopping, start: starting });
+  }
+
+  /** Whether the current snapshot declares any key. A throwing hook is a defect, as at a diff. */
+  function declares(from: string, cause: DevtoolsCause): boolean {
+    try {
+      return declaredKeys(feature.subscriptions(snapshot())).length > 0;
+    } catch (error) {
+      raiseDefect(error, from, cause);
+      return false;
+    }
+  }
 
   function raiseDefect(error: unknown, from: string, cause: DevtoolsCause, target?: Mount): void {
     const handled = from !== "Error" && handles("Error");
@@ -1515,11 +1855,84 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
         }),
     });
 
-    // Interrupt in-flight work, run the `Unmounted` command with services still
-    // alive, then drain to quiescence so nothing that command started is lost.
+    /**
+     * Interrupt the named subscriptions, awaited — so a stopped subscription's
+     * finalizer has run and its last `dispatch` cannot land after its
+     * `SubscriptionStopped` — and unbook them.
+     */
+    const stopSubscriptions = (keys: Iterable<string>) =>
+      Effect.suspend(() => {
+        const fibers: Array<Fiber.Fiber<void>> = [];
+        for (const key of keys) {
+          const fiber = cells.subscriptions.get(key);
+          if (fiber === undefined) continue;
+          cells.subscriptions.delete(key);
+          fibers.push(fiber);
+        }
+        return Fiber.interruptAll(fibers);
+      });
+
+    /**
+     * `forkLeaf` minus the `inFlight` increment and the group booking. The
+     * exit is observed inside the body (`onExit`) rather than by a watcher: a
+     * fiber interrupted before it starts never runs the body, and an
+     * interruption is exactly the case with nothing to report. `dispatch`
+     * folds into the mount that forked it, as a command's does.
+     */
+    const forkSubscription = (key: string, sub: Subscription<any, any>) =>
+      Effect.gen(function* () {
+        const cause: DevtoolsCause = { _tag: "Subscription", key };
+        const fiber: Fiber.Fiber<void> = yield* Effect.forkChild(
+          Effect.suspend(() =>
+            sub.effect((action) => Effect.sync(() => fold(action, cause, cells))),
+          ).pipe(
+            Effect.asVoid,
+            Effect.onExit((exit) =>
+              Effect.sync(() => {
+                // A fiber that ended as its key was being stopped has been
+                // reported `Undeclared` or `Unmounted` already.
+                if (cells.subscriptions.get(key) !== fiber) return;
+                if (Exit.isFailure(exit)) {
+                  if (Cause.hasInterruptsOnly(exit.cause)) return;
+                  raiseDefect(Cause.squash(exit.cause), key, cause, cells);
+                  const target = devtools();
+                  if (target !== undefined) {
+                    report({
+                      _tag: "SubscriptionStopped",
+                      name,
+                      instance,
+                      cause,
+                      key,
+                      reason: "Died",
+                    });
+                  }
+                  return;
+                }
+                const target = devtools();
+                if (target !== undefined) {
+                  report({
+                    _tag: "SubscriptionStopped",
+                    name,
+                    instance,
+                    cause,
+                    key,
+                    reason: "Completed",
+                  });
+                }
+              }),
+            ),
+          ),
+        );
+        cells.subscriptions.set(key, fiber);
+      });
+
+    // Stop the subscriptions, run the `Unmounted` command with services still
+    // alive, then drain to quiescence: in-flight commands finish, and what
+    // they emit folds. Nothing starts during a teardown, so a `Subscriptions`
+    // item met in the drain is dropped.
     const teardown = (command: Command<any, any> | undefined) =>
       Effect.gen(function* () {
-        yield* Fiber.interruptAll(allFibers(cells.book));
+        yield* stopSubscriptions([...cells.subscriptions.keys()]);
 
         if (command !== undefined) {
           yield* interpret(command, { tag: "Unmounted" });
@@ -1534,6 +1947,12 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
     const loop = Effect.gen(function* () {
       while (true) {
         const work = yield* Queue.take(cells.queue);
+
+        if (work._tag === "Subscriptions") {
+          yield* stopSubscriptions(work.stop);
+          for (const [key, sub] of work.start) yield* forkSubscription(key, sub);
+          continue;
+        }
 
         if (work._tag === "Teardown") {
           yield* teardown(work.command).pipe(
@@ -1573,6 +1992,9 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
           if (Cause.hasInterruptsOnly(cause)) return;
           release();
           dead = true;
+          // The subscriptions were children of the scope that just closed; a
+          // re-arm through `start()` evaluates from scratch.
+          declared = new Set();
           raiseDefect(Cause.squash(cause), "Mounted", LIFECYCLE);
         }),
       ),
@@ -1592,12 +2014,16 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
     const cells: Mount = {
       queue: Effect.runSync(Queue.unbounded<Work>()),
       book: fiberBook(),
+      subscriptions: new Map(),
     };
 
     mount = cells;
 
     for (const work of buffered.splice(0)) Queue.offerUnsafe(cells.queue, work);
     runtime.runFork(run(cells));
+    // The initial diff, whether or not `Mounted` moves state — honoured by the
+    // drain that folds it, which is the outer one on the re-arm path.
+    dirty = true;
     fold({ _tag: "Mounted" }, LIFECYCLE);
   };
 
@@ -1637,6 +2063,10 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
         syncing = false;
       }
 
+      // Once, whether or not the handlers moved state: a key built from props
+      // or hooks has to restart under the new value either way.
+      reconcile(hooksMoved ? "HookChanged" : "PropsChanged", LIFECYCLE);
+
       return state;
     },
 
@@ -1653,6 +2083,27 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
       active = false;
 
       const cells = mount;
+
+      // The declared set empties first, and its stops are reported before the
+      // `Unmounted` transition: the console logger evicts the mount's elapsed
+      // clock on that transition, and a later event would re-insert it. The
+      // fibers themselves go on the mount fiber, first thing in the teardown.
+      if (declared.size > 0) {
+        const target = devtools();
+        if (target !== undefined) {
+          for (const key of declared) {
+            report({
+              _tag: "SubscriptionStopped",
+              name,
+              instance,
+              cause: LIFECYCLE,
+              key,
+              reason: "Unmounted",
+            });
+          }
+        }
+        declared = new Set();
+      }
 
       let teardown: Command<any, any> | undefined;
       let thrown: { readonly error: unknown } | undefined;

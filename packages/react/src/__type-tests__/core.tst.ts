@@ -955,12 +955,13 @@ test("`component` is closed over the root's `R`", () => {
   });
 });
 
-test("a feature's string-keyed surface stays exactly `reduce` and `run`", () => {
+test("a feature's string-keyed surface stays exactly `reduce`, `run` and `subscriptions`", () => {
   // The internals slot `component` reads is symbol-keyed, so it cannot be
   // reached by name from userland and cannot collide with a future method.
   // Asserted on the string keys specifically: a slot added as a plain property
-  // would show up here, which is the regression this pins.
-  expect<Extract<keyof typeof cart, string>>().type.toBe<"reduce" | "run">();
+  // would show up here, which is the regression this pins. `subscriptions`
+  // is the pure read `subscriptions.specs.md` adds beside `reduce`.
+  expect<Extract<keyof typeof cart, string>>().type.toBe<"reduce" | "run" | "subscriptions">();
 });
 
 test("`run` reports `defects` beside `emitted` and `outputs`, and stays total", () => {
@@ -977,6 +978,7 @@ test("`run` reports `defects` beside `emitted` and `outputs`, and stays total", 
       readonly emitted: ReadonlyArray<{ readonly _tag: "Added" }>;
       readonly outputs: ReadonlyArray<{ readonly _tag: "OrderPlaced"; readonly orderId: string }>;
       readonly defects: ReadonlyArray<RunDefect>;
+      readonly subscriptions: ReadonlyArray<string>;
     }>
   >();
 });

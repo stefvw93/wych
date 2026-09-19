@@ -466,3 +466,10 @@ every save, is [chapter 3](/docs/tutorial/composing-features).
 For every option on `Task`, including `mode: "every"` and a typed failure
 schema, see [Tasks](/docs/reference/tasks). For the command constructors
 underneath it, see [Commands](/docs/reference/commands).
+
+Every command in this chapter completes: a save returns or fails, and `run`
+resolves once nothing is in flight. A source that never completes, such as a
+websocket, a presence feed or a `Stream.tick`, is a subscription, not a
+command. The feature declares it under a key, and the runtime starts and
+stops it as the key changes. That recipe is
+[subscribe to a stream](/docs/how-to/subscribe-to-a-stream).

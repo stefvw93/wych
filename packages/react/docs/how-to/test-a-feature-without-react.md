@@ -167,7 +167,7 @@ test("a second Submitted supersedes the charge in flight", async () => {
 
 The first charge is asleep in `Effect.delay` when the second `Submitted` folds. `Task` runs in `"latest"` mode by default, so `Task.start` restarts the group and interrupts that fiber. An interrupted task dispatches nothing, which is why `emitted` holds one `ChargeResolved`.
 
-One claim stays out of `run`'s reach: a command that never completes keeps `run` from resolving. Give a long-lived source a finite stream, or seed `Unmounted` so its handler cancels the group, as in [subscribe to a stream](/docs/how-to/subscribe-to-a-stream).
+One claim stays out of `run`'s reach: a command that never completes keeps `run` from resolving, because `run` resolves at command quiescence. A long-lived source belongs in a subscription instead, declared through the `subscriptions` hook: `run` resolves once command work settles regardless of which subscriptions are still running, and the result's `subscriptions` field lists the keys still declared at that point. See [subscribe to a stream](/docs/how-to/subscribe-to-a-stream) for the recipe.
 
 ## Assert on a dying command
 

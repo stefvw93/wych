@@ -5,11 +5,14 @@ import {
   type CommandSummary,
   type DefectSummary,
   type DevtoolsCause,
+  type DevtoolsColors,
   type DevtoolsCommand,
   type DevtoolsDefect,
   type DevtoolsEvent,
   type DevtoolsOutput,
   type DevtoolsSink,
+  type DevtoolsSubscriptionStarted,
+  type DevtoolsSubscriptionStopped,
   type DevtoolsTransition,
   devtoolsLayer,
 } from "../devtools";
@@ -27,18 +30,31 @@ test("`DevtoolsEvent` narrows to exactly one member per `_tag`", () => {
   if (event._tag === "Command") expect(event).type.toBe<DevtoolsCommand>();
   if (event._tag === "Output") expect(event).type.toBe<DevtoolsOutput>();
   if (event._tag === "Defect") expect(event).type.toBe<DevtoolsDefect>();
+  if (event._tag === "SubscriptionStarted") expect(event).type.toBe<DevtoolsSubscriptionStarted>();
+  if (event._tag === "SubscriptionStopped") expect(event).type.toBe<DevtoolsSubscriptionStopped>();
 
-  // Four members and no fifth. A `_tag` outside the set narrows the union away
-  // entirely, which is the only way to state "this list is closed" without
-  // restating the list.
+  // Six members and no seventh. A `_tag` outside the set narrows the union
+  // away entirely, which is the only way to state "this list is closed"
+  // without restating the list.
   if (
     event._tag !== "Transition" &&
     event._tag !== "Command" &&
     event._tag !== "Output" &&
-    event._tag !== "Defect"
+    event._tag !== "Defect" &&
+    event._tag !== "SubscriptionStarted" &&
+    event._tag !== "SubscriptionStopped"
   ) {
     expect(event).type.toBe<never>();
   }
+});
+
+test("the subscription events carry the envelope, a key and a closed reason set", () => {
+  expect<DevtoolsSubscriptionStarted["key"]>().type.toBe<string>();
+  expect<DevtoolsSubscriptionStopped["reason"]>().type.toBe<
+    "Undeclared" | "Completed" | "Died" | "Unmounted"
+  >();
+  expect<DevtoolsSubscriptionStarted["cause"]>().type.toBe<DevtoolsCause>();
+  expect<DevtoolsColors["subscription"]>().type.toBe<string | undefined>();
 });
 
 test("`cause` is required on every member, not optional", () => {
@@ -66,10 +82,12 @@ test("`DevtoolsCause` has no variant for an output crossing into a parent", () =
     cause._tag !== "Dispatch" &&
     cause._tag !== "Command" &&
     cause._tag !== "Lifecycle" &&
-    cause._tag !== "Defect"
+    cause._tag !== "Defect" &&
+    cause._tag !== "Subscription"
   ) {
     expect(cause).type.toBe<never>();
   }
+  if (cause._tag === "Subscription") expect(cause.key).type.toBe<string>();
 });
 
 // ---------------------------------------------------------------------------

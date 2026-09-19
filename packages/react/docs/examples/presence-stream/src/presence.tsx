@@ -1,4 +1,4 @@
-import { Action, Command, define } from "@wych/react";
+import { Action, Subscription, define } from "@wych/react";
 import { Effect, Schema, Stream } from "effect";
 import { PresenceApi } from "./presence-api";
 
@@ -10,17 +10,6 @@ const Presence = define({
   action: Action.of([Changed]),
 });
 
-const subscribe = (roomId: string) =>
-  Command.keyed(
-    "presence",
-    Command.effect<typeof Changed.Type, PresenceApi>((dispatch) =>
-      Effect.gen(function* () {
-        const api = yield* PresenceApi;
-        yield* Stream.runForEach(api.events(roomId), (event) => dispatch(Changed.make(event)));
-      }),
-    ),
-  );
-
 export const presence = Presence.create({
   initialState: () => ({ online: [] }),
   reducer: {
@@ -28,13 +17,19 @@ export const presence = Presence.create({
       ...state,
       online: online ? [...state.online, userId] : state.online.filter((id) => id !== userId),
     }),
-    Mounted: (_payload, { state, props }) => [state, subscribe(props.roomId)],
     PropsChanged: ({ previous }, { state, props }) =>
-      previous.roomId === props.roomId
-        ? state
-        : [{ ...state, online: [] }, Command.restart("presence", subscribe(props.roomId))],
-    Unmounted: (_payload, { state }) => [state, Command.cancel("presence")],
+      previous.roomId === props.roomId ? state : { ...state, online: [] },
   },
+  subscriptions: ({ props }) => ({
+    [`presence:${props.roomId}`]: Subscription.effect((dispatch) =>
+      Effect.gen(function* () {
+        const api = yield* PresenceApi;
+        yield* Stream.runForEach(api.events(props.roomId), (event) =>
+          dispatch(Changed.make(event)),
+        );
+      }),
+    ),
+  }),
   render: ({ state }) => (
     <ul>
       {state.online.map((userId) => (

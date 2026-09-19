@@ -556,6 +556,26 @@ describe("skipUnchanged", () => {
   });
 });
 
+describe("the predicates and subscription events", () => {
+  const envelope = { name: "room", instance: "1", cause: { _tag: "Lifecycle" } } as const;
+  const started = { _tag: "SubscriptionStarted", ...envelope, key: "feed" } as const;
+  const stopped = {
+    _tag: "SubscriptionStopped",
+    ...envelope,
+    key: "feed",
+    reason: "Undeclared",
+  } as const;
+
+  it("both predicates pass both subscription events through unchanged", () => {
+    // Neither event has a `previous`/`next` pair, so neither predicate has
+    // anything to compare; a subscription's lifetime is never "unchanged".
+    expect(skipUnchangedAmbient(started)).toBe(true);
+    expect(skipUnchangedAmbient(stopped)).toBe(true);
+    expect(skipUnchanged(started)).toBe(true);
+    expect(skipUnchanged(stopped)).toBe(true);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Console logger
 // ---------------------------------------------------------------------------

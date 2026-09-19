@@ -2,7 +2,7 @@
 
 ## Overview & Purpose
 
-A feature today has one kind of work: a `Command`, interpreted once, booked
+Before this spec a feature had one kind of work: a `Command`, interpreted once, booked
 under a name, ended by `cancel` or by finishing. A source that outlives every
 render — a websocket, a presence feed, a `Stream.tick` — is written as a
 command whose effect never returns, and its lifetime is managed by hand across
@@ -185,10 +185,10 @@ something this pass fixes.
 ## Quiescence — what `Feature.run` waits for
 
 `run` resolves at **command** quiescence: `book.inFlight === 0` and nothing
-queued, exactly today's rule. Subscription fibers live in their own book and
-count for nothing. A never-completing subscription no longer holds `run` open;
-a never-completing _command_ still does, and that is now the definition of a
-command rather than a limitation — work that finishes.
+queued, exactly the rule from before the split. Subscription fibers live in their own book and
+count for nothing. A never-completing subscription does not hold `run` open;
+a never-completing _command_ does, and that is the definition of a command
+rather than a limitation — work that finishes.
 
 At resolve, `run` records the declared keys in a new result field,
 `subscriptions: ReadonlyArray<string>`, then interrupts every subscription
@@ -279,140 +279,217 @@ for the discriminator that was not added.
 
 ## Acceptance Criteria
 
-Every box is unchecked: this is a spec ahead of its implementation. Each line
-names its harness — `run`, `createFeatureStore` driven by hand, tstyche, or a
-browser test by title.
+Every box holds. Each line names its harness — `run`,
+`createFeatureStore` driven by hand (`subscriptions.test.ts`), tstyche, or a
+browser test in `subscriptions.browser.test.tsx` by title. The four browser
+cases under Browser coverage are green under
+`vp -C packages/react test --project browser`.
 
 ### The value
 
-- [ ] `Subscription.effect(fn)` returns `{ _tag: "Effect", effect: fn }`; the value is `Pipeable` and piping preserves `A` and `R`. (`lib.test.ts`)
-- [ ] `Subscription` has exactly one variant; there is no `keyed`, `batch`, `cancel`, `restart`, `none` or `stream` constructor. (tstyche)
-- [ ] The effect receives a `Dispatcher<Emit<A, O>>`: an action it dispatches folds and an output it dispatches leaves through `on<Tag>` (store) or lands in `outputs` (`run`), on the same terms as a command's leaf. (`run`, `createFeatureStore`)
-- [ ] A subscription whose effect completes is not restarted while its key stays declared: a `Stream.fromArray` stub emits its elements once across three folds that keep the key. (`run`)
-- [ ] A completed subscription starts again when its key leaves the declared set and returns. (`run`)
-- [ ] `feature.subscriptions(snapshot)` returns what the hook returns for that snapshot, and `{}` for a feature that declared no hook, without a runtime. (`lib.test.ts`)
+- [x] `Subscription.effect(fn)` returns `{ _tag: "Effect", effect: fn }`; the value is `Pipeable` and piping preserves `A` and `R`. (`lib.test.ts`)
+- [x] `Subscription` has exactly one variant; there is no `keyed`, `batch`, `cancel`, `restart`, `none` or `stream` constructor. (tstyche)
+- [x] The effect receives a `Dispatcher<Emit<A, O>>`: an action it dispatches folds and an output it dispatches leaves through `on<Tag>` (store) or lands in `outputs` (`run`), on the same terms as a command's leaf. (`run`, `createFeatureStore`)
+- [x] A subscription whose effect completes is not restarted while its key stays declared: a `Stream.fromArray` stub emits its elements once across three folds that keep the key. (`run`)
+- [x] A completed subscription starts again when its key leaves the declared set and returns. (`run`)
+- [x] `feature.subscriptions(snapshot)` returns what the hook returns for that snapshot, and `{}` for a feature that declared no hook, without a runtime. (`lib.test.ts`)
 
 ### The hook
 
-- [ ] `create` accepts an optional `subscriptions` beside `initialState`, `reducer` and `render`; `Definition.subscriptions(fn)` is an identity typer on the same terms as `Definition.reducer`. (`lib.test.ts`, tstyche)
-- [ ] With no hook, the store never evaluates a diff: a feature with no `subscriptions` behaves byte-for-byte as today under `start`, `dispatch`, `sync` and `stop`, and the existing suite passes unchanged. (`lib.test.ts`)
-- [ ] The hook is handed the settled `Snapshot` — `state` after the whole drain, current `props` and `hooks`. (`createFeatureStore`)
-- [ ] A throwing hook raises one defect with `from` = the tag of the action whose fold triggered the diff, folds `Error` when handled, and leaves the previous declared set running. (`createFeatureStore`)
+- [x] `create` accepts an optional `subscriptions` beside `initialState`, `reducer` and `render`; `Definition.subscriptions(fn)` is an identity typer on the same terms as `Definition.reducer`. (`lib.test.ts`, tstyche)
+- [x] With no hook, the store never evaluates a diff: a feature with no `subscriptions` behaves byte-for-byte as before the split under `start`, `dispatch`, `sync` and `stop`, and the existing suite passes unchanged. (`lib.test.ts`)
+- [x] The hook is handed the settled `Snapshot` — `state` after the whole drain, current `props` and `hooks`. (`createFeatureStore`)
+- [x] A throwing hook raises one defect with `from` = the tag of the action whose fold triggered the diff, folds `Error` when handled, and leaves the previous declared set running. (`createFeatureStore`)
 
 ### The diff
 
-- [ ] After `start()`, the set declared for the post-`Mounted` snapshot is started, whether or not `Mounted` moved state. (`createFeatureStore`)
-- [ ] A dispatch whose fold moves state to a snapshot declaring a new key starts that key and only that key. (`createFeatureStore`)
-- [ ] A fold whose snapshot no longer declares a running key stops it: the fiber is interrupted, its finalizer runs, and `SubscriptionStopped { reason: "Undeclared" }` is reported. (`createFeatureStore`)
-- [ ] A key present before and after a fold is untouched: the fiber's identity is the same and no event is reported for it. (`createFeatureStore`)
-- [ ] One drain of three queued actions evaluates the hook once, against the final state, and a key declared only by an intermediate state never starts. (`createFeatureStore`)
-- [ ] A dispatch whose fold returns the same state reference does not evaluate the hook. (`createFeatureStore`)
-- [ ] `sync` with changed props evaluates the hook even when the `PropsChanged` handler returned the same state, so a key built from props restarts under the new key. (`createFeatureStore`)
-- [ ] Before `start()`, folds from `sync` start nothing; after `stop()`, a dispatch starts nothing. (`createFeatureStore`)
-- [ ] An unchanged key across a props change keeps the old fiber, closure and all — pinned deliberately, as the contract. (`createFeatureStore`)
-- [ ] Stops are interpreted before starts within one diff. (`createFeatureStore`, observed through `Ref` logging order)
-- [ ] After a layer failure the declared set is cleared; a dispatch that re-arms the mount starts the declared keys afresh under the rebuilt layer. (`createFeatureStore`)
+- [x] After `start()`, the set declared for the post-`Mounted` snapshot is started, whether or not `Mounted` moved state. (`createFeatureStore`)
+- [x] A dispatch whose fold moves state to a snapshot declaring a new key starts that key and only that key. (`createFeatureStore`)
+- [x] A fold whose snapshot no longer declares a running key stops it: the fiber is interrupted, its finalizer runs, and `SubscriptionStopped { reason: "Undeclared" }` is reported. (`createFeatureStore`)
+- [x] A key present before and after a fold is untouched: the fiber's identity is the same and no event is reported for it. (`createFeatureStore`)
+- [x] One drain of three queued actions evaluates the hook once, against the final state, and a key declared only by an intermediate state never starts. (`createFeatureStore`)
+- [x] A dispatch whose fold returns the same state reference does not evaluate the hook. (`createFeatureStore`)
+- [x] `sync` with changed props evaluates the hook even when the `PropsChanged` handler returned the same state, so a key built from props restarts under the new key. (`createFeatureStore`; under React, `subscriptions.browser.test.tsx` "a room switch restarts under the new key, with no `Mounted` or `Unmounted` involved")
+- [x] Before `start()`, folds from `sync` start nothing; after `stop()`, a dispatch starts nothing. (`createFeatureStore`)
+- [x] An unchanged key across a props change keeps the old fiber, closure and all — pinned deliberately, as the contract. (`createFeatureStore`)
+- [x] Stops are interpreted before starts within one diff. (`createFeatureStore`, observed through `Ref` logging order)
+- [x] After a layer failure the declared set is cleared; a dispatch that re-arms the mount starts the declared keys afresh under the rebuilt layer. (`createFeatureStore`)
 
 ### `Feature.run`
 
-- [ ] `run` resolves with a subscription in flight whose effect is `Effect.never`. This is the inversion of "does not terminate while a never-completing command is in flight": the subject becomes `Subscription.effect(() => Effect.never)` and asserts `Option.isSome`; the command form stays as the control and still asserts `Option.none()`. (`run`)
-- [ ] `run` evaluates the hook after each reduced action and starts and stops on the same diff rules as the store. (`run`)
-- [ ] Actions a subscription dispatches land in `emitted`, outputs in `outputs`; seeded actions still do not. (`run`)
-- [ ] A synchronous stub (`Stream.fromArray` of two elements) declared by `Mounted`'s fold has both elements in `emitted` and folded into `state` when `run([Mounted])` resolves. **Probe at implement** that `Stream.runForEach(Stream.fromArray(…))` emits every element before its first suspension under the installed Effect; if it does not, the rule and this line change, not the test. (`run`)
-- [ ] The result carries `subscriptions: ReadonlyArray<string>` — the keys declared at resolve, in record key order — and every subscription fiber is interrupted before the Effect resolves; a finalizer inside one has run by the time the caller reads the result. (`run`)
-- [ ] A dying subscription is recorded in `defects` with `from` = key and `handled` on the store's rule, and `Error` is folded before `run` resolves. (`run`)
-- [ ] Seeding `Unmounted` empties the declared set: every running subscription is interrupted and `subscriptions` is `[]`. (`run`)
+- [x] `run` resolves with a subscription in flight whose effect is `Effect.never`. This is the inversion of "does not terminate while a never-completing command is in flight": the subject became `Subscription.effect(() => Effect.never)` and asserts `Option.isSome`; the command form stays as the control and still asserts `Option.none()`. (`run`, `lib.test.ts`)
+- [x] `run` evaluates the hook after each reduced action and starts and stops on the same diff rules as the store. (`run`)
+- [x] Actions a subscription dispatches land in `emitted`, outputs in `outputs`; seeded actions still do not. (`run`)
+- [x] A synchronous stub (`Stream.fromArray` of two elements) declared by `Mounted`'s fold has both elements in `emitted` and folded into `state` when `run([Mounted])` resolves. Probed against `effect@4.0.0-rc.112`: `Stream.runForEach(Stream.fromArray(…))` emits every element before its first suspension, so one `Effect.yieldNow` after the fork sees all of them. (`run`)
+- [x] The result carries `subscriptions: ReadonlyArray<string>` — the keys declared at resolve, in record key order — and every subscription fiber is interrupted before the Effect resolves; a finalizer inside one has run by the time the caller reads the result. (`run`)
+- [x] A dying subscription is recorded in `defects` with `from` = key and `handled` on the store's rule, and `Error` is folded before `run` resolves. (`run`)
+- [x] Seeding `Unmounted` empties the declared set: every running subscription is interrupted and `subscriptions` is `[]`. (`run`)
 
 ### Store and teardown
 
-- [ ] `stop()` reports `SubscriptionStopped { reason: "Unmounted" }` for each running key **before** the `Unmounted` transition. (`createFeatureStore` + recorder)
-- [ ] Teardown interrupts subscription fibers before interpreting the `Unmounted` command, and awaits their finalizers. (`createFeatureStore`)
-- [ ] `start(); dispatch(Go); stop()` with a 50ms command from `Go` **runs the command to completion** and folds what it emits — the inverse of today's "In-flight work is interrupted by unmount" assertion, which is rewritten rather than deleted. (`createFeatureStore`)
-- [ ] `Unmounted: () => [state, Command.cancel("Go")]` interrupts that in-flight command at teardown, and nothing it would have emitted folds. (`createFeatureStore`)
-- [ ] A command still running at the 5s bound raises exactly one defect with `from: "Unmounted"`, and the scope closes — its finalizer runs. (`createFeatureStore`, fake clock)
-- [ ] The `Unmounted` command runs even when an in-flight command outlasts the bound; both are under one budget. (`createFeatureStore`, fake clock)
-- [ ] A subscription whose finalizer hangs is caught by the same bound and reported as the same defect. (`createFeatureStore`, fake clock)
-- [ ] `stop(); start()` on one store (StrictMode's shape) starts every declared key exactly once on the second mount, with the first mount's fibers interrupted. (`createFeatureStore`)
+- [x] `stop()` reports `SubscriptionStopped { reason: "Unmounted" }` for each running key **before** the `Unmounted` transition. (`createFeatureStore` + recorder)
+- [x] Teardown interrupts subscription fibers before interpreting the `Unmounted` command, and awaits their finalizers. (`createFeatureStore`)
+- [x] `start(); dispatch(Go); stop()` with a 50ms command from `Go` **runs the command to completion** and folds what it emits — the inverse of the old "In-flight work is interrupted by unmount" assertion, which was rewritten rather than deleted. (`createFeatureStore`; under React, `subscriptions.browser.test.tsx` "unmount stops the subscription and lets a pending command finish")
+- [x] `Unmounted: () => [state, Command.cancel("Go")]` interrupts that in-flight command at teardown, and nothing it would have emitted folds. (`createFeatureStore`)
+- [x] A command still running at the 5s bound raises exactly one defect with `from: "Unmounted"`, and the scope closes — its finalizer runs. (`createFeatureStore`, fake clock)
+- [x] The `Unmounted` command runs even when an in-flight command outlasts the bound; both are under one budget. (`createFeatureStore`, fake clock)
+- [x] A subscription whose finalizer hangs is caught by the same bound and reported as the same defect. (`createFeatureStore`, fake clock)
+- [x] `stop(); start()` on one store (StrictMode's shape) starts every declared key exactly once on the second mount, with the first mount's fibers interrupted. (`createFeatureStore`; under real StrictMode, `subscriptions.browser.test.tsx` "StrictMode's double mount starts exactly one subscription per key on the surviving mount")
 
 ### Failure
 
-- [ ] A subscription that dies reports one `Defect` (`from` = key, `handled` on the store's rule), folds `Error` when handled with `from` = key, then reports `SubscriptionStopped { reason: "Died" }`. (`createFeatureStore` + recorder)
-- [ ] A died key still declared on the next fold is not restarted. (`createFeatureStore`)
-- [ ] A died key that leaves the declared set and returns restarts. (`createFeatureStore`)
-- [ ] `Command.cancel(key)` for a running subscription's key interrupts nothing: the subscription keeps emitting. (`createFeatureStore`)
-- [ ] A command group and a subscription key with the same name coexist: `cancel(name)` interrupts the command and leaves the subscription running. (`createFeatureStore`)
+- [x] A subscription that dies reports one `Defect` (`from` = key, `handled` on the store's rule), folds `Error` when handled with `from` = key, then reports `SubscriptionStopped { reason: "Died" }`. (`createFeatureStore` + recorder)
+- [x] A died key still declared on the next fold is not restarted. (`createFeatureStore`)
+- [x] A died key that leaves the declared set and returns restarts. (`createFeatureStore`)
+- [x] `Command.cancel(key)` for a running subscription's key interrupts nothing: the subscription keeps emitting. (`createFeatureStore`)
+- [x] A command group and a subscription key with the same name coexist: `cancel(name)` interrupts the command and leaves the subscription running. (`createFeatureStore`)
 
 ### Devtools
 
-- [ ] `SubscriptionStarted { key }` is reported at the diff, before the fiber runs, with the cause of the fold that produced the set. (`createFeatureStore` + recorder)
-- [ ] `SubscriptionStopped { key, reason }` has `reason` `"Undeclared"` at a diff, `"Unmounted"` at `stop()`, `"Completed"` when the effect returns and `"Died"` after its `Defect`. (`createFeatureStore` + recorder)
-- [ ] A transition for an action a subscription dispatched carries `cause: { _tag: "Subscription", key }`. (`createFeatureStore` + recorder)
-- [ ] Every new event is JSON round-trippable, and the `Json` type test covers the fifth cause. (`devtools.test.ts`, tstyche)
-- [ ] Console lines for the two events are printed as specified in `devtools.specs.md`, against an injected console. (`devtools.test.ts`)
-- [ ] With no sink installed, a diff allocates no event — by construction, on the same `const target = devtools(); if (target !== undefined)` shape as every existing site.
+- [x] `SubscriptionStarted { key }` is reported at the diff, before the fiber runs, with the cause of the fold that produced the set. (`createFeatureStore` + recorder)
+- [x] `SubscriptionStopped { key, reason }` has `reason` `"Undeclared"` at a diff, `"Unmounted"` at `stop()`, `"Completed"` when the effect returns and `"Died"` after its `Defect`. (`createFeatureStore` + recorder)
+- [x] A transition for an action a subscription dispatched carries `cause: { _tag: "Subscription", key }`. (`createFeatureStore` + recorder)
+- [x] Every new event is JSON round-trippable, and the `Json` type test covers the fifth cause. (`devtools.test.ts`, tstyche)
+- [x] Console lines for the two events are printed as specified in `devtools.specs.md`, against an injected console. (`devtools.test.ts`)
+- [x] With no sink installed, a diff allocates no event — by construction, on the same `const target = devtools(); if (target !== undefined)` shape as every existing site.
 
 ### Type-level (TSTyche) — `src/__type-tests__/subscriptions.tst.ts`
 
-- [ ] `Subscription<Narrow>` is assignable to `Subscription<Wide>`; `Subscription.effect(() => Effect.void)` is `Subscription<never, never>` and fits every slot.
-- [ ] Inside the hook, `dispatch` is typed by the feature's vocabulary from the contextual type `create` supplies: an undeclared tag and a declared tag with the wrong payload are compile errors; an output tag is accepted.
-- [ ] Written standalone, `Subscription.effect` infers `A = never` and needs the type argument — the same rule and the same `@ts-expect-error` pinning as `Command.effect`.
-- [ ] `Subscription.effect` carries `R`; a hook whose subscription needs `PresenceApi` makes `component(feature)` under a root without it a compile error, and `component(feature, { layer })` satisfying it compiles.
-- [ ] A `Command` as a record value in the hook is a compile error, and a `Subscription` returned from a reducer handler is a compile error.
-- [ ] The hook's parameter is `Snapshot<Props, State, H>` with `children` as declared and `hooks` as `H`.
-- [ ] `run`'s result type has `subscriptions: ReadonlyArray<string>`; `Feature.subscriptions` is `(snapshot) => Subscriptions<…>`.
-- [ ] `subscriptions` is absent from `Reducer`'s key set: writing it as a handler is a compile error.
+- [x] `Subscription<Narrow>` is assignable to `Subscription<Wide>`; `Subscription.effect(() => Effect.void)` is `Subscription<never, never>` and fits every slot.
+- [x] Inside the hook, `dispatch` is typed by the feature's vocabulary from the contextual type `create` supplies: an undeclared tag and a declared tag with the wrong payload are compile errors; an output tag is accepted.
+- [x] Written standalone, `Subscription.effect` infers `A = never` and needs the type argument — the same rule and the same `@ts-expect-error` pinning as `Command.effect`.
+- [x] `Subscription.effect` carries `R`; a hook whose subscription needs `PresenceApi` makes `component(feature)` under a root without it a compile error, and `component(feature, { layer })` satisfying it compiles.
+- [x] `R` is inferred through a context-sensitive leaf (`(dispatch) => …` reading a service) with no type argument, at both `Definition.subscriptions` and `create`: the hook's type carries `PresenceApi` and `component` under a root without it is a compile error.
+- [x] A `Command` as a record value in the hook is a compile error, and a `Subscription` returned from a reducer handler is a compile error.
+- [x] The hook's parameter is `Snapshot<Props, State, H>` with `children` as declared and `hooks` as `H`.
+- [x] `run`'s result type has `subscriptions: ReadonlyArray<string>`; `Feature.subscriptions` is `(snapshot) => Subscriptions<…>`.
+- [x] `subscriptions` is absent from `Reducer`'s key set: writing it as a handler is a compile error.
 
 ## Technical Requirements
 
+As landed. Five points deviate from the first draft of this section, all
+deliberate; each is marked **deviation**.
+
 - `Subscription` and `Subscriptions` are declared in `lib.ts` beside `Command`; devtools imports the type only, keeping the one runtime edge `lib → devtools`.
+- **Nominal, not structural.** The one variant is structurally identical to
+  `Command`'s `Effect` variant, so a `unique symbol`-keyed phantom field
+  (`[subscription]: true` on `Subscription`, `[subscription]?: never` on
+  `Command`) keeps the two apart in both directions: a `Subscription` cannot
+  sit in a `Next` tuple and a `Command` cannot be a record value.
+- **`Subscriptions` admits `undefined` as a record value — deviation.** The
+  type is `Readonly<Record<string, Subscription<A, R> | undefined>>` and
+  `undefined` means "not declared". TypeScript normalises
+  `cond ? {} : { feed }` to `{ feed?: Subscription | undefined }`, which is
+  not assignable to a record whose values are all `Subscription`, and that
+  is the natural way to write an optional key. Admitting `undefined` makes
+  that form and `{ feed: cond ? sub : undefined }` both type-check and mean
+  the same thing. `declaredKeys` filters `undefined` values out wherever
+  keys are read, so the runtime never sees them.
 - **Two books per mount.** The fiber book stays as it is. Beside it,
-  `subscriptions: Map<string, { fiber: Fiber<void>; status: "running" | "done" | "died" }>`,
-  per `Mount` (and per `run` invocation). `inFlight` never counts a
-  subscription fiber.
-- **The declared set** is `Set<string>` on the store, cleared by `stop()` and
-  by the mount's `catchCause` beside `dead = true`, and replaced by each
-  evaluation.
+  `subscriptions: Map<string, Fiber<void>>` per `Mount` (and per `run`
+  invocation) — **deviation:** no `status` field. A fiber that completed or
+  died stays booked under its key until the key leaves the declared set, and
+  that is all "done" and "died" ever meant to the diff: a booked key is
+  unchanged. `inFlight` never counts a subscription fiber.
+- **The declared set** is `ReadonlySet<string>` on the store, cleared by
+  `stop()` and by the mount's `catchCause` beside `dead = true`, and replaced
+  by each evaluation. The diff is computed against it, not against the
+  mount's book: two back-to-back dispatches fold before the mount fiber has
+  interpreted the first's `Subscriptions` item, so the book is stale at the
+  second diff (ex 33).
 - **`Work` gains one variant**, `{ _tag: "Subscriptions"; stop: ReadonlyArray<string>; start: ReadonlyArray<readonly [string, Subscription]> }`.
   The loop interprets it as `Fiber.interruptAll` over the stopped entries
   (awaited, so a fiber cannot emit after its key is gone), then one fork per
   start.
 - **`forkSubscription(key, subscription)`** mirrors `forkLeaf` minus the
   `inFlight` increment and the group booking: `Effect.forkChild` of
-  `Effect.suspend(() => subscription.effect((a) => emit(a, { _tag: "Subscription", key })))`,
-  a watcher on `Fiber.await` that sets `status` to `done` or `died`, calls
-  `raiseDefect` on a non-interrupt failure, and reports `SubscriptionStopped`
-  with `Completed` or `Died`. The watcher is forked, as `forkLeaf`'s is, for
-  the same reason: a fiber interrupted before it starts never runs its body.
+  `Effect.suspend(() => subscription.effect((a) => fold(a, { _tag: "Subscription", key })))`.
+  **Deviation:** the exit is observed by `Effect.onExit` inside the fiber's
+  own body, not by a forked `Fiber.await` watcher. Under `run` nothing counts
+  a subscription as in flight, so a death has to queue its `Error` before the
+  fiber completes, or the drain loop reaches quiescence between the death and
+  the fold; `onExit` runs before the fiber is done, a watcher runs after. The
+  store uses the same shape for symmetry. A fiber interrupted before it
+  starts never runs the body and has nothing to report, which is the case the
+  watcher existed for. `onExit` guards on the book still holding this fiber,
+  so a fiber that died as its key was being stopped does not report after its
+  `Undeclared`/`Unmounted`; then `raiseDefect` on a non-interrupt failure and
+  `SubscriptionStopped` with `Died` or `Completed`.
 - **`reconcile(from: string, cause: DevtoolsCause)`** on the store: returns
-  early when the feature has no hook or no live mount; otherwise evaluates
+  early when the feature has no hook; when there is no live mount it returns
+  too, except for the re-arm case below; otherwise evaluates
   `feature.subscriptions(snapshot())` inside `try/catch` (a throw goes to
-  `raiseDefect(error, from, cause)` and returns), computes the key diff against
-  the mount's book, reports `SubscriptionStarted` / `SubscriptionStopped(Undeclared)`
-  synchronously, offers one `Subscriptions` item to the mount queue, and
-  replaces the declared set. Three call sites: the `finally` of `fold` when
-  `moved` (outside the `folding` guard, since the hook is pure and offers
+  `raiseDefect(error, from, cause)` and returns, the previous set standing),
+  computes the key diff against the declared set, reports
+  `SubscriptionStarted` / `SubscriptionStopped(Undeclared)` synchronously,
+  offers one `Subscriptions` item to the mount queue, and replaces the set.
+  Three call sites: the `finally` of `fold` when `moved || dirty` and not
+  `syncing` (outside the `folding` guard, since the hook is pure and offers
   rather than folds); `sync` after its folds when props or hooks moved;
-  `start()` after `fold({ _tag: "Mounted" })`.
+  `start()` after `fold({ _tag: "Mounted" })`, through the `dirty` flag —
+  the re-arm path calls `start()` from inside a fold, where `Mounted` is
+  queued rather than folded, so the flag outlives the call and the outer
+  drain reconciles whether or not `Mounted` moved state.
+- **A dead mount re-arms on a dispatch-caused fold that declares a key —
+  deviation.** `offer` re-arms a dead mount only when a `Dispatch`-caused
+  fold produced a command (`lib.specs.md` open work #1). A fold whose
+  snapshot declares at least one subscription but returns no command never
+  reaches `offer`, so `reconcile` carries the same rule: dead, inactive,
+  `cause._tag === "Dispatch"` and `declares()` non-empty → `start()`, which
+  folds `Mounted` and reconciles from scratch against the rebuilt layer.
+  Lifecycle-, command- and defect-caused folds never re-arm, for `offer`'s
+  reasons. A throwing hook in `declares()` is a defect on the same rule as at
+  a diff.
 - **`stop()`** clears the declared set and reports `SubscriptionStopped(Unmounted)`
   per running key **before** reducing `Unmounted`, so the console logger's
   elapsed eviction on the `Unmounted` transition is not undone.
-- **Teardown** becomes: interrupt subscription fibers → interpret the
-  `Unmounted` command → drain. The `Fiber.interruptAll(allFibers(cells.book))`
-  line is deleted; nothing else in the loop moves.
+- **Teardown** is: interrupt subscription fibers (awaited) → interpret the
+  `Unmounted` command → drain until `inFlight === 0` and the queue is empty,
+  dropping any `Subscriptions` item it meets. The
+  `Fiber.interruptAll(allFibers(cells.book))` line is gone; nothing else in
+  the loop moved. All of it under the existing `timeoutOption("5 seconds")`,
+  so a subscription whose finalizer hangs is caught by the same bound.
 - **`run`**: a subscription book beside `book`; `reconcile` after each reduced
-  action, on the same `Effect.yieldNow` the commands already get; the drain
-  condition unchanged; at exit, read the declared keys, `Fiber.interruptAll`
-  over the subscription fibers, then return `{ state, emitted, outputs,
-defects, subscriptions }`. Emission entries carry `origin: "subscription"`
-  and are pushed to `emitted` like `"command"` entries.
-- **Types.** `SubscriptionServicesOf<S>` reads `R` from the hook's return
-  record values; `create`'s `R` becomes `ServicesOf<U> | SubscriptionServicesOf<S>`.
-  `A` reaches the leaf by the contextual path `lib.specs.md` describes for
-  `Command.effect` — the hook's return type through `create`'s constraint —
-  and the same two consequences apply: standalone needs the type argument,
-  and `.pipe` severs it.
+  action (an `Unmounted` entry empties the set instead), on the same
+  `Effect.yieldNow` the commands already get; the drain condition unchanged;
+  at exit, read the declared keys, `Fiber.interruptAll` over the subscription
+  fibers (awaited), then return `{ state, emitted, outputs, defects,
+subscriptions }`. Emission entries carry `origin: "subscription"` and are
+  pushed to `emitted` like `"command"` entries; a subscription's death is
+  `raise(error, key)` through the same `onExit`.
+- **Types — deviation on the inference path.** `create<U, SR = never>` takes
+  `subscriptions?: SubscriptionsHook<Props, State, H, Emit<A, O>, SR>` and
+  returns `Feature<…, ServicesOf<U> | SR>`: `R` is inferred straight from
+  the hook's return record, and the parameter's type is what gives each
+  leaf's `dispatch` its contextual type. The drafted
+  `S extends SubscriptionsHook<…> | undefined` generic with a
+  `SubscriptionServicesOf<S>` helper does not work: a generic `S` is never
+  inferred through the contextually-typed arrow, so `dispatch` inside the
+  hook fell to `never`. There is no `SubscriptionServicesOf`. The same two
+  consequences as for `Command.effect` apply: standalone needs the type
+  argument, and `.pipe` severs it. `Exhaustive` gained an allowed-key set
+  (`TagsOf<A> | LifecycleTag`), so `subscriptions` under `reducer` is an
+  error string on that key.
 - **Devtools.** Two event members and a fifth cause; see `devtools.specs.md`.
 - Every emission site keeps the `const target = devtools(); if (target !== undefined)` shape.
+
+### Harness probes worth knowing
+
+Three things the exercises hit that the next pass on this code will hit too:
+
+- **A `TestClock` sleep inside an interrupted fiber's finalizer returns at
+  once** (`effect@4.0.0-rc.112`) rather than waiting for `adjust`. A test
+  that wants a finalizer to hang under the teardown bound uses
+  `Effect.never`, not a long `Effect.sleep` (ex 30).
+- **tstyche substring-matches `@ts-expect-error` text.** The directive's text
+  is matched as a substring of the diagnostic, so it names a stable fragment
+  (`is not assignable to type 'Subscription`), not the whole message.
+- **An optional property's union target blocks arrow-body elaboration.**
+  `subscriptions` is optional, so its target type is a union with
+  `undefined`, and TypeScript does not elaborate an arrow body against a
+  union target: a `Command` as a record value is reported on the hook, not
+  on the value. The message still names the hook's type, which is what the
+  directive matches (`subscriptions.tst.ts`).
 
 ## Expected Behavior & Edge Cases
 
@@ -431,10 +508,10 @@ defects, subscriptions }`. Emission entries carry `origin: "subscription"`
   resolves during the second mount's life folds there — and the second mount's
   own `Mounted` command folds the same result again. The rule "`Mounted` is
   idempotent" now extends to what its command folds: `Task.resolved(value)`
-  replaces and is fine; an append is not. Today's sweep masked this. A feature
+  replaces and is fine; an append is not. The old unmount sweep masked this. A feature
   that cannot make the fold idempotent cancels in `Unmounted`.
 - **Teardown holds the feature layer open** for as long as an in-flight command
-  takes, up to the bound, where today it closes at once. A page unmounting many
+  takes, up to the bound, where before the split it closed at once. A page unmounting many
   features with slow requests in flight keeps their layers alive for that long.
 - **A subscription started by a discarded render** is stopped by the committed
   render's diff if its key is not declared there. The fiber may have opened a
@@ -476,8 +553,8 @@ defects, subscriptions }`. Emission entries carry `origin: "subscription"`
 
 ## Open work
 
-None with a decision outstanding. The scheduler probe under `Feature.run`'s
-criteria is an implementation check, not a decision.
+None. The scheduler probe under `Feature.run`'s criteria was done and is
+recorded on its box.
 
 ## Deferred decisions
 
@@ -557,9 +634,9 @@ reason.
 
 ## Browser coverage (`/e2e`)
 
-Applicable, `src/lib.browser.test.tsx`. The node suite drives every diff and
-teardown rule through `createFeatureStore`; what only a mount can show is the
-effect scheduling React owns:
+Applicable, `src/subscriptions.browser.test.tsx`, all four green. The node
+suite drives every diff and teardown rule through `createFeatureStore`; what
+only a mount can show is the effect scheduling React owns:
 
 - **A room switch restarts under the new key.** A parent flips `roomId` in
   `useState`; the old subscription's finalizer has run and the new key's fiber
@@ -574,7 +651,11 @@ effect scheduling React owns:
   simulated unmount.
 - **A discarded render's subscription is stopped by the committed one** — a
   props flip inside a transition that suspends and is abandoned, on the
-  pattern the latest-ref test already uses.
+  pattern the latest-ref test already uses. The feed in this case does not
+  emit: an emission during a pending transition makes
+  `useSyncExternalStore` force a synchronous re-render on the sync lane,
+  which commits the render the case needs React to discard. See the
+  `store.sync` known limitation in `lib.specs.md`.
 
 The docs pages that build the presence example are executed by
 `docs:check --run`; `docs/examples/presence-stream` is type-checked by
