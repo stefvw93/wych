@@ -160,8 +160,9 @@ const loginForm = Login.create({
 Every rule from the React version is in the reducer. `pending` and `error`
 are one field with four cases, so they cannot disagree. The double-submit
 guard reads the state the fold was handed, never a stale closure. The
-`alive` ref is gone, because the runtime interrupts the fiber on unmount and
-an interrupted task dispatches nothing.
+`alive` ref is gone: state lives at the store, not the component, so a
+login that resolves after unmount folds safely into state nothing renders,
+instead of calling `setState` on a component that is gone.
 
 The `Submitted` handler does not sign in. It returns a description of signing
 in, and `Task.start` writes `Pending` beside it on the same fold. Who runs
@@ -291,19 +292,30 @@ It is named unsafe because it opens the feature to whatever the hook does. A
 hook that reads ambient input is fine. A hook that owns state the feature
 should own moves the feature back into React, one `useState` at a time.
 
-## The seam has a limit
+## Two kinds of work, kept apart
 
-`run` resolves when nothing is queued and nothing is in flight. A command
-that never completes, a `Stream.never` or an `Effect.never`, keeps the
-in-flight count above zero, so `run` never resolves. Test a subscription
-with a finite stream, or fold it through `reduce` and read the command.
+Elm keeps commands and subscriptions apart, for a reason worth carrying over:
+a command is _issued_ and finishes, a subscription is _declared_ and the
+runtime keeps it running until the feature stops declaring it. Wych keeps the
+same split. `Command.effect` is a leaf that runs once and settles. A feature
+that needs a websocket, a presence feed or a `Stream.tick` declares it through
+a `subscriptions` hook on `create`, keyed on the snapshot; the runtime diffs
+the declared keys after every fold and starts or stops fibers to match. See
+[Subscriptions](/docs/reference/subscriptions) for the hook and the key rule.
 
-The reason is structural. Elm keeps commands and subscriptions apart: a
-command finishes, a subscription is a declaration the runtime diffs. Wych
-folds both into `Command`, which is simpler to write and leaves the runtime
-unable to tell "will finish" from "runs until cancelled". A `Cmd`/`Sub`
-split is the planned fix. Until then the rule is: a long-lived source is
-booked under a name and cancelled by name. See
-[groups and cancellation](/docs/explanation/groups-and-cancellation) for the
-naming, and [commands as data](/docs/explanation/commands-as-data) for why a
-command is a value in the first place.
+`run` resolves at command quiescence: nothing queued, no command fiber in
+flight. A subscription fiber does not count. A subscription over a
+synchronous stub, `Stream.fromArray` or `Stream.make`, has already emitted by
+the time `run` resolves, so it is testable with `run` on the same terms as a
+command. An endless subscription, `Effect.never` or a live stream, holds
+nothing open: `run` interrupts every subscription fiber it started once
+command work settles.
+
+A command that never completes is a different case. It still keeps `run`
+open, because a command that runs forever has not finished, and finishing is
+what makes it a command. That is a long-lived source written in the wrong
+place; move it into a subscription. See
+[groups and cancellation](/docs/explanation/groups-and-cancellation) for how
+a command is booked and cancelled, and
+[commands as data](/docs/explanation/commands-as-data) for why a command is a
+value in the first place.

@@ -1,7 +1,7 @@
 ---
 title: Devtools
 description: The Devtools service, sinks, the event union, the console logger and the recorder.
-order: 7
+order: 8
 ---
 
 # Devtools
@@ -36,6 +36,8 @@ import type {
   DevtoolsEvent,
   DevtoolsOutput,
   DevtoolsSink,
+  DevtoolsSubscriptionStarted,
+  DevtoolsSubscriptionStopped,
   DevtoolsTransition,
 } from "@wych/react";
 
@@ -151,8 +153,19 @@ const verbose = createConsoleDevtools({
 
 `diff` is shallow and reads own keys only. `colors` fields are CSS strings for
 the `%c` directives, all individually overridable: `previous`, `action`,
-`next`, `command`, `output` and `defect`. `console` takes any object with
-`group`, `groupCollapsed`, `groupEnd`, `log` and `error`.
+`next`, `command`, `output`, `defect` and `subscription`. `console` takes any
+object with `group`, `groupCollapsed`, `groupEnd`, `log` and `error`.
+
+A `SubscriptionStarted` or `SubscriptionStopped` event prints one line, no
+group, with the `subscription` colour:
+
+```
+▸ Presence#1  ⇉ presence:general started
+▸ Presence#1  ⇉ presence:general stopped (undeclared)
+```
+
+The reason is lower-cased in the line: `undeclared`, `unmounted`, `completed`
+or `died`.
 
 ## Predicates
 
@@ -167,6 +180,9 @@ skipUnchanged(event: DevtoolsEvent): boolean
 `skipUnchanged` drops any transition where state did not move. It also drops
 two cases the default keeps: `Unmounted`, whose returned state is always
 discarded, and a dispatch whose handler returns the same state.
+
+Both predicates pass `SubscriptionStarted` and `SubscriptionStopped` through
+unfiltered: neither carries a state to compare.
 
 ```ts continue
 const unchanged = { count: 1 };
@@ -224,7 +240,13 @@ Events come from a mounted component. Emission lives in the store that
 ## `DevtoolsEvent`
 
 ```ts fragment
-type DevtoolsEvent = DevtoolsTransition | DevtoolsCommand | DevtoolsOutput | DevtoolsDefect;
+type DevtoolsEvent =
+  | DevtoolsTransition
+  | DevtoolsCommand
+  | DevtoolsOutput
+  | DevtoolsDefect
+  | DevtoolsSubscriptionStarted
+  | DevtoolsSubscriptionStopped;
 ```
 
 Every event carries `name`, `instance` and `cause`. `name` comes from
@@ -303,7 +325,7 @@ const announced: DevtoolsOutput = {
 
 ### `DevtoolsDefect`
 
-A command died, or an `on<Tag>` handler threw.
+A command died, an `on<Tag>` handler threw, or a subscription died.
 
 ```ts continue
 const died: DevtoolsDefect = {
@@ -321,6 +343,48 @@ const died: DevtoolsDefect = {
 `Error` action follows, with `cause: { _tag: "Defect" }`. `handled: false`
 means React's error boundary took it.
 
+### `DevtoolsSubscriptionStarted`
+
+A key entered the declared set and the runtime is about to fork it. Reported
+at the diff, before the fiber exists.
+
+```ts continue
+const started: DevtoolsSubscriptionStarted = {
+  _tag: "SubscriptionStarted",
+  name: "Presence",
+  instance: "1",
+  cause: { _tag: "Lifecycle" },
+  key: "presence:general",
+};
+```
+
+### `DevtoolsSubscriptionStopped`
+
+A running subscription is no longer running, or no longer declared. `reason`
+is one of four:
+
+- `"Undeclared"`: a fold no longer declares the key.
+- `"Unmounted"`: reported by `stop()`, before the `Unmounted` transition.
+- `"Completed"`: the subscription's effect returned.
+- `"Died"`: the subscription's fiber failed; a `DevtoolsDefect` with
+  `from` set to the key precedes it.
+
+```ts continue
+const stopped: DevtoolsSubscriptionStopped = {
+  _tag: "SubscriptionStopped",
+  name: "Presence",
+  instance: "1",
+  cause: { _tag: "Lifecycle" },
+  key: "presence:general",
+  reason: "Undeclared",
+};
+```
+
+See [Subscriptions](/docs/reference/subscriptions) for the diff that produces
+these events, and
+[Subscribe to a stream](/docs/how-to/subscribe-to-a-stream) for a worked
+example.
+
 ## `DevtoolsCause`
 
 ```ts fragment
@@ -328,7 +392,8 @@ type DevtoolsCause =
   | { readonly _tag: "Dispatch" }
   | { readonly _tag: "Command"; readonly action: string; readonly key?: string }
   | { readonly _tag: "Lifecycle" }
-  | { readonly _tag: "Defect"; readonly from: string };
+  | { readonly _tag: "Defect"; readonly from: string }
+  | { readonly _tag: "Subscription"; readonly key: string };
 ```
 
 ```ts continue
@@ -337,6 +402,7 @@ const causes: ReadonlyArray<DevtoolsCause> = [
   { _tag: "Command", action: "Bumped", key: "save" }, // emitted by a running command
   { _tag: "Lifecycle" }, // Mounted, PropsChanged, HookChanged or Unmounted
   { _tag: "Defect", from: "Bumped" }, // the Error action the runtime folded
+  { _tag: "Subscription", key: "presence:general" }, // dispatched by a running subscription, or its death
 ];
 ```
 

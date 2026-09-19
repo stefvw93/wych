@@ -190,9 +190,9 @@ untouched — no existing `component(bp)` call changes.
 
 ### The event and its summaries
 
-- [x] `DevtoolsEvent` is a four-member tagged union (`Transition`, `Command`, `Output`, `Defect`) and narrows by `_tag`. _Becomes six with the two subscription members below._
+- [x] `DevtoolsEvent` is a six-member tagged union (`Transition`, `Command`, `Output`, `Defect`, `SubscriptionStarted`, `SubscriptionStopped`) and narrows by `_tag`.
 - [x] `cause` is **required** on every member; every emission site knows its cause.
-- [x] `DevtoolsCause` has exactly four variants: `Dispatch`, `Command` (with `action` and optional `key`), `Lifecycle`, `Defect` (with `from`). The old `cause: { _tag: "Output" }` variant is **deleted, not made optional** — see Expected Behavior. _Becomes five with `Subscription` below._
+- [x] `DevtoolsCause` has exactly five variants: `Dispatch`, `Command` (with `action` and optional `key`), `Lifecycle`, `Defect` (with `from`), `Subscription` (with `key`). The old `cause: { _tag: "Output" }` variant is **deleted, not made optional** — see Expected Behavior.
 - [x] `summarizeCommand` erases the effect (`{ _tag: "Effect" }` carries no function), preserves `Keyed` nesting and `Batch` order, and passes `Cancel`'s target through.
 - [x] `summarizeCommand(Command.restart(name, cmd))` is the desugared batch summary — `Batch [ Cancel name, Keyed name … ]` — identical to summarizing the hand-written pair. The sugar adds no `CommandSummary` member.
 - [x] `summarizeDefect` produces `{ message }` plus optional `name`/`stack` from an `Error`, from a string, from a symbol, and from `undefined`, and never throws.
@@ -227,21 +227,23 @@ untouched — no existing `component(bp)` call changes.
 
 ### Subscriptions (`subscriptions.specs.md`)
 
-Unchecked until that spec's implementation lands. The node harness is
-`createFeatureStore` plus `createRecorder`, as for every site above.
+Landed with that spec. The node harness is `createFeatureStore` plus
+`createRecorder` (`subscriptions.test.ts`, part six), the console lines and
+the round-trip are in `devtools.test.ts`, and the types in
+`__type-tests__/devtools.tst.ts`.
 
-- [ ] `DevtoolsEvent` gains `SubscriptionStarted { key }` and `SubscriptionStopped { key, reason }`, both narrowing by `_tag`, both carrying the envelope.
-- [ ] `DevtoolsCause` gains `{ _tag: "Subscription", key }`: every `Transition` for an action a subscription dispatched, every `Output` it emitted, and the `Defect` for its death carry it. Its `from` on the `Defect` is the key.
-- [ ] `SubscriptionStarted` and `SubscriptionStopped { reason: "Undeclared" }` are emitted **synchronously at the diff**, before the mount fiber forks or interrupts anything, with the cause of the fold that produced the declared set — `Lifecycle` from `start()` and `sync`, `Dispatch`/`Command`/`Defect`/`Subscription` otherwise.
-- [ ] `stop()` emits `SubscriptionStopped { reason: "Unmounted" }` per running key **before** the `Unmounted` transition, so the console logger's elapsed eviction on that transition is not undone by a later subscription event — the same trap the teardown `Command` event hit.
-- [ ] `SubscriptionStopped { reason: "Completed" }` is emitted when the effect returns, and `{ reason: "Died" }` after the `Defect` for a death, both with `cause: { _tag: "Subscription", key }`.
-- [ ] A key kept across a diff emits nothing.
-- [ ] The two events and the fifth cause are JSON round-trippable; a `Subscription` value never reaches an event (there is no `SubscriptionSummary` because there is nothing but a function to summarise — the key is the summary).
-- [ ] The console logger prints `⇉ <key> started` and `⇉ <key> stopped (<reason, lower-cased>)` as one line each, `%c`-coloured with a new `subscription` colour, through the injected console; neither touches the elapsed map.
-- [ ] `skipUnchangedAmbient` and `skipUnchanged` pass both events through unchanged.
-- [ ] `createRecorder` records them in emission order like any other event.
-- [ ] With no sink installed the diff allocates no event — by construction, same shape as every site.
-- [ ] Type-level: both members narrow by `_tag`, `DevtoolsColors` gains `subscription?`, and the fifth cause satisfies the local `Json` type.
+- [x] `DevtoolsEvent` gains `SubscriptionStarted { key }` and `SubscriptionStopped { key, reason }`, both narrowing by `_tag`, both carrying the envelope.
+- [x] `DevtoolsCause` gains `{ _tag: "Subscription", key }`: every `Transition` for an action a subscription dispatched, every `Output` it emitted, and the `Defect` for its death carry it. Its `from` on the `Defect` is the key.
+- [x] `SubscriptionStarted` and `SubscriptionStopped { reason: "Undeclared" }` are emitted **synchronously at the diff**, before the mount fiber forks or interrupts anything, with the cause of the fold that produced the declared set — `Lifecycle` from `start()` and `sync`, `Dispatch`/`Command`/`Defect`/`Subscription` otherwise.
+- [x] `stop()` emits `SubscriptionStopped { reason: "Unmounted" }` per running key **before** the `Unmounted` transition, so the console logger's elapsed eviction on that transition is not undone by a later subscription event — the same trap the teardown `Command` event hit.
+- [x] `SubscriptionStopped { reason: "Completed" }` is emitted when the effect returns, and `{ reason: "Died" }` after the `Defect` for a death, both with `cause: { _tag: "Subscription", key }`.
+- [x] A key kept across a diff emits nothing.
+- [x] The two events and the fifth cause are JSON round-trippable; a `Subscription` value never reaches an event (there is no `SubscriptionSummary` because there is nothing but a function to summarise — the key is the summary).
+- [x] The console logger prints `⇉ <key> started` and `⇉ <key> stopped (<reason, lower-cased>)` as one line each, `%c`-coloured with a new `subscription` colour, through the injected console; neither touches the elapsed map.
+- [x] `skipUnchangedAmbient` and `skipUnchanged` pass both events through unchanged.
+- [x] `createRecorder` records them in emission order like any other event.
+- [x] With no sink installed the diff allocates no event — by construction, same shape as every site.
+- [x] Type-level: both members narrow by `_tag`, `DevtoolsColors` gains `subscription?`, and the fifth cause satisfies the local `Json` type.
 
 ### Robustness and cost
 
@@ -367,8 +369,8 @@ existing 2934-line `lib.test.ts` goes red — which `/unit-test` forbids. So:
 ▸ room#2  ⇉ presence:general stopped (undeclared)           %c #FF9800
 ```
 
-The last two lines are specified by `subscriptions.specs.md` and not yet
-printed.
+The last two lines are the subscription events from `subscriptions.specs.md`:
+one `log` call each, no group, and no touch of the elapsed map.
 
 Elapsed uses `performance.now()` in a `Map` keyed by `${name}#${instance}`.
 

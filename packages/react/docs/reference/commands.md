@@ -13,7 +13,7 @@ Every snippet on this page builds on one feature: a search box that queries a
 `SearchApi` and cancels the previous query.
 
 ```tsx
-import { Context, Effect, Layer, Schema, Stream } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
 import { Action, Command, define, Next } from "@wych/react";
 import type { Command as CommandType, Dispatch, Dispatcher, Group } from "@wych/react";
 
@@ -92,16 +92,9 @@ const failing = Command.effect(() => Effect.fail("boom"));
 const notACallback = Command.effect(Effect.void);
 ```
 
-A long-lived source is a leaf that never settles:
-
-```ts continue
-const subscription = Command.effect<{
-  readonly _tag: "Results";
-  readonly hits: ReadonlyArray<string>;
-}>((dispatch) =>
-  Stream.runForEach(Stream.make(["one"], ["two"]), (hits) => dispatch({ _tag: "Results", hits })),
-);
-```
+A source that outlives one fold, such as a websocket or a stream of ticks, is
+a subscription, not a command; see
+[Subscriptions](/docs/reference/subscriptions).
 
 ## `Dispatcher` and `Dispatch`
 

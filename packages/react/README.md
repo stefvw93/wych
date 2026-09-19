@@ -6,8 +6,10 @@ Built on [Effect](https://effect.website). Docs at [wych.build](https://wych.bui
 A feature is schema-typed props and state, a tagged action vocabulary, an
 optional output vocabulary, and a pure reducer. The reducer returns the next
 state and, when there is work to do, a `Command`: an Effect the runtime forks,
-books under a name, and interrupts when a later action says so. The same
-reducer folds under React, under a test, or by hand.
+books under a name, and interrupts when a later action says so. A feature can
+also declare subscriptions: long-lived sources, keyed on the snapshot, that the
+runtime starts and stops as the key changes. The same reducer folds under
+React, under a test, or by hand.
 
 ## Install
 

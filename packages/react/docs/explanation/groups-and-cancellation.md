@@ -210,10 +210,14 @@ const twoSamples = Command.effect<typeof Sampled.Type, Metrics>((dispatch) =>
 ## Teardown
 
 Groups are per mount, so two dashboards on one page never interrupt each
-other. On unmount the runtime sweeps every group first, then interprets the
-`Unmounted` command with the feature's services still alive, then closes
-the scope. Flush-on-exit work therefore belongs in the `Unmounted` handler,
-because anything still in flight is already gone by the time it runs.
+other. On unmount the runtime stops every running subscription first, then
+interprets the `Unmounted` command with the feature's services still alive,
+then lets in-flight commands finish and folds what they emit, bounded at
+five seconds. Commands in flight are not interrupted by unmount on their
+own: `dashboard`'s `Unmounted` handler above reaches `poll` by name, with
+`Command.cancel("poll")`, because a still-running `poll` would otherwise
+keep the mount's layer alive until it finishes or the five-second bound is
+reached.
 
 A `Cancel` waits for the interrupted fibers' finalizers before the next
 command is processed. That wait is what lets a `batch` put a cancel ahead of

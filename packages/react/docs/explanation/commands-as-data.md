@@ -262,10 +262,14 @@ reported as a defect.
 
 ## One limit
 
-`run` counts in-flight work to decide when it is finished, so a command that
-never completes keeps it from resolving. Test a subscription by cancelling
-it, as `stopped` does above, or fold it through `reduce` and read the
-command.
+`run` counts in-flight command work to decide when it is finished, so a
+command that never completes keeps it from resolving. A long-lived source
+belongs in a subscription instead, where it is declared rather than issued;
+`run` resolves at command quiescence regardless of which subscriptions are
+still running. See [subscriptions](/docs/reference/subscriptions) for the
+hook and [the model](/docs/explanation/the-model) for why the two are kept
+apart. Test a command that is meant to be cancelled by cancelling it, as
+`stopped` does above, or fold it through `reduce` and read the command.
 
 A command that dies is a defect, not this limit: `run` routes it to the
 `Error` handler on the store's own rule and records it in `defects`, so

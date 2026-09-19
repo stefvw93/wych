@@ -14,9 +14,14 @@ const SearchDialog = dynamic(() => import("@/features/search"), { ssr: false });
 
 const SHORTCUT = "k";
 
+const subscribeNever = () => () => {};
+const isMac = () => /Mac|iPhone|iPad/.test(navigator.userAgent);
+/** Server snapshot: unknown platform, so the server and the hydrating render agree. */
+const unknownPlatform = () => undefined;
+
 /** Search button plus the cmd/ctrl+K binding; mounts the dialog on first open. */
 export function SearchTrigger() {
-  const mac = React.useMemo(() => /Mac|iPhone|iPad/.test(navigator.userAgent), []);
+  const mac = React.useSyncExternalStore(subscribeNever, isMac, unknownPlatform);
   const [open, setOpen] = React.useState(false);
   const [opened, setOpened] = React.useState(false);
   const pathname = usePathname();
@@ -52,7 +57,7 @@ export function SearchTrigger() {
         className="gap-1.5 text-muted-foreground max-sm:size-7 max-sm:px-0"
         onClick={show}
         aria-label="Search docs"
-        aria-keyshortcuts={mac ? "Meta+K" : "Control+K"}
+        aria-keyshortcuts={mac === undefined ? undefined : mac ? "Meta+K" : "Control+K"}
       >
         <MagnifyingGlassIcon className="size-3.5" />
         <span className="max-sm:sr-only">Search</span>

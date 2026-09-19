@@ -15,8 +15,10 @@ places, none of them is the reducer, and none of them runs without a DOM.
 Wych puts the rules in one place. A feature is a pure reducer over
 schema-typed state. A handler returns the next state and, when there is work
 to do, a `Command`: an Effect the runtime forks, books under a name, and
-interrupts when a later action says so. The same reducer folds under React,
-under a test, or by hand.
+interrupts when a later action says so. A feature can also declare
+subscriptions: long-lived sources, keyed on state, that the runtime starts and
+stops by diffing the key set after every fold. The same reducer folds under
+React, under a test, or by hand.
 
 ```tsx
 import { Context, Effect, Layer, Schema } from "effect";
@@ -126,9 +128,10 @@ behaviour the mounted component has.
 
 ## Status
 
-Alpha, on Effect v4 release candidates. One limit worth knowing before you
-start: `run` never resolves while a never-completing command is in flight.
-Explained in [commands as data](/docs/explanation/commands-as-data).
+Alpha, on Effect v4 release candidates. `run` resolves at command quiescence:
+a never-completing command holds it open, so a long-lived source belongs in a
+subscription instead. Explained in
+[commands as data](/docs/explanation/commands-as-data).
 
 ## Install
 
@@ -149,7 +152,7 @@ One app, three chapters. Start here.
 ## How-to
 
 - [Debounce and take latest](/docs/how-to/debounce-and-take-latest): wait for the typing to pause, then drop the request still in flight.
-- [Subscribe to a stream](/docs/how-to/subscribe-to-a-stream): open a long-lived source on mount, rebook it when a prop changes, close it on unmount.
+- [Subscribe to a stream](/docs/how-to/subscribe-to-a-stream): declare a long-lived source keyed on a prop; the runtime starts, restarts and stops it.
 - [Test a feature without React](/docs/how-to/test-a-feature-without-react): fold actions, swap the layer, assert on what was emitted.
 - [Render on the server](/docs/how-to/render-on-the-server): paint the initial state with `renderToString`, then hydrate the same feature.
 - [Install devtools](/docs/how-to/install-devtools): log every transition, command and output to the console, or forward them elsewhere.
@@ -163,6 +166,7 @@ One app, three chapters. Start here.
 - [Features](/docs/reference/features): `define`, `create`, `reduce`, `run`, `Next`, `Children`.
 - [Actions and outputs](/docs/reference/actions): `Action`, `Action.output`, `Action.of`, the two channels.
 - [Commands](/docs/reference/commands): every constructor, groups, the contextual typing rule.
+- [Subscriptions](/docs/reference/subscriptions): `Subscription.effect`, the `subscriptions` hook, the key rule, `run` and `subscriptions`.
 - [Lifecycle](/docs/reference/lifecycle): the five runtime actions and change detection.
 - [Tasks](/docs/reference/tasks): `Task`, `TaskValue`, the matcher and guards.
 - [Devtools](/docs/reference/devtools): the service, sinks, the event union, the recorder.

@@ -1,7 +1,7 @@
 ---
 title: Lifecycle
 description: "Mounted, PropsChanged, HookChanged, Error and Unmounted: payloads, order and change detection."
-order: 5
+order: 6
 ---
 
 # Lifecycle
@@ -11,37 +11,27 @@ declare an action with one of these names. Every handler is optional, and an
 unhandled lifecycle action leaves state unchanged.
 
 Every snippet on this page builds on one feature: a presence indicator that
-subscribes to a room and reports who is online.
+declares a subscription for a room and reports who is online.
 
 ```tsx
 import { Cause, Context, Effect, Layer, Schema, Stream } from "effect";
-import { Action, Command, define, Next } from "@wych/react";
+import { Action, Command, Next, Subscription, define } from "@wych/react";
 import type { LifecycleAction } from "@wych/react";
 
 class Presence extends Context.Service<
   Presence,
-  { readonly watch: (roomId: string) => Stream.Stream<ReadonlyArray<string>> }
+  {
+    readonly watch: (roomId: string) => Stream.Stream<ReadonlyArray<string>>;
+    readonly leave: (roomId: string) => Effect.Effect<void>;
+  }
 >()("Presence") {}
 
 const PresenceLayer = Layer.succeed(Presence)({
   watch: () => Stream.make(["ada"], ["ada", "grace"]),
+  leave: () => Effect.void,
 });
 
 const Arrived = Action("Arrived", { members: Schema.Array(Schema.String) });
-
-const watch = (roomId: string) =>
-  Command.restart(
-    "watch",
-    Command.effect<{ readonly _tag: "Arrived"; readonly members: ReadonlyArray<string> }, Presence>(
-      (dispatch) =>
-        Effect.gen(function* () {
-          const presence = yield* Presence;
-          yield* Stream.runForEach(presence.watch(roomId), (members) =>
-            dispatch({ _tag: "Arrived", members }),
-          );
-        }),
-    ),
-  );
 
 const Room = define({
   props: Schema.Struct({ roomId: Schema.String }),
@@ -76,23 +66,46 @@ const room = Room.create({
   reducer: Room.reducer({
     Arrived: ({ members }, { state }) => ({ ...state, members }),
 
-    Mounted: (_payload, { state, props }) => [state, watch(props.roomId)],
-
     PropsChanged: ({ previous }, { state, props }) =>
-      previous.roomId === props.roomId ? state : [{ ...state, members: [] }, watch(props.roomId)],
+      previous.roomId === props.roomId ? state : { ...state, members: [] },
 
     HookChanged: ({ previous }, { state }) => {
       console.log(previous.channel);
       return state;
     },
 
-    Error: ({ error, cause, from }, { state }) => ({
+    Error: ({ error, cause, from }, { state, props }) => ({
       ...state,
-      failed: from === "Mounted" ? "connect failed" : Cause.hasDies(cause) ? "bug" : String(error),
+      failed:
+        from === "Mounted"
+          ? "connect failed"
+          : from === `watch:${props.roomId}`
+            ? "watch died"
+            : Cause.hasDies(cause)
+              ? "bug"
+              : String(error),
     }),
 
-    Unmounted: (_payload, { state }) => [state, Command.cancel("watch")],
+    Unmounted: (_payload, { state, props }) => [
+      state,
+      Command.effect<never, Presence>(() =>
+        Effect.gen(function* () {
+          const presence = yield* Presence;
+          yield* presence.leave(props.roomId);
+        }),
+      ),
+    ],
   }),
+  subscriptions: Room.subscriptions(({ props }) => ({
+    [`watch:${props.roomId}`]: Subscription.effect((dispatch) =>
+      Effect.gen(function* () {
+        const presence = yield* Presence;
+        yield* Stream.runForEach(presence.watch(props.roomId), (members) =>
+          dispatch(Arrived.make({ members })),
+        );
+      }),
+    ),
+  })),
   render: Room.render(({ state }) => (
     <ul>
       {state.members.map((m) => (
@@ -103,17 +116,30 @@ const room = Room.create({
 });
 ```
 
+`Mounted` has no handler here: the feature has nothing left to start on mount,
+because the room feed is declared through `subscriptions`, not started by a
+handler. An unhandled lifecycle action returns state unchanged, which is why
+`Mounted` is safe to leave out. See [Subscriptions](/docs/reference/subscriptions)
+for the hook, the key rule and the diff that starts and stops fibers.
+
 ## Order
 
-1. `Mounted`, once per mount, raised from an effect after the commit.
-2. `PropsChanged` and `HookChanged`, whenever their values change.
+1. `Mounted`, once per mount, raised from an effect after the commit. The
+   `subscriptions` hook is evaluated right after, against the post-`Mounted`
+   snapshot, whether or not `Mounted` moved state.
+2. `PropsChanged` and `HookChanged`, whenever their values change. The hook is
+   evaluated again after either fires.
 3. `Error`, at any point from the mount effect on, including during teardown.
-   It fires when a command dies, when a handler throws, or when the feature
-   `layer` fails to build.
+   It fires when a command dies, when a subscription dies, when a handler
+   throws, or when the feature `layer` fails to build.
 4. `Unmounted`, at teardown.
 
 `Mounted` fires once per effect cycle, so it fires twice under React
-StrictMode in development. Write the handler to be idempotent.
+StrictMode in development. Write a `Mounted` handler to be idempotent: a
+command it returns can fold twice, once from each mount, because a command
+that resolves during the second mount's life still folds into the surviving
+store. `Task.resolved(value)` replaces on a second fold and is fine; an
+append is not.
 
 ```ts continue
 const mounted = room.reduce(
@@ -128,11 +154,13 @@ const mounted = room.reduce(
 console.log(Next.state(mounted));
 // => { members: [], failed: "" }
 console.log(Next.command(mounted) !== undefined);
-// => true
+// => false
 ```
 
-A props change between the first render and the mount effect folds before
-`Mounted`, so its command is queued ahead of the `Mounted` command.
+`Mounted` returns no command here, because there is no handler for it. A
+feature whose `Mounted` handler does return a command still has its command
+queued ahead of a `PropsChanged` fold that lands between the first render and
+the mount effect.
 
 ## `PropsChanged`
 
@@ -166,6 +194,11 @@ console.log(Next.state(newRoom));
 // => { members: [], failed: "" }
 ```
 
+A changed `roomId` also changes the key `subscriptions` returns, so the
+runtime stops the old room's fiber and starts the new one on the same render
+pass. `PropsChanged` here only resets `members`; nothing in the reducer
+starts, rebooks or cancels the feed.
+
 A `Children` prop is opaque and compares equal to any value, so a fresh node
 never raises `PropsChanged`. The reducer's `snapshot.props.children` can
 be stale. `render` always has the current node.
@@ -196,6 +229,10 @@ console.log(Next.state(hookChanged));
 A hook returning a fresh object or a fresh function on every render raises
 `HookChanged` on every render. Memoize inside the hook, or return primitives.
 
+A key built from `snapshot.hooks` restarts under the same rule: `sync`
+evaluates the `subscriptions` hook after a `HookChanged` fold, on the same
+terms as after `PropsChanged`.
+
 `useUnsafeHooks` sees the committed state read before the fold of
 `PropsChanged` and `HookChanged`, so a hook value derived from state can lag
 until the next dispatch or ambient change.
@@ -209,16 +246,19 @@ Error: (
 ) => Next;
 ```
 
-Three things reach this handler as defects: a command that dies, a handler
-that throws, and a feature `layer` that fails to build. `error` is the squashed
-cause. `cause` is `Cause.die(error)`, for a handler that wants a `Cause` value.
-`from` names the origin: the tag of the action whose command died or whose
-handler threw, `"Mounted"` for a layer that failed to build, or `"Unmounted"`
-for a teardown that threw or overran.
+Four things reach this handler as defects: a command that dies, a subscription
+that dies, a handler that throws, and a feature `layer` that fails to build.
+`error` is the squashed cause. `cause` is `Cause.die(error)`, for a handler
+that wants a `Cause` value. `from` names the origin: the tag of the action
+whose command died or whose handler threw, the key of the subscription that
+died, `"Mounted"` for a layer that failed to build, or `"Unmounted"` for a
+teardown that threw or overran.
 
-`from` lets a handler tell infrastructure from a single bad command: back off
-when `from === "Mounted"`, because the layer itself cannot build; carry on
-for anything else, because one command failing does not mean the next will.
+`from` lets a handler tell infrastructure from a single bad command or a dead
+subscription: back off when `from === "Mounted"`, because the layer itself
+cannot build; check `from` against a known subscription key to react to a
+dead feed specifically; carry on for anything else, because one death does
+not mean the next will happen.
 
 ```ts continue
 const connectFailed = room.reduce(
@@ -238,31 +278,37 @@ const connectFailed = room.reduce(
 console.log(Next.state(connectFailed));
 // => { members: [], failed: "connect failed" }
 
-const commandDied = room.reduce(
+const watchDied = room.reduce(
   {
     _tag: "Error",
     error: new Error("socket closed"),
     cause: Cause.die(new Error("socket closed")),
-    from: "Arrived",
+    from: "watch:r_1",
   },
   {
-    state: { members: [], failed: "" },
+    state: { members: ["ada"], failed: "" },
     props: { roomId: "r_1" },
     hooks: { channel: "room:r_1" },
   },
 );
 
-console.log(Next.state(commandDied));
-// => { members: [], failed: "bug" }
+console.log(Next.state(watchDied));
+// => { members: ["ada"], failed: "watch died" }
 ```
 
 With no `Error` handler declared, the defect is rethrown during render and
 reaches the nearest React error boundary. An `Error` handler that throws goes
-to the boundary too. Interruption is never reported as a defect: `Command.cancel`
-and unmount end fibers on purpose.
+to the boundary too. Interruption is never reported as a defect:
+`Command.cancel`, an undeclared subscription key and unmount end fibers on
+purpose.
 
 A missing `on<Tag>` prop for an output also throws to the boundary, and it does
 not reach this handler.
+
+A subscription that dies stays dead under its key: the runtime does not
+restart it. The feature restarts it by changing the key, or reconnects inside
+the effect with `Effect.retry`. See
+[Failure](/docs/reference/subscriptions#failure) for the recipe.
 
 During teardown, `Error` fires when the `Unmounted` handler throws, when the
 `Unmounted` command dies, or when teardown passes its 5 second bound. For the
@@ -306,21 +352,28 @@ const torn = room.reduce(
 console.log(Next.state(torn));
 // => { members: ["ada"], failed: "" }
 console.log(Next.command(torn)?._tag);
-// => "Cancel"
+// => "Effect"
 ```
 
 `reduce` discards the returned state the same way the runtime does, so a
 teardown test cannot disagree with the mount.
 
-Two ordering facts about teardown:
+Teardown, in order:
 
-- In-flight work is interrupted before the `Unmounted` command is interpreted.
-  A flush-on-exit belongs in the `Unmounted` handler.
-- The `Unmounted` command runs with the feature's services still alive, then
-  the mount scope closes. Teardown is bounded at 5 seconds; an abandoned
-  teardown is reported as a defect.
+1. Every subscription fiber is interrupted and awaited, and
+   `SubscriptionStopped { reason: "Unmounted" }` is reported for each.
+2. The `Unmounted` command is interpreted, with the feature's services still
+   alive.
+3. The mount drains until every in-flight command finishes and what it emits
+   folds. In-flight commands are not interrupted at this point.
 
-The teardown command is unkeyed, so it books under the group `"Unmounted"`.
+The whole sequence is bounded at 5 seconds. An overrun is one defect
+(`from: "Unmounted"`) and the scope closes anyway. To drop a slow command
+instead of waiting for it, cancel its group from the `Unmounted` handler:
+`Unmounted: (_payload, { state }) => [state, Command.cancel("slow")]`.
+
+The teardown command runs before the drain, not after it, so a `Cancel` it
+carries can still reach the in-flight fibers it targets.
 
 ## Server rendering
 

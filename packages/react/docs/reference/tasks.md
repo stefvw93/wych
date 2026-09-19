@@ -1,7 +1,7 @@
 ---
 title: Tasks
 description: Task, TaskOperation, TaskValue, and the constructors, matcher and guards around them.
-order: 6
+order: 7
 ---
 
 # Tasks
