@@ -357,6 +357,7 @@ landed with every box checked again.
 - [x] `component(feature)` renders `render({ state, props, hooks, dispatch })` and re-renders when a command changes state.
 - [x] Incoming props are split by derived name (`outputTags.map(t => "on" + t)`), so a declared prop merely starting with `on` is left alone.
 - [x] `validateProps` runs the schema with `onExcessProperty: "error"` and **throws** — a malformed prop is the parent's defect and belongs at the error boundary. It runs on mount and on props-identity change, not on a state-driven re-render.
+- [x] A feature rendered with a `key` validates in React's development build. React defines a non-enumerable `key` warning getter on a keyed element's props (and a `ref` one on 18); `splitOutputProps` copies such an object through `Object.keys`, which skips them, so the decoder's own-property read never sees them. A props object without either getter still passes through by identity. (`lib.stress.browser.test.tsx`)
 - [x] An output leaves through its `on<Tag>` prop with `_tag` stripped and never re-enters the reducer; a missing handler throws to the boundary rather than into this feature's `Error` handler.
 - [x] `Children` is a props field that validates any value, so a feature can declare `children` and still be validated with `onExcessProperty: "error"`. Declared plainly it is required — the key is absent, not `undefined`, when JSX passes no children — and `Schema.optionalKey(Children)` is the optional form.
 - [x] `Children.as<T>()` is the same declaration at any children type — a render prop, one element, a tuple of slots. It is opaque on identical terms, and the type argument is the only thing holding the caller to the contract.
@@ -551,6 +552,14 @@ real browser. The runnable version is `docs/examples/search-debounce`.
   `displayName` and the `$RefreshReg$` call, and the throw uses the same
   `name`.
 
+- The store and the `createRuntime` result carry a test-only probe behind the
+  `internals` symbol: the store's returns its closure counters (`mounted`,
+  `active`, `dead`, `queued`, `inFlight`, `groups`, `fibers`, `live`,
+  `subscriptions`, `declared`, `buffered`, `pending`, `subscribers`), the
+  runtime's the size of the `useFeature` context registry. Read by the bench
+  and stress suites through the symbol's description, never exported by name,
+  so the docs do not list it. Zero cost until read.
+
 ## Expected Behavior & Edge Cases
 
 - `Mounted` fires once **per effect cycle** — twice in StrictMode dev. Latching
@@ -588,6 +597,202 @@ real browser. The runnable version is `docs/examples/search-debounce`.
   root's own re-render already re-renders; a `memo`'d fragment that reads the
   context loses the memo, which is the correct outcome for a component reading
   changing state.
+
+## Performance and resilience
+
+Two on-demand Vitest projects, outside `vpr -r test`. The `bench` project
+(`src/**/*.bench.test.ts`) runs tinybench through Vitest bench mode; the `stress`
+and `stress-browser` projects (`src/**/*.stress.test.ts`,
+`src/**/*.stress.browser.test.tsx`) hold the load, chaos, leak and property
+tests. Fixtures and probes are in `src/__fixtures__/stress.ts`.
+
+### How to run
+
+From `packages/react`:
+
+    vp run bench             # against bench/baseline.json, informational ratio column
+    vp run bench:baseline    # rewrite bench/baseline.json
+    vp run stress            # node then browser
+    vp run stress:node       # STRESS_SCALE=4 for a headroom run
+    vp run stress:browser
+
+### Baseline
+
+Written 2026-09-19 on an AMD Ryzen 7 5700X3D, Node v24.21.0,
+`effect@4.0.0-rc.112`, React 19.2.8, headless Chromium. Indicative only:
+tinybench varies 10 to 20 percent between runs and the compare column is a
+prompt to look, not a gate. Async benches include an `await` on the probe
+between iterations.
+
+| file                          | group            | bench                                                      | mean      |
+| ----------------------------- | ---------------- | ---------------------------------------------------------- | --------- |
+| `devtools.bench.test.ts`      | fold with a sink | dispatch: counting sink                                    | 0.23 µs   |
+| `devtools.bench.test.ts`      | fold with a sink | dispatch: console sink, diff off                           | 0.95 µs   |
+| `devtools.bench.test.ts`      | fold with a sink | dispatch: console sink, diff on                            | 1.03 µs   |
+| `devtools.bench.test.ts`      | fold with a sink | dispatch: no sink (control)                                | 0.21 µs   |
+| `lib.bench.test.ts`           | fold             | dispatch: no sink, no hook                                 | 0.22 µs   |
+| `lib.bench.test.ts`           | commands         | Command.effect: fork one leaf and settle                   | 21.02 µs  |
+| `lib.bench.test.ts`           | commands         | Command.batch: 1 leaves and settle                         | 20.88 µs  |
+| `lib.bench.test.ts`           | commands         | Command.batch: 10 leaves and settle                        | 84.19 µs  |
+| `lib.bench.test.ts`           | commands         | Command.batch: 100 leaves and settle                       | 731.88 µs |
+| `lib.bench.test.ts`           | commands         | Command.restart: 100 dispatches into one key, then cancel  | 1.4 ms    |
+| `lib.bench.test.ts`           | Feature.run      | 10k seeds, no commands                                     | 25.2 ms   |
+| `lib.bench.test.ts`           | Feature.run      | 10k seeds, each emits one action                           | 135.9 ms  |
+| `lib.bench.test.ts`           | props            | Schema.toEquivalence: 3 fields, equal by value             | 0.17 µs   |
+| `lib.bench.test.ts`           | props            | decodeUnknownSync: 3 fields                                | 0.67 µs   |
+| `lib.bench.test.ts`           | props            | Schema.toEquivalence: 30 fields, equal by value            | 1.78 µs   |
+| `lib.bench.test.ts`           | props            | decodeUnknownSync: 30 fields                               | 3.24 µs   |
+| `lib.bench.test.ts`           | props            | Schema.toEquivalence: 300 fields, equal by value           | 26.11 µs  |
+| `lib.bench.test.ts`           | props            | decodeUnknownSync: 300 fields                              | 53.07 µs  |
+| `lib.bench.test.ts`           | props            | store.sync: 30 fields, equal props                         | 1.93 µs   |
+| `lib.bench.test.ts`           | props            | store.sync: 30 fields, one field changed                   | 0.60 µs   |
+| `lib.bench.test.ts`           | mount cycle      | createFeatureStore + start + stop: no layer                | 20.37 µs  |
+| `lib.bench.test.ts`           | mount cycle      | createFeatureStore + start + stop: Layer.succeed           | 25.21 µs  |
+| `lib.bench.test.ts`           | mount cycle      | createFeatureStore + start + stop: async Layer.effect      | 28.52 µs  |
+| `subscriptions.bench.test.ts` | reconcile        | fold with 1 stable keys: hook evaluated, nothing changes   | 0.75 µs   |
+| `subscriptions.bench.test.ts` | reconcile        | fold with 10 stable keys: hook evaluated, nothing changes  | 2.40 µs   |
+| `subscriptions.bench.test.ts` | reconcile        | fold with 100 stable keys: hook evaluated, nothing changes | 18.51 µs  |
+| `subscriptions.bench.test.ts` | reconcile        | 10 keys, one rotates: stop one, start one, settle          | 16.81 µs  |
+| `subscriptions.bench.test.ts` | reconcile        | 100 keys, one rotates: stop one, start one, settle         | 43.05 µs  |
+| `task.bench.test.ts`          | Task.run         | mode latest: 50 issues and settle                          | 850.00 µs |
+| `task.bench.test.ts`          | Task.run         | mode every: 50 issues and settle                           | 581.19 µs |
+
+What the numbers say:
+
+- A fold is 0.2 µs. A live recorder sink adds nothing measurable; the console
+  logger costs 0.7 µs per event on a silent console, with or without `diff`.
+- A command leaf costs about 20 µs to fork and settle: two fibers (the leaf and
+  its `Fiber.await` watcher) plus a `Settled` queue item. A batch scales
+  linearly at 7 µs per extra leaf. `restart` is 14 µs per dispatch, the
+  awaited interrupt included.
+- `Feature.run` pays 2.5 µs per seeded action for its `Effect.yieldNow`, and
+  13 µs per action that emits once.
+- Props validation and equivalence are linear in field count, about 0.1 µs per
+  field each. A 30-field feature pays about 5 µs per render for both, on every
+  render, because `incoming` is a fresh object each time.
+- A mount cycle is 20 µs bare, 25 µs with a `Layer.succeed`, 29 µs with an
+  asynchronous `Layer.effect`.
+- The subscription diff costs 0.18 µs per declared key per fold when nothing
+  changes; one key rotating costs 17 µs at 10 keys and 43 µs at 100.
+- `Task` `latest` costs 1.5x `every` for 50 back-to-back issues: the awaited
+  cancel.
+- In Chromium (`lib.stress.browser.test.tsx`, `console.info` lines under
+  `--reporter verbose`): 250 sibling features mount in 44 ms wall, one
+  commit; 1000 in 75 ms wall with 48 ms of render in one commit; 2000
+  mount/unmount cycles under three names hold the heap at 47 MiB.
+
+### Load shapes and pinned assertions
+
+Counts are at `STRESS_SCALE=1`. Every test names its criterion; a pinned
+defect is `it.fails` with a `HINT` above it naming the spec entry.
+
+**Many mounts** (`lib.stress.test.ts`, `subscriptions.stress.test.ts`,
+`lib.stress.browser.test.tsx`)
+
+- 500 stores under one runtime start, dispatch and stop: every probe idle
+  and unmounted after, 500 `Mounted`, 500 `Unmounted`, distinct instances.
+- 200 stores sharing a root layer with one failing per-feature layer: the
+  root acquired once, one `Defect` from `Mounted`, the other 199 fold
+  normally, `runtime.dispose()` under 1 s.
+- 200 stores declaring 5 keys each: 1000 `Started`, 1000 `Stopped` with
+  reason `Unmounted`.
+- 250 sibling components in Chromium mount in at most two commits and paint;
+  a dispatch in one repaints only that one; unmount empties the document.
+  1000 siblings is a probe, reported not gated.
+- 250 subscribing components under `StrictMode`: 500 `Mounted`, 250
+  `Unmounted` at mount, 500 `Started`, 250 `Stopped` at mount and 500 after
+  unmount, none `Died`.
+
+**High-frequency sources**
+
+- A command emitting 100k actions folds all of them under 3 s. Each emission
+  is its own fold and its own subscriber notification; a React consumer is
+  offered that many re-renders. Recorded, not hidden.
+- An output handler dispatching 10k actions re-entrantly drains them in the
+  one fold that emitted the output: `pending` peaks at 10k, one notification.
+- A subscription emitting 100k elements from `Stream.range` folds all of them
+  under 3 s and then reports `Stopped` with reason `Completed`, staying
+  booked until undeclared.
+- 10 sources emitting 10k each interleave without losing per-key order.
+- A sink that throws is called once and costs nothing after.
+- 10k commands offered before `start()` are buffered and all run. `buffered`
+  is bounded by the caller alone, by design.
+- 10k `sync()` calls with alternating props fold 10k `PropsChanged`.
+
+**Deep async churn**
+
+- 10k `restart` dispatches into one key: at most one live fiber at any
+  sample, book empty after `cancel`, no defect. Interrupted fibers stay
+  booked until their watcher's cleanup runs, so the book can hold many exited
+  fibers mid-batch; `live` is the number that matters.
+- 1k restarts whose cancelled leaf has a 1 ms finalizer finish under 3 ms per
+  cycle: the `Cancel` awaits each finalizer on the mount loop.
+- `stop()` with 100 commands in flight drains them, runs the `Unmounted`
+  command with the feature layer alive, and releases under 500 ms.
+- 1k start/stop cycles without settling between keep `Mounted` and
+  `Unmounted` paired.
+- An `on<Tag>` handler dispatching during a teardown drain has its command
+  either run on the closing mount or reported `dropped: true`, exactly one.
+- 1k commands whose builder throws each raise one `Defect` and fold `Error`;
+  a command that dies after emitting folds the emission, then one `Error`.
+- 100 subscriptions dying on the first tick, and 100 dying after ten, each
+  report one `Died` and fold one `Error`, and stay booked until undeclared.
+- 500 sources dying on the first tick under the store, and 1000 under `run`,
+  are all reported. The fork loop crosses the scheduler's op-budget yield,
+  and a body that runs before the mount fiber's booking books itself first.
+- `Task` `latest` resolves once for 1k back-to-back issues; `every` resolves
+  1k times.
+- Pinned, `it.fails`: a hung uninterruptible finalizer on `Cancel` stalls the
+  next command (Known limitations); `run` never resolves with a
+  never-completing command in flight (Known limitations).
+- Property tests (`lib.differential.stress.test.ts`, `FastCheck`, 200 runs):
+  `run` and a hand-driven store agree on final state and emission order for
+  sequences of commands that complete before the next action; after any
+  sequence including `restart` and `cancel` the books are empty and the log
+  equals what was emitted; `restart` never leaves two live fibers under one
+  key; `Schema.toEquivalence` is reflexive on structural clones, so `sync`
+  folds no `PropsChanged` for one.
+
+**Long sessions**
+
+- 10k create/start/dispatch/stop cycles, with and without a scoped
+  per-feature layer: a sentinel reachable only through each store's closure
+  is collected for at least 99 percent of cycles, heap growth over the last
+  five of eight rounds under 2 MiB, layer acquires equal releases.
+- 10k cycles with 3 keys each: 30k `Started`, 30k `Stopped`, same heap and
+  sentinel criteria.
+- The console sink's elapsed-clock map stays under 512 entries across mounts
+  that never unmount.
+- 2000 mount/unmount cycles in Chromium under three names: the `useFeature`
+  context registry does not grow with mounts, heap growth over the last five
+  rounds under 2 MiB.
+- Pinned, `it.fails`: 50 abandoned transitions held 50 ms with an emitting
+  subscription restart the discarded key at most twice each (see Findings).
+
+### Findings
+
+- **A `key` on a feature component failed props validation in development.**
+  React's development build defines a non-enumerable `key` getter on a keyed
+  element's props, and `decodeUnknownSync` with `onExcessProperty: "error"`
+  reads own property names, so every list of features threw `Expected no
+excess property at ["key"]` in dev and worked in production. Fixed:
+  `splitOutputProps` copies a props object carrying a `key` or `ref` own
+  property through `Object.keys`. Asserted by `lib.stress.browser.test.tsx`
+  "a feature rendered with a key passes props validation"; criterion above.
+- **Discarded-render churn is per emission, not per abandoned render.**
+  Measured at 1, 3, 7 and 18 restarts of the discarded key for a render held
+  0, 12, 50 and 150 ms with a source ticking every 5 ms. Pinned by
+  `lib.stress.browser.test.tsx` "50 abandoned transitions…"; the deferred
+  `store.sync` decision below is corrected.
+- **A subscription that died before its key was booked was never reported**,
+  in the store and in `run`. Fixed: the forked body books its own fiber before
+  `sub.effect` runs. Asserted by `subscriptions.stress.test.ts`; criterion in
+  `subscriptions.specs.md` under Failure.
+- A subscription that died and is later undeclared reports a second
+  `SubscriptionStopped`, reason `Undeclared`. Kept: the events describe the
+  declared set. Noted in `subscriptions.specs.md` Expected Behavior.
+- Every emission from a command or subscription is its own fold and its own
+  notification. Not a defect; the number a React consumer pays.
 
 ## Known limitations
 
@@ -818,8 +1023,12 @@ sync lane, and that render commits the props React was about to discard, so
 the key flips back and forth once per abandoned render. The browser case
 "a discarded render's subscription is stopped by the committed one" uses a
 non-emitting feed for that reason: with an emission the render is never
-discarded and the case has nothing to show. Bounded by the keys involved;
-fixed by this redesign, not before it.
+discarded and the case has nothing to show. Measured in
+`lib.stress.browser.test.tsx`: the discarded key restarts once per emission
+or two for as long as the abandoned render is held (1 restart at 0 ms, 3 at
+12 ms, 7 at 50 ms, 18 at 150 ms with a 5 ms tick), so the churn is bounded
+by the hold time and the emission rate, not by the keys involved. Fixed by
+this redesign, not before it.
 
 This supersedes old open item #5 ("the `useSyncExternalStore`-after-`sync`
 ordering has no discriminating test"), which the previous spec rewrite promoted

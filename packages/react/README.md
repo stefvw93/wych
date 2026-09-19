@@ -134,6 +134,11 @@ inside this package at `node_modules/@wych/react/docs`.
 
 Start with `docs/index.md`.
 
+## Contributing
+
+Development commands, including the benchmark and stress suites, are in the
+repository [README](https://github.com/stefvw93/wych#development).
+
 ## License
 
 MIT

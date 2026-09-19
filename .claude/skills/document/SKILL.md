@@ -10,6 +10,7 @@ Bring all documentation touched by the change up to date. A change is not comple
 ## When to run
 
 - After the code change is reviewed and `vpr check` and `vpr test` are green.
+- For a change to `packages/react/src/lib.ts`, `devtools.ts` or `utils/task.ts`, also after `vp -C packages/react run stress` is green (pinned `it.fails` cases excepted) and `vp -C packages/react run bench` has been read against the baseline. A new finding is pinned and recorded in the spec's "Performance and resilience" section before the docs sweep; a fixed finding flips its pin and its spec entry in the same change.
 - Before committing or opening a PR for that change.
 
 ## Scope: everything touched by the change

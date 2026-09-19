@@ -341,6 +341,7 @@ cases under Browser coverage are green under
 - [x] A subscription that dies reports one `Defect` (`from` = key, `handled` on the store's rule), folds `Error` when handled with `from` = key, then reports `SubscriptionStopped { reason: "Died" }`. (`createFeatureStore` + recorder)
 - [x] A died key still declared on the next fold is not restarted. (`createFeatureStore`)
 - [x] A died key that leaves the declared set and returns restarts. (`createFeatureStore`)
+- [x] A subscription that dies before the mount fiber's booking statement runs is still reported. `forkChild` schedules the body on the dispatcher, and the scheduler's op budget can yield the mount fiber between the fork and its booking; the body books its own fiber before `sub.effect` runs, so a death there finds the key booked. The mount fiber books it too, for a fiber stopped before its body ran. Holds for the store and for `run`, across a 500- and 1000-key declaration. (`subscriptions.stress.test.ts`)
 - [x] `Command.cancel(key)` for a running subscription's key interrupts nothing: the subscription keeps emitting. (`createFeatureStore`)
 - [x] A command group and a subscription key with the same name coexist: `cancel(name)` interrupts the command and leaves the subscription running. (`createFeatureStore`)
 
@@ -528,6 +529,12 @@ Three things the exercises hit that the next pass on this code will hit too:
 - **A key that is a lifecycle tag or an action tag** is legal and collides
   with nothing at runtime; only `Error.from` becomes ambiguous for it.
 
+- A key whose fiber died and is later undeclared reports a second
+  `SubscriptionStopped`, reason `Undeclared`, after the `Died` one. The
+  events describe the declared set, and the key did leave it; a reader
+  counting live keys as started minus stopped has to skip `Died`. Asserted in
+  `subscriptions.stress.test.ts`.
+
 ## Known limitations
 
 - **`run` does not await asynchronous subscription emissions.** A stub that
@@ -548,8 +555,9 @@ Three things the exercises hit that the next pass on this code will hit too:
 - **A subscription cannot be cancelled by a handler**, by design (see Deferred
   decisions), so a one-off "drop this feed now" without a state change has no
   spelling.
-- **Discarded-render churn** is bounded but real until the `store.sync` redesign
-  in `lib.specs.md` lands.
+- **Discarded-render churn** is real until the `store.sync` redesign in
+  `lib.specs.md` lands, and with an emitting source it is per emission: see
+  the measurement under that deferred decision.
 
 ## Open work
 

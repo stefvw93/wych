@@ -26,7 +26,7 @@
   "scripts": {
     "build": "vp pack",
     "dev": "vp pack --watch",
-    "test": "vp test",
+    "test": "vp test --project node --project browser --project docs",
     "check": "vp check && vp run test:types",
     "prepublishOnly": "vp run build"
   },
