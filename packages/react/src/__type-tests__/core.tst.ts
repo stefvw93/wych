@@ -978,6 +978,7 @@ test("`run` reports `defects` beside `emitted` and `outputs`, and stays total", 
       readonly emitted: ReadonlyArray<{ readonly _tag: "Added" }>;
       readonly outputs: ReadonlyArray<{ readonly _tag: "OrderPlaced"; readonly orderId: string }>;
       readonly defects: ReadonlyArray<RunDefect>;
+      readonly subscriptions: ReadonlyArray<string>;
     }>
   >();
 });

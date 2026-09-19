@@ -1001,8 +1001,8 @@ describe("Feature internals slot", () => {
     render: () => null,
   });
 
-  it("keeps `reduce` and `run` as the only enumerable surface", () => {
-    expect(Object.keys(feature).sort()).toEqual(["reduce", "run"]);
+  it("keeps `reduce`, `run` and `subscriptions` as the only enumerable surface", () => {
+    expect(Object.keys(feature).sort()).toEqual(["reduce", "run", "subscriptions"]);
   });
 
   it("carries the pieces `component` needs behind a symbol key", () => {
@@ -1826,11 +1826,15 @@ describe("createFeatureStore — remount races (review regression)", () => {
 
     await Effect.runPromise(Effect.sleep("60 millis"));
 
-    // One completion, from the mount that survived. The first mount's command
-    // is interrupted by its own `stop`, which is correct — that mount ended.
-    // What matters is that the *second* mount's command is not the casualty,
-    // which is what happened when both mounts shared one queue.
-    expect(ran).toEqual(["loaded"]);
+    // Two completions, one per mount. Rewritten for `subscriptions.specs.md`:
+    // unmount no longer interrupts in-flight commands, so the first mount's
+    // `Mounted` command runs to completion during the second mount's life and
+    // folds into the shared store — which is why `Mounted`'s command must be
+    // idempotent (`Task.resolved(value)` replaces; an append does not). What
+    // this pins is that the *second* mount's command is not the casualty,
+    // which is what happened when both mounts shared one queue: before the
+    // fix this was `[]`, never `["loaded", "loaded"]`. Was `["loaded"]`.
+    expect(ran).toEqual(["loaded", "loaded"]);
   });
 
   it("runs teardown with the feature layer still alive", async () => {

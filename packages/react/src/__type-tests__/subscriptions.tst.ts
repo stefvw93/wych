@@ -118,10 +118,17 @@ test("`Subscription.effect` carries `R`, and `create` unions it into the feature
     subscriptions: () => ({ presence: Subscription.effect(() => presenceEffect) }),
   });
 
-  expect(createRuntime(Layer.empty).component).type.not.toBeCallableWith(needsPresence);
-  expect(createRuntime(presenceLayer).component).type.toBeCallableWith(needsPresence);
+  // `{ name }` is required on every `component` call; without it the negative
+  // assertion would pass for the wrong reason.
+  expect(createRuntime(Layer.empty).component).type.not.toBeCallableWith(needsPresence, {
+    name: "Presence",
+  });
+  expect(createRuntime(presenceLayer).component).type.toBeCallableWith(needsPresence, {
+    name: "Presence",
+  });
   expect(createRuntime(Layer.empty).component).type.toBeCallableWith(needsPresence, {
     layer: presenceLayer,
+    name: "Presence",
   });
 });
 
@@ -131,20 +138,27 @@ test("`Subscription.effect` carries `R`, and `create` unions it into the feature
 // the type, set by the constructor — so neither direction is assignable.
 // `Next` admits `Command` only; the hook's record admits `Subscription` only.
 test("a `Command` in the hook and a `Subscription` from a handler are both compile errors", () => {
+  // Reported on the hook, not on `cmd`: `subscriptions` is optional, so its
+  // target type is a union with `undefined`, and TypeScript does not
+  // elaborate an arrow body against a union target. The message still names
+  // the hook's type, which is what the directive matches.
   Contextual.create({
     initialState: () => ({ count: 0 }),
     reducer: { Ping: (_a, s) => s.state, Pong: (_a, s) => s.state },
     render: () => null,
+    // @ts-expect-error is not assignable to type 'Subscription
     subscriptions: () => ({
-      // @ts-expect-error is not assignable to type 'Subscription
       cmd: Command.effect(() => Effect.void),
     }),
   });
 
+  // The tuple's second element is checked against `Command | LazyCommand`,
+  // so the message names `Command`, not `Next`; the incompatible property is
+  // the nominal marker.
   Contextual.create({
     initialState: () => ({ count: 0 }),
     reducer: {
-      // @ts-expect-error is not assignable to type 'Next
+      // @ts-expect-error is not assignable to type 'Command
       Ping: (_a, s) => [s.state, Subscription.effect(() => Effect.void)] as const,
       Pong: (_a, s) => s.state,
     },
@@ -214,4 +228,49 @@ test("`subscriptions` is not a reducer key", () => {
     },
     render: () => null,
   });
+});
+
+// Beyond the exercises: the shapes a hook is actually written in, and what
+// `.pipe` keeps.
+test("a hook written as a ternary against `{}`, or with an `undefined` value, type-checks", () => {
+  Contextual.create({
+    initialState: () => ({ count: 0 }),
+    reducer: { Ping: (_a, s) => s.state, Pong: (_a, s) => s.state },
+    render: () => null,
+    subscriptions: ({ state }) =>
+      state.count > 0
+        ? { feed: Subscription.effect((dispatch) => dispatch({ _tag: "Ping" })) }
+        : {},
+  });
+
+  Contextual.create({
+    initialState: () => ({ count: 0 }),
+    reducer: { Ping: (_a, s) => s.state, Pong: (_a, s) => s.state },
+    render: () => null,
+    subscriptions: ({ state }) => ({
+      feed:
+        state.count > 0 ? Subscription.effect((dispatch) => dispatch({ _tag: "Ping" })) : undefined,
+    }),
+  });
+
+  // `R` still reaches the feature through either shape.
+  const viaTernary = Contextual.create({
+    initialState: () => ({ count: 0 }),
+    reducer: { Ping: (_a, s) => s.state, Pong: (_a, s) => s.state },
+    render: () => null,
+    subscriptions: ({ state }) =>
+      state.count > 0 ? { presence: Subscription.effect(() => presenceEffect) } : {},
+  });
+  expect(createRuntime(Layer.empty).component).type.not.toBeCallableWith(viaTernary, {
+    name: "Presence",
+  });
+});
+
+test("`.pipe` on a subscription preserves `A` and `R`", () => {
+  const sub = Subscription.effect<{ readonly _tag: "Pong"; readonly at: number }, PresenceApi>(
+    () => presenceEffect,
+  );
+  expect(sub.pipe((self) => self)).type.toBe<
+    Subscription<{ readonly _tag: "Pong"; readonly at: number }, PresenceApi>
+  >();
 });

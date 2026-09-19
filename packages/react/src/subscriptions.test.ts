@@ -794,15 +794,17 @@ describe("Part 4 — teardown", () => {
   });
 
   // HINT: `Fiber.interruptAll` over the subscriptions is *inside* `teardown`,
-  // so a finalizer that hangs is under the same `timeoutOption`.
+  // so a finalizer that hangs is under the same `timeoutOption`. The finalizer
+  // is `Effect.never`, not a long `Effect.sleep`: probed against
+  // effect@4.0.0-rc.112, a `TestClock` sleep inside the finalizer of an
+  // interrupted fiber returns at once rather than waiting for `adjust`, so a
+  // sleep would not hang and the bound would have nothing to catch.
   it("30 · a subscription whose finalizer hangs is caught by the same bound", async () => {
     const { store, runtime, defects } = makeStore({
       clock: true,
       reducer: { Error: undefined },
       subscriptions: () => ({
-        stuck: Subscription.effect(() =>
-          Effect.never.pipe(Effect.ensuring(Effect.sleep("1 hour"))),
-        ),
+        stuck: Subscription.effect(() => Effect.never.pipe(Effect.ensuring(Effect.never))),
       }),
     });
 
@@ -1062,5 +1064,147 @@ describe("Part 6 — devtools", () => {
     expect(calls.map(([method]) => method)).toEqual(["log", "log"]);
     expect(printed[0]).toContain("room#2  ⇉ presence:general started");
     expect(printed[1]).toContain("room#2  ⇉ presence:general stopped (undeclared)");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Part 7 — beyond the exercises
+//
+// Coverage the acceptance criteria name and the exercises above do not reach:
+// outputs from a subscription on the store, a key built from hooks, `undefined`
+// as an absent entry, a throwing hook under `run`, and the re-arm rule's edges.
+// ---------------------------------------------------------------------------
+
+describe("Part 7 — beyond the exercises", () => {
+  it("40 · an output a subscription dispatches leaves through `emit`, with the subscription cause", async () => {
+    const { store, recorder, outputs } = makeStore({
+      subscriptions: () => ({
+        feed: Subscription.effect((dispatch: any) => dispatch({ _tag: "Out", id: "o1" })),
+      }),
+    });
+
+    store.start();
+    await settle();
+
+    expect(outputs).toEqual([{ _tag: "Out", id: "o1" }]);
+    expect(only(recorder, "Output")).toEqual([
+      expect.objectContaining({
+        output: { _tag: "Out", id: "o1" },
+        cause: { _tag: "Subscription", key: "feed" },
+      }),
+    ]);
+    // An output never folds, so it never re-evaluates the hook: one start.
+    expect(only(recorder, "SubscriptionStarted")).toHaveLength(1);
+  });
+
+  it("41 · a key built from hooks restarts when the hook value moves", async () => {
+    const log: Array<string> = [];
+    const { store } = makeStore({
+      subscriptions: ({ hooks }) => ({
+        [`online:${(hooks as { online?: boolean }).online ?? false}`]: logged(
+          log,
+          `online:${(hooks as { online?: boolean }).online ?? false}`,
+        ),
+      }),
+    });
+
+    store.sync({ room: "a" }, { online: false });
+    store.start();
+    await settle();
+    store.sync({ room: "a" }, { online: true });
+    await settle();
+
+    expect(log).toEqual(["online:false:start", "online:false:stop", "online:true:start"]);
+  });
+
+  it("42 · an `undefined` value is an absent entry, on the store and under `run`", async () => {
+    const log: Array<string> = [];
+    const hook = ({ state }: Snap) => ({
+      always: logged(log, "always"),
+      maybe: state.n > 0 ? logged(log, "maybe") : undefined,
+    });
+
+    const { store, recorder } = makeStore({ subscriptions: hook });
+    store.start();
+    await settle();
+    expect(log).toEqual(["always:start"]);
+    expect(only(recorder, "SubscriptionStarted").map((e) => e.key)).toEqual(["always"]);
+
+    store.dispatch({ _tag: "Go" });
+    await settle();
+    expect(log).toEqual(["always:start", "maybe:start"]);
+
+    // `feature.subscriptions` is the hook verbatim; only the diff filters.
+    const feature = makeFeature({ subscriptions: hook });
+    expect(
+      Object.keys(
+        feature.subscriptions({ state: initialState(), props: { room: "a" }, hooks: {} }),
+      ),
+    ).toEqual(["always", "maybe"]);
+    const { subscriptions } = await runWith(feature, [{ _tag: "Mounted" }]);
+    expect(subscriptions).toEqual(["always"]);
+  });
+
+  it("43 · under `run`, a throwing hook is a defect `from` the action, and the previous set stands", async () => {
+    const log: Array<string> = [];
+    const feature = makeFeature({
+      subscriptions: ({ state }) => {
+        if (state.n === 1 && state.errors === 0) throw new Error("hook boom");
+        return { feed: logged(log, "feed") };
+      },
+    });
+
+    const { state, defects, subscriptions } = await runWith(feature, [
+      { _tag: "Mounted" },
+      { _tag: "Go" },
+    ]);
+
+    expect(defects).toEqual([expect.objectContaining({ from: "Go", handled: true })]);
+    expect(state.errors).toBe(1);
+    expect(subscriptions).toEqual(["feed"]);
+    // Started once by `Mounted`, kept across the throw and the `Error` fold,
+    // stopped once at resolve.
+    expect(log).toEqual(["feed:start", "feed:stop"]);
+  });
+
+  it("44 · a dispatch that declares nothing does not re-arm a dead mount", async () => {
+    let attempts = 0;
+    const layer = Layer.effectDiscard(
+      Effect.suspend(() => {
+        attempts += 1;
+        return Effect.fail("nope");
+      }),
+    );
+    const { store } = makeStore({
+      layer: layer as unknown as Layer.Layer<any, any, any>,
+      subscriptions: () => ({}),
+    });
+
+    store.start();
+    await settle();
+    expect(attempts).toBe(1);
+
+    // `Go` moves state, but the snapshot declares no key: nothing asks for
+    // the layer, so nothing rebuilds it — the rule `offer` applies to a fold
+    // with no command.
+    store.dispatch({ _tag: "Go" });
+    await settle();
+    expect(attempts).toBe(1);
+  });
+
+  it("45 · `Command.cancel` of a subscription key that is not a command group is a no-op", async () => {
+    const log: Array<string> = [];
+    const { store, defects } = makeStore({
+      reducer: { Kill: (_a: unknown, { state }: Snap) => [state, Command.cancel("feed")] },
+      subscriptions: () => ({ feed: logged(log, "feed") }),
+    });
+
+    store.start();
+    await settle();
+    store.dispatch({ _tag: "Kill" });
+    await settle();
+
+    expect(log).toEqual(["feed:start"]);
+    expect(defects).toEqual([]);
   });
 });

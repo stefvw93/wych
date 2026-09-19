@@ -8,7 +8,7 @@ import type { Command, Group } from "./lib";
 /**
  * Why the runtime folded the action it is reporting.
  *
- * Exactly four variants, so `cause` can be **required**: every emission site
+ * Exactly five variants, so `cause` can be **required**: every emission site
  * inside the runtime knows its own cause. There is deliberately no `Output`
  * cause — what a parent did with an output happens in arbitrary user code the
  * runtime cannot observe. A devtools UI can infer that edge from an adjacent
@@ -34,7 +34,14 @@ export type DevtoolsCause =
    * `from` is the tag the defect was attributed to, so a reader can pair this
    * transition with the {@link DevtoolsDefect} that preceded it.
    */
-  | { readonly _tag: "Defect"; readonly from: string };
+  | { readonly _tag: "Defect"; readonly from: string }
+
+  /**
+   * An action or output a running subscription dispatched, or the defect for
+   * its death. `key` is the record key the feature declared it under — the
+   * whole identity of a subscription, so nothing else is needed to find it.
+   */
+  | { readonly _tag: "Subscription"; readonly key: string };
 
 /**
  * What every event carries, whatever its `_tag`.
@@ -121,19 +128,53 @@ export interface DevtoolsDefect extends DevtoolsEnvelope {
 }
 
 /**
+ * A key entered the declared set and the runtime is about to fork it.
+ *
+ * Reported at the diff, before the fiber exists: the events describe the
+ * declared set, which is what the feature controls. A fiber that never got
+ * scheduled before its key was undeclared still shows a `Started` and a
+ * `Stopped`. `cause` is the cause of the fold that produced the set.
+ */
+export interface DevtoolsSubscriptionStarted extends DevtoolsEnvelope {
+  readonly _tag: "SubscriptionStarted";
+  readonly key: string;
+}
+
+/**
+ * A running subscription is no longer running, or no longer declared.
+ *
+ * `Undeclared` and `Unmounted` are reported at the diff and at `stop()`, with
+ * the cause of the fold that produced the set. `Completed` and `Died` are
+ * reported by the fiber itself, with `cause: { _tag: "Subscription", key }`;
+ * a `Died` follows the {@link DevtoolsDefect} for the death.
+ */
+export interface DevtoolsSubscriptionStopped extends DevtoolsEnvelope {
+  readonly _tag: "SubscriptionStopped";
+  readonly key: string;
+  readonly reason: "Undeclared" | "Completed" | "Died" | "Unmounted";
+}
+
+/**
  * Everything the runtime reports, as one tagged union.
  *
  * Loosely typed on purpose — a root observer sees features it knows nothing
  * about. Every field is encodable: the two that were not — a `Command`'s
  * effect and a defect's `Error` — are erased into {@link CommandSummary} and
- * {@link DefectSummary}. So a sink can be a `postMessage` transport or a
- * replay log with no schema-aware serialiser in between.
+ * {@link DefectSummary}. A subscription never reaches an event at all: its
+ * key is the summary. So a sink can be a `postMessage` transport or a replay
+ * log with no schema-aware serialiser in between.
  *
  * No timestamp: the sink is called synchronously at the emission point, so a
  * receiver that wants a clock has one, and every expected event in a test
  * stays a total literal.
  */
-export type DevtoolsEvent = DevtoolsTransition | DevtoolsCommand | DevtoolsOutput | DevtoolsDefect;
+export type DevtoolsEvent =
+  | DevtoolsTransition
+  | DevtoolsCommand
+  | DevtoolsOutput
+  | DevtoolsDefect
+  | DevtoolsSubscriptionStarted
+  | DevtoolsSubscriptionStopped;
 
 // ---------------------------------------------------------------------------
 // Encodable summaries
@@ -376,6 +417,7 @@ export interface DevtoolsColors {
   readonly command?: string;
   readonly output?: string;
   readonly defect?: string;
+  readonly subscription?: string;
 }
 
 /** Options for {@link createConsoleDevtools}. Every field has a default. */
@@ -412,7 +454,14 @@ export interface ConsoleDevtoolsOptions {
  * ▸ cart#1  ⟶ Bump  batch(cancel(Bump), keyed(q, effect))
  * ▸ cart#1  ⇢ OrderPlaced
  * ▸ cart#1  ✖ CheckoutRequested: network down (unhandled)
+ * ▸ room#2  ⇉ presence:general started
+ * ▸ room#2  ⇉ presence:general stopped (undeclared)
  * ```
+ *
+ * The two subscription lines are plain `log` calls with no group: there is no
+ * state to unfold under them, and they do not touch the elapsed clock, so a
+ * feed that ticks a `Stopped`/`Started` pair does not hide the reducer's
+ * timing under its own.
  *
  * `groupEnd` runs in a `finally`. One throw inside a group body — a getter on
  * user state, a circular structure — would otherwise leave the group open and
@@ -479,6 +528,11 @@ export const createConsoleDevtools = (options: ConsoleDevtoolsOptions = {}): Dev
         return;
       }
 
+      if (event._tag === "SubscriptionStarted" || event._tag === "SubscriptionStopped") {
+        output.log(`%c${headline(event)}`, palette.subscription);
+        return;
+      }
+
       const now = timestamps ? performance.now() : undefined;
       const previous = now === undefined ? undefined : lastSeen.get(key);
       if (now !== undefined) lastSeen.set(key, now);
@@ -524,6 +578,7 @@ const defaultColors: Required<DevtoolsColors> & { readonly header: string } = {
   command: "color: #9C27B0; font-weight: bold",
   output: "color: #009688; font-weight: bold",
   defect: "color: #F20404; font-weight: bold",
+  subscription: "color: #FF9800; font-weight: bold",
 };
 
 /** `12:34:56.789`, local time. Cheap enough to build per printed event. */
@@ -552,6 +607,10 @@ const headline = (event: DevtoolsEvent): string => {
       return `${who}  ✖ ${event.from}: ${event.defect.message}${
         event.handled ? "" : " (unhandled)"
       }`;
+    case "SubscriptionStarted":
+      return `${who}  ⇉ ${event.key} started`;
+    case "SubscriptionStopped":
+      return `${who}  ⇉ ${event.key} stopped (${event.reason.toLowerCase()})`;
   }
 };
 
@@ -591,6 +650,11 @@ const body = (
       output.log("%ccause       ", palette.header, event.cause);
       return;
     }
+    case "SubscriptionStarted":
+    case "SubscriptionStopped":
+      // Never grouped: `onEvent` prints these as one line and returns before
+      // opening a group. Listed so the switch stays exhaustive.
+      return;
   }
 };
 
