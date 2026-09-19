@@ -15,10 +15,13 @@ places, none of them is the reducer, and none of them runs without a DOM.
 Wych puts the rules in one place. A feature is a pure reducer over
 schema-typed state. A handler returns the next state and, when there is work
 to do, a `Command`: an Effect the runtime forks, books under a name, and
-interrupts when a later action says so. A feature can also declare
+interrupts when a later action says so.
+
+A feature can also declare
 subscriptions: long-lived sources, keyed on state, that the runtime starts and
-stops by diffing the key set after every fold. The same reducer folds under
-React, under a test, or by hand.
+stops by diffing the key set after every fold.
+
+The same reducer folds under React, under a test, or by hand.
 
 ```tsx
 import { Context, Effect, Layer, Schema } from "effect";
