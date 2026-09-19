@@ -52,7 +52,7 @@ const Saved = Action.output("Saved", { id: Schema.String });
 
 const save = Task("Save", {
   success: Schema.String,
-  onError: Task.message,
+  onError: Task.errorMessage,
   run: ({ id, text }: { id: string; text: string }) =>
     Effect.gen(function* () {
       const client = yield* Queries;
@@ -157,7 +157,7 @@ run: ({ id, text }: { id: string; text: string }) =>
 
 The save is a `Task` whose `run` reads `Queries` from context, so no `import` of the client appears in the feature. `client.invalidateQueries` marks the key stale and every `useQuery` on it refetches, including plain TanStack consumers outside Wych. Use `client.setQueryData` instead when the save response is the new value and a second round trip is waste.
 
-`onError: Task.message` keeps the error's message as a string, so `SaveRejected` renders it with no schema of its own.
+`onError: Task.errorMessage` keeps the error's message as a string, so `SaveRejected` renders it with no schema of its own.
 
 ### Hand the result to the parent
 

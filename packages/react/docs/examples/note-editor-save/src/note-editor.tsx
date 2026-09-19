@@ -5,7 +5,7 @@ import { component } from "./runtime";
 
 const saveNote = Task("Save", {
   success: Schema.String,
-  onError: Task.message,
+  onError: Task.errorMessage,
   run: (note: { readonly id: string; readonly text: string }) =>
     Effect.gen(function* () {
       const api = yield* NotesApi;

@@ -93,7 +93,7 @@ the whole `Cause` — typed failures and defects alike — so a genuine bug insi
 the effect lands in the field as a rejection rather than reaching the `Error`
 lifecycle. A mapping that cares can tell `Cause.hasDies` from a 404. It is
 mandatory in both forms; the `Schema.String` default failure exists to spare a
-schema, not the decision, and `Task.message` is the mapping that pairs with it,
+schema, not the decision, and `Task.errorMessage` is the mapping that pairs with it,
 spelled out at the call site so a defect quietly becoming a string is something
 that was chosen. One cause it never sees: **interruption**. Take-latest and
 `cancel` end work on purpose, and "you cancelled it" is not an error the UI has
@@ -141,6 +141,7 @@ the same return.
 - [x] A lower-case `name` is a compile error, on the same terms as an action tag.
 - [x] The effect's success dispatches `${Name}Resolved` with the value, and lands in whatever field the handler writes.
 - [x] A typed failure passes through `onError` and dispatches `${Name}Rejected`; a **defect** passes through `onError` too — nothing reaches the `Error` lifecycle handler.
+- [x] `Task.errorMessage` is the `Error`'s message, or its `name` when the message is empty — the tag, for a `Schema.TaggedError` declared without a `message` field. It does not read `cause`: which layer's text the UI wants is the app's decision, made in `onError`. A non-`Error` is `String(error)`.
 - [x] Interruption dispatches nothing: a second `run` under `"latest"` interrupts the first and yields exactly one `Resolved`, carrying the second's value.
 - [x] Under `"every"` both runs go to completion and both emit.
 - [x] Take-first is a handler guard: `Task.isPending(state.x) ? state : Task.start(…)` drops the second run.
@@ -172,7 +173,7 @@ the same return.
 - The work is `effect.pipe(flatMap(dispatch Resolved), catchCause(hasInterruptsOnly ? void : dispatch Rejected(onError(cause))))`, so the command's error channel is `never` — which `Command.effect` requires anyway — and interruption is the one cause that dispatches nothing.
 - `"latest"` is `Command.restart(group, work)`; `"every"` is `Command.keyed(group, work)`. Both book under the group, so `cancel` addresses them all; only `latest` also interrupts what is running.
 - Internally the command is built as `Command.effect<any, unknown>`; the operation's declared `run` type restores `R` — from the bound effect's declaration, or from the effect passed to an unbound `run`.
-- `Task.message` is `Cause.squash` then `error instanceof Error ? error.message : String(error)`.
+- `Task.errorMessage` is `Cause.squash` then `error instanceof Error ? error.message : String(error)`.
 - The guards and partial reads take `TaskValue<A, unknown>` / `TaskValue<unknown, E>`, which every concrete field is assignable to under readonly covariance.
 
 ## Expected Behavior & Edge Cases
@@ -181,7 +182,7 @@ the same return.
 - A user `Command.keyed("Task/Search", …)` books under the operation's group deliberately, and the operation's `cancel` reaches it. Same rule.
 - `"every"` has no ordering: two runs that resolve out of order write the field in arrival order, and the last write wins. That is what "declare it deliberately" means.
 - `cancel` leaves `Pending` in place; the handler that returns it clears the field in the same return, or the button stays disabled.
-- The default `Task.message` turns a defect into its message string, indistinguishable in the field from a typed failure. Pass a failure schema and an `onError` that reads `Cause.hasDies` when the UI should tell them apart.
+- The default `Task.errorMessage` turns a defect into its message string, indistinguishable in the field from a typed failure. Pass a failure schema and an `onError` that reads `Cause.hasDies` when the UI should tell them apart.
 - `Task.start` through a raw tuple (`[state, thunk]` written by hand, without `start`) types the thunk's parameter as the feature's `State`, not the narrowed literal — the contextual type is the handler's return. `Task.start` infers from its first argument and does narrow. Pinned in `core.tst.ts`.
 
 ## Known limitations

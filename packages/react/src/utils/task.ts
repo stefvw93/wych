@@ -238,10 +238,21 @@ export type TaskMode =
  */
 export type TaskOnError<Failure> = (cause: Cause.Cause<unknown>) => Failure;
 
-/** The default pairing for a `Schema.String` failure: the message, nothing else. */
-const message: TaskOnError<string> = (cause) => {
+/**
+ * The default pairing for a `Schema.String` failure: the message, or the name
+ * when there is none.
+ *
+ * A `Schema.TaggedError` declared without a `message` field is an `Error`
+ * whose message is `""`, and an empty string in the field renders as no error
+ * at all. Its `name` is the tag, so the field reads which error has no
+ * message rather than nothing. What the error wraps in `cause` is not read:
+ * whether the inner text is the one the UI wants is the app's call, and two
+ * lines of `onError` make it.
+ */
+const errorMessage: TaskOnError<string> = (cause) => {
   const error: unknown = Cause.squash(cause);
-  return error instanceof Error ? error.message : String(error);
+  if (!(error instanceof Error)) return String(error);
+  return error.message !== "" ? error.message : error.name;
 };
 
 // ---------------------------------------------------------------------------
@@ -325,7 +336,7 @@ export interface TaskOperation<
 
 /**
  * `onError` is mandatory in both forms. The `Schema.String` default exists to
- * spare you a schema, not to spare you the decision — `Task.message` is the
+ * spare you a schema, not to spare you the decision — `Task.errorMessage` is the
  * mapping that pairs with it, spelled out at the call site so a defect quietly
  * becoming `"[object Object]"` is something you chose.
  *
@@ -465,8 +476,8 @@ export interface TaskConstructors extends TaskConstructor<"internal"> {
     readonly error: Failure;
   };
 
-  /** `Cause` → its message. The mapping that pairs with the default `Schema.String` failure. */
-  readonly message: TaskOnError<string>;
+  /** `Cause` → its message, or its name when the message is empty. Pairs with the default `Schema.String` failure. */
+  readonly errorMessage: TaskOnError<string>;
 
   /** The four cases, over a field you hold. Exhaustive: a missing case does not compile. */
   readonly match: <Success, Failure, Cases extends TaskCases<Success, Failure, unknown>>(
@@ -569,7 +580,7 @@ const make = (ch: "internal" | "outbound") =>
  *
  *     const wallhavenSearch = Task("WallhavenSearch", {
  *       success: WallhavenSearchPayload,
- *       onError: Task.message,
+ *       onError: Task.errorMessage,
  *       run: (params: typeof WallhavenSearchParams.Type) =>
  *         Effect.flatMap(WallhavenService, (service) => service.search(params)),
  *     })
@@ -618,7 +629,7 @@ export const Task: TaskConstructors = Object.assign(make("internal"), {
   start,
   resolved,
   rejected,
-  message,
+  errorMessage,
   match: matchValue,
   value,
   error,

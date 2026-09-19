@@ -31,7 +31,7 @@ const Cleared = Action("Cleared", {});
 // Two actions (SearchResolved, SearchRejected) and one cancellable command.
 const search = Task("Search", {
   success: Hits,
-  onError: Task.message,
+  onError: Task.errorMessage,
   run: (query: string) =>
     Effect.gen(function* () {
       const api = yield* SearchApi;

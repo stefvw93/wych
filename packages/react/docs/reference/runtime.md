@@ -101,8 +101,8 @@ so the tree above renders identically without it.
 ## `component`
 
 ```ts fragment
-component(feature, options?: { readonly name?: string }): FeatureComponent
-component(feature, options: { readonly layer: Layer; readonly name?: string }): FeatureComponent
+component(feature, options: { readonly name: string }): FeatureComponent
+component(feature, options: { readonly layer: Layer; readonly name: string }): FeatureComponent
 ```
 
 The first overload takes a feature whose services `R` are all in the root
@@ -142,7 +142,7 @@ error at `component`, before anything mounts.
 
 ```tsx continue
 // @ts-expect-error Analytics is not provided by the root layer
-const Unprovided = component(tracked);
+const Unprovided = component(tracked, { name: "Tracked" });
 ```
 
 The feature layer is built once per mount and released when that mount closes.
@@ -153,17 +153,16 @@ life of the mount; see
 
 ### `name`
 
-`name` defaults to `"WychFeature"`. It appears in the component's
-`displayName`, in `useFeature` error messages, and as the `name` field of every
-[devtools event](/docs/reference/devtools).
+`name` is required. It is the component's `displayName`, the `name` field of
+every [devtools event](/docs/reference/devtools), and the scope of
+[`useFeature`](#featurecomponentusefeature): a fragment finds the nearest mount
+of a component with the same name. Two `component()` calls with one name share
+that scope, and two names never do. The scope survives a Fast Refresh of the
+file that called `component()`.
 
 ```tsx continue
-const Anonymous = component(cart);
-
 console.log(CartView.displayName);
 // => "Cart"
-console.log(Anonymous.displayName);
-// => "WychFeature"
 ```
 
 ## Output props
@@ -247,16 +246,15 @@ const AnnounceButton = () => {
 };
 ```
 
-Called outside a mount of that component, `useFeature` throws.
+Called outside a mount of a component with that name, `useFeature` throws.
 
 ```tsx continue
 renderToString(<ItemCount />);
 // throws TypeError: Cart.useFeature() called outside <Cart>
 ```
 
-Two `component()` calls over one feature have separate contexts, so
-`Anonymous.useFeature()` under `<CartView>` throws. Do not call `useFeature`
-inside `render`; `render` already has the snapshot as its argument.
+Do not call `useFeature` inside `render`; `render` already has the snapshot
+as its argument.
 
 ## `useRuntime`
 

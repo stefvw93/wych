@@ -47,7 +47,7 @@ export const Navigated = Action.output("Navigated", { href: Schema.String });
 // The wait is the search's own, so it lives in `run`.
 const search = Task("Search", {
   success: Hits,
-  onError: Task.message,
+  onError: Task.errorMessage,
   run: (query: string) =>
     Effect.gen(function* () {
       yield* Effect.sleep("150 millis");

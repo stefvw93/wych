@@ -242,7 +242,7 @@ import { Task } from "@wych/react";
 
 const saveNote = Task("Save", {
   success: Schema.String,
-  onError: Task.message,
+  onError: Task.errorMessage,
   run: (note: { readonly id: string; readonly text: string }) =>
     Effect.gen(function* () {
       const api = yield* NotesApi;
@@ -256,7 +256,7 @@ Each piece replaces something from step 3:
 - `saveNote.actions` is `SaveResolved { value }` and `SaveRejected { error }`,
   in place of `Saved` and `SaveFailed`.
 - `saveNote.run(note)` is the `Command.effect` with `catchCause` inside.
-- `Task.message` is the `catchCause` body: the message off the cause.
+- `Task.errorMessage` is the `catchCause` body: the message off the cause.
 - `saveNote.cancel` interrupts the save in flight. By hand that needs a named
   group; see [groups and cancellation](/docs/explanation/groups-and-cancellation).
 
@@ -399,7 +399,7 @@ console.log(twoSaves.state.save);
 > [debounce and take latest](/docs/how-to/debounce-and-take-latest); the
 > option is in [tasks](/docs/reference/tasks).
 
-A failing layer lands in the same field, with the message `Task.message`
+A failing layer lands in the same field, with the message `Task.errorMessage`
 took off the cause.
 
 ```ts continue

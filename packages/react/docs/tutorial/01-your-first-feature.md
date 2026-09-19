@@ -122,8 +122,8 @@ export const NoteEditor = component(editor, { name: "NoteEditor" });
 ```
 
 > `name` appears in error messages, in React devtools as `displayName`, and in
-> every Wych devtools event. It defaults to `"WychFeature"`, which cannot tell two
-> features apart, so set it.
+> every Wych devtools event. It is required, so pick one that tells two
+> features apart.
 
 ## 7. Mount it
 

@@ -172,7 +172,7 @@ each other on every fold.
 ```ts continue
 const loadHistory = Task("History", {
   success: Schema.Array(Schema.Number),
-  onError: Task.message,
+  onError: Task.errorMessage,
 });
 
 console.log(summarizeCommand(loadHistory.cancel));

@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type Context as ReactContext,
   type FC,
   type ReactNode,
 } from "react";
@@ -1717,14 +1718,59 @@ const hooksEquivalence = Equivalence.Record(
 const noHooks: AnyHooks = Object.freeze({});
 
 /**
+ * The `useFeature` context of every component name, at module level.
+ *
+ * Fast Refresh re-evaluates the file that calls `component()` on every save,
+ * and React then re-renders the old fibers with the new function while a
+ * fragment in another file still holds the old one. A context created inside
+ * `component()` would differ between the two, and the fragment would throw
+ * "called outside". This module is never re-evaluated by an app-file save, so
+ * a context looked up here by `name` is the same on both sides.
+ */
+const snapshotContexts = new Map<
+  string,
+  ReactContext<RenderSnapshot<any, any, any, any> | undefined>
+>();
+
+const snapshotContextFor = (name: string) => {
+  const existing = snapshotContexts.get(name);
+  if (existing !== undefined) return existing;
+  const created = createContext<RenderSnapshot<any, any, any, any> | undefined>(undefined);
+  created.displayName = `${name}.Snapshot`;
+  snapshotContexts.set(name, created);
+  return created;
+};
+
+/**
+ * Registers a component with React Fast Refresh, when a bundler exposes the
+ * hook during module evaluation.
+ *
+ * The refresh Babel plugin registers `const X = component(x, …)` only when the
+ * same file also renders `<X />`. Babel plugin-react, webpack's refresh
+ * plugin and Next set `$RefreshReg$` on the global for the duration of a
+ * module's evaluation, which is when `component()` runs, so the mount is
+ * registered under its `name` even when nothing else in the file is. Where
+ * the global is a stub (plugin-react outside a refresh boundary) or scoped to
+ * the module (Vite+ and other rolldown-based plugins) this is a no-op. Two
+ * `component()` calls with one `name` in one file share a refresh family.
+ */
+const registerWithFastRefresh = (type: unknown, name: string): void => {
+  const reg = (globalThis as { $RefreshReg$?: (type: unknown, id: string) => void }).$RefreshReg$;
+  if (typeof reg === "function") reg(type, name);
+};
+
+/**
  * What `component` returns: the mountable `FC`, carrying the one hook a view
  * fragment under it needs.
  *
  * `useFeature` returns the `RenderSnapshot` of the nearest enclosing mount of
- * **this** component — the same `{ state, props, hooks, dispatch }` object
- * `render` received on that render — so a fragment split out of `render` into
- * its own file sees exactly what `render` sees, and nothing more. Outside any
- * mount of the component it throws, naming the component.
+ * a component with this `name` — the same `{ state, props, hooks, dispatch }`
+ * object `render` received on that render — so a fragment split out of
+ * `render` into its own file sees exactly what `render` sees, and nothing
+ * more. Outside any such mount it throws, naming the component. The `name`
+ * is the scope: two `component()` calls with one name share it, which is what
+ * keeps a fragment working after Fast Refresh re-evaluates the file that made
+ * the component.
  *
  *     export const Seed = component(seed, { name: "Seed" });
  *
@@ -1766,7 +1812,10 @@ export const createRuntime: <RootR, RootE>(
       R extends RootR,
     >(
       feature: Feature<Props, State, Action, Output, H, R>,
-      options?: { readonly name?: string },
+      options: {
+        /** The component's `displayName`, its devtools `name`, and the scope of `useFeature`. */
+        readonly name: string;
+      },
     ): FeatureComponent<Props, State, Action, Output, H>;
 
     <
@@ -1781,7 +1830,8 @@ export const createRuntime: <RootR, RootE>(
       feature: Feature<Props, State, Action, Output, H, R>,
       options: {
         readonly layer: Layer.Layer<Exclude<R, RootR>, LayerError, RootR>;
-        readonly name?: string;
+        /** The component's `displayName`, its devtools `name`, and the scope of `useFeature`. */
+        readonly name: string;
       },
     ): FeatureComponent<Props, State, Action, Output, H>;
   };
@@ -1796,15 +1846,19 @@ export const createRuntime: <RootR, RootE>(
 
   const component = (
     feature: Feature<any, any, any, any, any, any>,
-    componentOptions: { readonly layer?: Layer.Layer<any, any, any>; readonly name?: string } = {},
+    componentOptions: { readonly layer?: Layer.Layer<any, any, any>; readonly name: string },
   ): FeatureComponent<any, any, any, any, any> => {
     const { render, useUnsafeHooks, props: propsSchema, outputTags } = feature[internals];
-    const name = componentOptions.name ?? "WychFeature";
+    const name = componentOptions?.name;
+    if (typeof name !== "string" || name.length === 0) {
+      throw new TypeError("component() needs a name");
+    }
 
-    // One context per `component()` call, so two components over one
-    // feature cannot see each other's mounts. `undefined` is the no-mount
-    // signal `useFeature` turns into a named throw.
-    const Snapshot = createContext<RenderSnapshot<any, any, any, any> | undefined>(undefined);
+    // One context per `name`, from the module-level registry, so the identity
+    // survives a re-evaluation of the calling module. Two names cannot see
+    // each other's mounts; `undefined` is the no-mount signal `useFeature`
+    // turns into a named throw.
+    const Snapshot = snapshotContextFor(name);
 
     const useFeature = (): RenderSnapshot<any, any, any, any> => {
       const snapshot = useContext(Snapshot);
@@ -1931,6 +1985,7 @@ export const createRuntime: <RootR, RootE>(
     };
 
     Mount.displayName = name;
+    registerWithFastRefresh(Mount, name);
     return Object.assign(Mount, { useFeature });
   };
 

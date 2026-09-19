@@ -884,7 +884,7 @@ const cart = Cart.create({
 });
 
 test("`component` merges declared props with one required `on<Tag>` prop per output", () => {
-  const CartView = createRuntime(Layer.empty).component(cart);
+  const CartView = createRuntime(Layer.empty).component(cart, { name: "Cart" });
 
   expect(CartView).type.toBeCallableWith({
     customerId: "c1",
@@ -919,11 +919,13 @@ test("`component` is closed over the root's `R`", () => {
   // The DI guarantee a bare `<Provider>` would throw away: a feature needing a
   // service the root does not provide is a compile error at `component`, not a
   // runtime failure on first dispatch.
-  expect(createRuntime(Layer.empty).component).type.not.toBeCallableWith(needsFoo);
+  expect(createRuntime(Layer.empty).component).type.not.toBeCallableWith(needsFoo, {
+    name: "NeedsFoo",
+  });
 
   // Positive control, so the rejection above is attributable to `R` rather
   // than to some unrelated mismatch in the feature's shape.
-  expect(createRuntime(fooLayer).component).type.toBeCallableWith(needsFoo);
+  expect(createRuntime(fooLayer).component).type.toBeCallableWith(needsFoo, { name: "NeedsFoo" });
 
   // A feature may bring its own layer; the root must cover the residue. `Bar`
   // is supplied here, `Foo` by the root.
@@ -942,12 +944,14 @@ test("`component` is closed over the root's `R`", () => {
 
   expect(createRuntime(fooLayer).component).type.toBeCallableWith(needsBoth, {
     layer: barFromFoo,
+    name: "NeedsBoth",
   });
 
   // The residue is not a free pass: a root providing nothing still fails, because
   // `barFromFoo` itself requires `FooService`.
   expect(createRuntime(Layer.empty).component).type.not.toBeCallableWith(needsBoth, {
     layer: barFromFoo,
+    name: "NeedsBoth",
   });
 });
 
@@ -998,7 +1002,7 @@ test("the `Error` handler's payload carries `from` beside `error` and `cause`", 
 // ---------------------------------------------------------------------------
 
 test("`useFeature` returns the `RenderSnapshot` typed to the feature", () => {
-  const CartView = createRuntime(Layer.empty).component(cart);
+  const CartView = createRuntime(Layer.empty).component(cart, { name: "Cart" });
   const snapshot = CartView.useFeature();
 
   expect(snapshot.state).type.toBe<{ readonly count: number }>();
@@ -1034,8 +1038,11 @@ test("`useFeature` is on both `component` overloads, and on a feature with no ou
     render: () => null,
   });
 
-  const WithLayer = createRuntime(fooLayer).component(needsBar, { layer: barFromFoo });
-  const Plain = createRuntime(Layer.empty).component(cart);
+  const WithLayer = createRuntime(fooLayer).component(needsBar, {
+    layer: barFromFoo,
+    name: "NeedsBar",
+  });
+  const Plain = createRuntime(Layer.empty).component(cart, { name: "Cart" });
 
   expect(WithLayer).type.toHaveProperty("useFeature");
   expect(Plain).type.toHaveProperty("useFeature");
@@ -1048,8 +1055,32 @@ test("`useFeature` is on both `component` overloads, and on a feature with no ou
   });
 });
 
+test("`component` requires a `name`, on both overloads", () => {
+  const { component } = createRuntime(fooLayer);
+
+  // The name is the `useFeature` scope and what survives Fast Refresh, so it
+  // is not optional and has no default.
+  expect(component).type.toBeCallableWith(cart, { name: "Cart" });
+  expect(component).type.not.toBeCallableWith(cart);
+  expect(component).type.not.toBeCallableWith(cart, {});
+  expect(component).type.not.toBeCallableWith(cart, { name: undefined });
+
+  // `layer` alone does not select the second overload without a name either.
+  const needsBar = define({
+    props: Schema.Struct({}),
+    state: Schema.Struct({ count: Schema.Number }),
+    action: Action.of([Action("B", {})]),
+  }).create({
+    initialState: () => ({ count: 0 }),
+    reducer: { B: () => [{ count: 1 }, Command.effect(() => barEffect)] as const },
+    render: () => null,
+  });
+  expect(component).type.toBeCallableWith(needsBar, { layer: barFromFoo, name: "NeedsBar" });
+  expect(component).type.not.toBeCallableWith(needsBar, { layer: barFromFoo });
+});
+
 test("`FeatureComponent` is still an `FC`, so JSX and `FC`-typed slots accept it", () => {
-  const CartView = createRuntime(Layer.empty).component(cart);
+  const CartView = createRuntime(Layer.empty).component(cart, { name: "Cart" });
 
   expect(CartView).type.toBeAssignableTo<FC<ComponentProps<typeof CartView>>>();
   expect(CartView).type.toBeAssignableTo<
@@ -1149,8 +1180,10 @@ test("`ServicesOf` reads `R` through a lazy command", () => {
 
   // The DI guarantee holds one function deeper: the service the thunk's
   // command needs is still a compile error at `component`.
-  expect(createRuntime(Layer.empty).component).type.not.toBeCallableWith(lazyFoo);
-  expect(createRuntime(fooLayer).component).type.toBeCallableWith(lazyFoo);
+  expect(createRuntime(Layer.empty).component).type.not.toBeCallableWith(lazyFoo, {
+    name: "LazyFoo",
+  });
+  expect(createRuntime(fooLayer).component).type.toBeCallableWith(lazyFoo, { name: "LazyFoo" });
 });
 
 test("`Next.lazy` infers the tuple state from its first argument and fits the handler's `Next`", () => {
@@ -1197,8 +1230,10 @@ test("`ServicesOf` reads `R` through `Next.lazy`", () => {
     render: () => null,
   });
 
-  expect(createRuntime(Layer.empty).component).type.not.toBeCallableWith(lazyFoo);
-  expect(createRuntime(fooLayer).component).type.toBeCallableWith(lazyFoo);
+  expect(createRuntime(Layer.empty).component).type.not.toBeCallableWith(lazyFoo, {
+    name: "LazyFoo",
+  });
+  expect(createRuntime(fooLayer).component).type.toBeCallableWith(lazyFoo, { name: "LazyFoo" });
 });
 
 test("`Next.command` resolves a lazy command to the command type", () => {

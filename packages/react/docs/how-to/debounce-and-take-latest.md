@@ -77,7 +77,7 @@ The next keystroke returns the same command again. Its `cancel` half interrupts 
 ```tsx continue
 const search = Task("Search", {
   success: Hits,
-  onError: Task.message,
+  onError: Task.errorMessage,
   run: (query: string) =>
     Effect.gen(function* () {
       const api = yield* SearchApi;
@@ -147,7 +147,7 @@ Put the delay in `run` when the wait belongs to the search itself, wherever it i
 ```tsx continue
 const searchEvery = Task("SearchEvery", {
   success: Hits,
-  onError: Task.message,
+  onError: Task.errorMessage,
   mode: "every",
   run: (query: string) =>
     Effect.gen(function* () {
@@ -212,7 +212,7 @@ A "more" button asks for the page after the one on screen. The handler writes `p
 ```tsx continue
 const searchPage = Task("SearchPage", {
   success: Hits,
-  onError: Task.message,
+  onError: Task.errorMessage,
   run: ({ query, page }: { readonly query: string; readonly page: number }) =>
     Effect.gen(function* () {
       const api = yield* SearchApi;
