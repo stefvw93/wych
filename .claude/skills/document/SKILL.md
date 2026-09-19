@@ -15,7 +15,7 @@ Bring all documentation touched by the change up to date. A change is not comple
 ## Scope: everything touched by the change
 
 1. **JSDoc** on all new/changed exported functions, types, and values. Self-evident exports get exactly one line; doc blocks ≤ 3 lines for typical functions; no `@example` unless usage isn't inferable from the signature/name; no em-dashes. Omit `@type` annotations; describe non-obvious parameters; annotate Effect Schemas when not self-explanatory.
-2. **`*.specs.md` sync**: the co-located spec (`src/lib.specs.md`, `src/devtools.specs.md`, `src/utils/task.specs.md`) must reflect final behavior. Acceptance criteria, skip records, and edge cases must match reality.
+2. **`*.specs.md` sync**: the co-located specs (every `*.specs.md` under `packages/react/src`) must reflect final behavior. Acceptance criteria, skip records, and edge cases must match reality.
 3. **`docs/` pages and the package README**: update or create when the public API surface changed. `packages/react/docs` follows the Diátaxis framework (`tutorial/`, `how-to/`, `reference/`, `explanation/`; `index.md` is the map). Each page fits exactly one mode; the `wych-docs-author` agent carries the placement rules and frontmatter requirements.
 4. **Example `readme.md`** for every touched `examples/*` package, once that directory exists. Must contain the required sections: Overview, Problem, Solution, How It Works, When to Use.
 

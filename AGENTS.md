@@ -87,9 +87,8 @@ release. Add a tool name to select part of the graph. For example, run
 
 ## @wych/react
 
-The @packages/website project uses `@wych/react`, a feature runtime for React built on
-Effect: pure reducers, commands as data, headless tests. The docs are local,
-as markdown:
+The @packages/website project uses `@wych/react`, a feature runtime for React,
+built on Effect: pure reducers, commands as data, declared subscriptions, headless tests. The docs are local, as markdown:
 
     node_modules/@wych/react/docs
 
