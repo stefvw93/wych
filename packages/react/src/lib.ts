@@ -645,17 +645,18 @@ type CommandContext = {
 };
 
 /**
- * Mutable bookkeeping for the fibers an interpreter has in flight, one flat
- * map from group name to fibers. Every mutation is synchronous and JS is
- * single-threaded, so plain fields suffice — fibers only interleave at yield
- * points.
+ * The fibers an interpreter has in flight, one flat map from group name to
+ * fibers. A group exists only while it has a fiber, so "in flight" is the
+ * book's size. Every mutation is synchronous and JS is single-threaded, so a
+ * plain map suffices — fibers only interleave at yield points.
  */
-type FiberBook = {
-  readonly groups: Map<Group, Set<Fiber.Fiber<void>>>;
-  inFlight: number;
-};
+type FiberBook = Map<Group, Set<Fiber.Fiber<void>>>;
 
-const fiberBook = (): FiberBook => ({ groups: new Map(), inFlight: 0 });
+const inFlight = (book: FiberBook): number => {
+  let count = 0;
+  for (const group of book.values()) count += group.size;
+  return count;
+};
 
 /**
  * The command interpreter, shared by `Feature.run` and `createFeatureStore`.
@@ -696,9 +697,7 @@ const commandInterpreter = (deps: {
   const { book } = deps;
 
   // Every fiber at the one name a `Cancel` addresses.
-  const fibersAt = (target: Group): Array<Fiber.Fiber<void>> => [
-    ...(book.groups.get(target) ?? []),
-  ];
+  const fibersAt = (target: Group): Array<Fiber.Fiber<void>> => [...(book.get(target) ?? [])];
 
   /**
    * Fork one leaf, register it under `ctx`'s group, unregister however it
@@ -715,10 +714,9 @@ const commandInterpreter = (deps: {
   const forkLeaf = (ctx: CommandContext, run: Effect.Effect<void, never, any>) =>
     Effect.map(Effect.forkChild(run), (fiber: Fiber.Fiber<void>) => {
       const name = ctx.key ?? ctx.tag;
-      const group = book.groups.get(name) ?? new Set<Fiber.Fiber<void>>();
-      book.groups.set(name, group);
+      const group = book.get(name) ?? new Set<Fiber.Fiber<void>>();
+      book.set(name, group);
       group.add(fiber);
-      book.inFlight += 1;
 
       // No identity guard on the delete: a Set is deleted only when empty, by
       // the observer that emptied it, and observers run exactly once — so a
@@ -728,9 +726,8 @@ const commandInterpreter = (deps: {
         try {
           deps.onExit?.(exit, ctx);
         } finally {
-          book.inFlight -= 1;
           group.delete(fiber);
-          if (group.size === 0) book.groups.delete(name);
+          if (group.size === 0) book.delete(name);
           deps.settled();
         }
       });
@@ -1326,7 +1323,7 @@ export const define: <
               };
 
               const queue = yield* Queue.unbounded<Entry>();
-              const book = fiberBook();
+              const book: FiberBook = new Map();
               let declared: ReadonlySet<string> = new Set();
               const emitted: { _tag: string }[] = [];
               const outputs: { _tag: string }[] = [];
@@ -1402,7 +1399,7 @@ export const define: <
               // Drain until quiescent: nothing queued and nothing running. The
               // two reads are synchronous back to back, so no fiber can settle
               // or emit between them.
-              while (book.inFlight > 0 || Queue.sizeUnsafe(queue) > 0) {
+              while (inFlight(book) > 0 || Queue.sizeUnsafe(queue) > 0) {
                 const entry = yield* Queue.take(queue);
                 if (entry.origin === "settled") continue;
                 if (isOutput(entry.msg)) {
@@ -1937,7 +1934,7 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
           yield* interpret(command, { tag: "Unmounted" });
         }
 
-        while (cells.book.inFlight > 0 || Queue.sizeUnsafe(cells.queue) > 0) {
+        while (inFlight(cells.book) > 0 || Queue.sizeUnsafe(cells.queue) > 0) {
           const work = yield* Queue.take(cells.queue);
           if (work._tag === "Run") yield* interpret(work.command, work.ctx);
         }
@@ -2014,7 +2011,7 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
     // a command's does; the closures below run only once `cells` exists.
     const cells: Mount = {
       queue: Effect.runSync(Queue.unbounded<Work>()),
-      book: fiberBook(),
+      book: new Map(),
       subscriptions: subscriptionBook({
         emit: (key, action) =>
           Effect.sync(() => fold(action, { _tag: "Subscription", key }, cells)),
@@ -2050,21 +2047,20 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
    * `pending` that drained, a mount that is gone after `stop`.
    */
   const probe = (): StoreInternals => {
-    let fibers = 0;
     let live = 0;
     if (mount !== undefined) {
-      for (const group of mount.book.groups.values()) {
-        fibers += group.size;
+      for (const group of mount.book.values()) {
         for (const fiber of group) if (fiber.pollUnsafe() === undefined) live += 1;
       }
     }
+    const fibers = mount === undefined ? 0 : inFlight(mount.book);
     return {
       mounted: mount !== undefined,
       active,
       dead,
       queued: mount === undefined ? 0 : Queue.sizeUnsafe(mount.queue),
-      inFlight: mount?.book.inFlight ?? 0,
-      groups: mount?.book.groups.size ?? 0,
+      inFlight: fibers,
+      groups: mount?.book.size ?? 0,
       fibers,
       live,
       subscriptions: mount?.subscriptions.size ?? 0,
