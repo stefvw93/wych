@@ -150,4 +150,4 @@ const Room = component(presence, { name: "Presence" });
 createRoot(document.getElementById("root")!).render(<Room roomId="general" />);
 ```
 
-A room switch changes the key returned by `subscriptions`. The runtime stops the old room's fiber and starts the new one on the same render pass that carries the new prop, no lifecycle handler involved.
+A room switch changes the key returned by `subscriptions`. The runtime stops the old room's fiber and starts the new one when the render that carries the new prop commits, before the browser paints. No lifecycle handler is involved. A render React abandons, such as a transition that suspends, starts nothing.

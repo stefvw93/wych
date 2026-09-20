@@ -1193,6 +1193,11 @@ describe("createFeatureStore — sync", () => {
       defect: () => {},
     });
 
+    // Started, as a mounted component's store is by the time a second
+    // commit's layout effect calls `sync`: before the first `start`, `sync`
+    // only records (see "before the first start" below).
+    store.start();
+
     return { store, seen };
   };
 
@@ -1203,12 +1208,72 @@ describe("createFeatureStore — sync", () => {
     expect(state).toEqual({ propsChanged: 0, hookChanged: 0 });
   });
 
-  it("returns the post-fold state, so the change paints on this render", () => {
+  it("before the first start, records without raising, so `Mounted` folds first and sees the latest props", async () => {
+    // The discriminating case for the lifecycle-order criterion: a hand-driven
+    // `sync; sync; start` used to fold `PropsChanged` and buffer its command
+    // ahead of `Mounted`'s. Now the calls before `start` only move the
+    // baseline, `Mounted` is the first lifecycle action folded, its snapshot
+    // carries the last props seen, and the next `sync` compares against them.
+    const seen: Array<string> = [];
+    const ran: Array<string> = [];
+    const feature = define({
+      props: Props,
+      state: Schema.Struct({ id: Schema.String }),
+      action: Action.of([Action("Bump", {})]),
+    }).create({
+      initialState: (props) => ({ id: props.id }),
+      reducer: {
+        Bump: (_action, snapshot) => snapshot.state,
+        Mounted: (_action, snapshot) => {
+          seen.push(
+            `Mounted:${snapshot.props.id}:${String((snapshot.hooks as { online?: boolean }).online)}`,
+          );
+          return [
+            snapshot.state,
+            Command.effect(() => Effect.sync(() => void ran.push("mounted-cmd"))),
+          ];
+        },
+        PropsChanged: ({ previous }, snapshot) => {
+          seen.push(`PropsChanged:${previous.id}->${snapshot.props.id}`);
+          return [
+            { id: snapshot.props.id },
+            Command.effect(() => Effect.sync(() => void ran.push("props-cmd"))),
+          ];
+        },
+      },
+      render: () => null,
+    });
+    const store = createFeatureStore({
+      feature: feature as any,
+      props: { id: "a" },
+      equivalence,
+      runtime: testRuntime(),
+      layer: undefined,
+      emit: () => {},
+      defect: () => {},
+    });
+
+    store.sync({ id: "a" }, { online: false });
+    store.sync({ id: "b" }, { online: true });
+    expect(seen).toEqual([]);
+
+    store.start();
+    expect(seen).toEqual(["Mounted:b:true"]);
+
+    store.sync({ id: "c" }, { online: true });
+    expect(seen).toEqual(["Mounted:b:true", "PropsChanged:b->c"]);
+
+    await Effect.runPromise(Effect.sleep("20 millis"));
+    expect(ran).toEqual(["mounted-cmd", "props-cmd"]);
+    store.stop();
+  });
+
+  it("returns the post-fold state, so a caller driving the store by hand sees the change", () => {
     const { store } = setup();
     store.sync({ id: "a" }, {});
 
-    // The criterion that costs a render cycle if it fails: the value handed
-    // back already reflects the handler that the props change just ran.
+    // The value handed back already reflects the handler that the props
+    // change just ran; `getSnapshot` agrees.
     const state = store.sync({ id: "b" }, {});
     expect(state).toEqual({ propsChanged: 1, hookChanged: 0 });
     expect(store.getSnapshot()).toBe(state);
@@ -1242,11 +1307,11 @@ describe("createFeatureStore — sync", () => {
     expect(seen).toEqual(["HookChanged"]);
   });
 
-  it("is idempotent, so a discarded render costs nothing", () => {
+  it("is idempotent, so StrictMode's second layout effect costs nothing", () => {
     const { store, seen } = setup();
     store.sync({ id: "a" }, {});
 
-    // StrictMode/Suspense re-run the render body with the same values.
+    // StrictMode re-runs the layout effect with the same values.
     const first = store.sync({ id: "b" }, {});
     const second = store.sync({ id: "b" }, {});
     expect(seen).toEqual(["PropsChanged"]);

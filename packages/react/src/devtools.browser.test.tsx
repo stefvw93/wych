@@ -3,7 +3,7 @@
  *
  * The node suite drives `createFeatureStore` directly and covers every
  * emission site. What it cannot cover is the thing this feature is installed
- * *into*: `sync` folding in the render body, `start` running in a passive
+ * *into*: `sync` folding in a layout effect, `start` running in a passive
  * effect, an output crossing into a real `on<Tag>` prop, and a real click
  * driving the whole chain. Those orderings are the ones the design's riskiest
  * claim depends on — that the root context exists by the time `Mounted` folds —
@@ -190,9 +190,9 @@ test("an output crossing into a real `on<Tag>` prop is reported before the prop 
   });
 });
 
-test("a props change folded during render is reported", async () => {
-  // `sync` folds in the render body, which is the one emission site that runs
-  // while React is rendering rather than from an event or an effect.
+test("a props change folded from the layout effect is reported", async () => {
+  // `sync` folds in a layout effect, the one emission site that runs inside
+  // React's commit rather than from an event or a passive effect.
   const Parent = () => {
     const [step, setStep] = useState(1);
     return (

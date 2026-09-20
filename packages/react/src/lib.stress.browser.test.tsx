@@ -311,13 +311,15 @@ test("2000 mount/unmount cycles under three names keep three contexts and a flat
 // Discarded renders
 // ---------------------------------------------------------------------------
 
-// HINT: lib.specs.md "Deferred decisions" — `store.sync` folding during
-// render. The spec calls the discarded-render churn "bounded by the keys
-// involved"; measured, it is one restart of the discarded key per emission or
-// two while the abandoned render is held: 1 at a 0ms hold, 3 at 12ms, 7 at
-// 50ms, 18 at 150ms. Each emission forces a sync re-render of the abandoned
-// tree, whose `sync` re-folds the discarded props and restarts the key.
-test.fails("50 abandoned transitions held 50ms with an emitting subscription restart the discarded key at most twice each", async () => {
+// lib.specs.md "Deferred decisions", `store.sync` folding during render:
+// executed. The render body touches nothing in the store and the fold runs in
+// a layout effect, so a render React abandons never starts the key it would
+// have declared, however long it is held and however often the committed key
+// emits meanwhile. Before the redesign this measured 1, 3, 7 and 18 restarts
+// of the discarded key for holds of 0, 12, 50 and 150 ms with a 5 ms tick:
+// each emission forced a sync re-render whose render-body `sync` re-folded
+// the discarded props.
+test("50 abandoned transitions held 50ms with an emitting subscription never start the discarded key", async () => {
   const attempts = 50;
   const pending = new Promise<never>(() => {});
   const Suspender = ({ room }: { readonly room: string }) => {
@@ -351,24 +353,30 @@ test.fails("50 abandoned transitions held 50ms with an emitting subscription res
   );
 
   const startsOfB = () => tagged("SubscriptionStarted").filter((e) => e.key === "room:b").length;
+  const ticks = () => transitions("Tick").length;
 
-  let worst = 0;
+  let fewestTicks = Number.POSITIVE_INFINITY;
   for (let i = 0; i < attempts; i++) {
-    const beforeB = startsOfB();
+    const before = ticks();
     await click("to-b");
-    // Hold the abandoned render long enough for several emissions.
-    await vi.waitFor(() => expect(startsOfB()).toBeGreaterThan(beforeB));
+    // Hold the abandoned render long enough for several emissions, each of
+    // which re-renders the committed tree on the sync lane.
     await new Promise((resolve) => setTimeout(resolve, 50));
     await click("to-a");
-    await vi.waitFor(() => {
-      const started = tagged("SubscriptionStarted");
-      expect(started[started.length - 1]!.key).toBe("room:a");
-    });
-    worst = Math.max(worst, startsOfB() - beforeB);
+    await vi.waitFor(() =>
+      expect(container!.querySelector('[data-testid="room"]')!.textContent).toBe("a"),
+    );
+    fewestTicks = Math.min(fewestTicks, ticks() - before);
   }
 
-  console.info(`[stress] abandoned transitions: worst room:b starts per attempt ${worst}`);
+  console.info(
+    `[stress] abandoned transitions: room:b starts ${startsOfB()}, fewest ticks through a hold ${fewestTicks}`,
+  );
   expect(container!.querySelector('[data-testid="room"]')!.textContent).toBe("a");
   expect(tagged("Defect")).toHaveLength(0);
-  expect(worst).toBeLessThanOrEqual(2);
+  // The discarded key never starts, the committed key is never interrupted,
+  // and its feed kept emitting through every hold.
+  expect(startsOfB()).toBe(0);
+  expect(tagged("SubscriptionStopped")).toHaveLength(0);
+  expect(fewestTicks).toBeGreaterThan(0);
 });

@@ -365,10 +365,11 @@ landed with every box checked again.
 - [x] The props carrying the `"@wych/opaque"` annotation are collected off the props schema at `create`, whether the key is declared directly, through `Schema.optionalKey`, or through `Schema.optional` (a union). A feature declaring none collects `[]`.
 - [x] `PropsChanged`'s reported `previous` has each opaque prop replaced by its placeholder (`"<children>"`), which is what keeps every devtools event JSON round-trippable. The reducer's snapshot keeps the real node; a feature with no opaque props reports the action unchanged.
 - [x] `dispatch` accepts declared actions **and declared outputs** — the store routes every dispatched message by tag, so an output dispatched from the view leaves through its `on<Tag>` prop without touching the reducer — and is reference-stable for the life of the mount. An undeclared tag stays a compile error.
-- [x] Lifecycle order: `Mounted` once per mount, then `PropsChanged`/`HookChanged` as ambient inputs change, then `Unmounted` at teardown. _With one uncovered window: a props change landing between the first render and the mount effect buffers its command ahead of `Mounted`'s. See open work #5._
+- [x] Lifecycle order: `Mounted` once per mount, then `PropsChanged`/`HookChanged` as ambient inputs change, then `Unmounted` at teardown. Before the first `start`, `sync` records and raises nothing, so `Mounted` is the first lifecycle action folded and its snapshot carries the props and hooks in force at mount (`lib.test.ts` "before the first start, records without raising"); a props change landing in the very first commit folds after `Mounted`, its command after `Mounted`'s (`lib.browser.test.tsx` "`Mounted` folds before a `PropsChanged` that lands in the first commit").
 - [x] `PropsChanged`/`HookChanged` are detected **by value** — props via `Schema.toEquivalence`, hooks via `Equivalence.Record(Equivalence.strictEqual())`.
-- [x] `store.sync` folds during render, so a props-driven change paints on the render that carried the props. Moving the fold into an effect is **deferred** — see Deferred decisions.
-- [x] `store.sync` is idempotent: called twice with equivalent props and hooks it raises nothing the second time, so a discarded render costs nothing.
+- [x] `store.sync` is called from a `useLayoutEffect` with no dependency list, once per committed render; the render body reads and writes nothing in the store, so a render React abandons never folds, never advances the baseline and never starts a subscription. A props-driven change costs two renders and one paint: the fold's synchronous re-render is flushed in the same commit, before the browser paints (`lib.browser.test.tsx` "a props change costs two renders and one frame, measured"). See Deferred decisions.
+- [x] `store.sync` is idempotent: called twice with equivalent props and hooks it raises nothing the second time, so StrictMode's second layout effect costs nothing.
+- [x] `useUnsafeHooks` is called with the state the render reads. A props-driven fold re-renders synchronously, the hook re-evaluates against the new state, and the next layout effect raises `HookChanged` if its value moved, so a hook derived from state lands in the same flush (`lib.browser.test.tsx` "a hook derived from state catches up").
 - [x] `renderToString` renders a feature server-side: `initialState(props)` paints, `validateProps` still throws on bad props, `useFeature` fragments resolve their provider, and **nothing folds** — no `Mounted`, no commands, no store arming, because the arming lives in an effect and effects do not run on the server. `useSyncExternalStore` is passed its server snapshot, without which React throws under `renderToString`.
 - [x] A defect from a command, a handler that throws, or a feature `layer` that fails to build reaches the `Error` handler, with `cause` always `Cause.die(error)` and `from` naming the origin — the tag of the action whose command died or whose handler threw, `"Mounted"` for a layer that failed to build, `"Unmounted"` for a teardown that threw or overran; with none declared it is rethrown during render, the only place a boundary can catch it.
 - [x] **A mount whose fiber died re-arms on demand.** After a layer failure the store is `dead`, not stopped: the next command a **dispatch** produces calls `start` again, which rebuilds the layer and hands the command to the new mount. Work caused by a lifecycle action or by a command never re-arms, so `Mounted`'s own command on the rebuilt mount cannot re-enter `start`, and a permanently failing layer rebuilds exactly once per dispatch — each failure reaching the `Error` handler again — rather than spinning. `stop` on a dead mount still folds and reports `Unmounted` (its command reported `dropped: true`, there being no scope to run it in) and clears `dead`, so a dispatch after unmount drops as it always did.
@@ -668,8 +669,10 @@ What the numbers say:
 - `Feature.run` pays 2.5 µs per seeded action for its `Effect.yieldNow`, and
   13 µs per action that emits once.
 - Props validation and equivalence are linear in field count, about 0.1 µs per
-  field each. A 30-field feature pays about 5 µs per render for both, on every
-  render, because `incoming` is a fresh object each time.
+  field each. A 30-field feature pays about 3 µs of validation per render,
+  because `incoming` is a fresh object each time, and about 2 µs of
+  equivalence per committed render, from the layout effect; a render React
+  abandons pays only the validation.
 - A mount cycle is 20 µs bare, 25 µs with a `Layer.succeed`, 29 µs with an
   asynchronous `Layer.effect`.
 - The subscription diff costs 0.18 µs per declared key per fold when nothing
@@ -766,8 +769,11 @@ defect is `it.fails` with a `HINT` above it naming the spec entry.
 - 2000 mount/unmount cycles in Chromium under three names: the `useFeature`
   context registry does not grow with mounts, heap growth over the last five
   rounds under 2 MiB.
-- Pinned, `it.fails`: 50 abandoned transitions held 50 ms with an emitting
-  subscription restart the discarded key at most twice each (see Findings).
+- 50 abandoned transitions held 50 ms with an emitting subscription never
+  start the discarded key: zero `SubscriptionStarted` for it, zero
+  `SubscriptionStopped` for the committed key, and the committed feed emits at
+  least once through every hold (measured 6 ticks per 50 ms hold). See
+  Findings.
 
 ### Findings
 
@@ -779,11 +785,15 @@ excess property at ["key"]` in dev and worked in production. Fixed:
   `splitOutputProps` copies a props object carrying a `key` or `ref` own
   property through `Object.keys`. Asserted by `lib.stress.browser.test.tsx`
   "a feature rendered with a key passes props validation"; criterion above.
-- **Discarded-render churn is per emission, not per abandoned render.**
+- **Discarded-render churn was per emission, not per abandoned render.**
   Measured at 1, 3, 7 and 18 restarts of the discarded key for a render held
-  0, 12, 50 and 150 ms with a source ticking every 5 ms. Pinned by
-  `lib.stress.browser.test.tsx` "50 abandoned transitions…"; the deferred
-  `store.sync` decision below is corrected.
+  0, 12, 50 and 150 ms with a source ticking every 5 ms, while `store.sync`
+  folded in the render body. Fixed by moving the comparison, the fold and the
+  baseline advance into a layout effect: an abandoned render never touches
+  the store, so the discarded key is never started. Asserted by
+  `lib.stress.browser.test.tsx` "50 abandoned transitions…" at zero starts;
+  the design is under Deferred decisions, `store.sync` folding during
+  render, executed.
 - **A subscription that died before its key was booked was never reported**,
   in the store and in `run`. Fixed: the forked body books its own fiber before
   `sub.effect` runs. Asserted by `subscriptions.stress.test.ts`; criterion in
@@ -796,13 +806,6 @@ excess property at ["key"]` in dev and worked in production. Fixed:
 
 ## Known limitations
 
-- **`useUnsafeHooks` sees the pre-`sync` state.** `component` calls the hook spec
-  with the committed state read _before_ `store.sync` folds
-  `PropsChanged`/`HookChanged`, and a sync-driven fold suppresses notification
-  (the change paints on the same render), so a hook value derived from state
-  can lag until the next dispatch or ambient change. A follow-up notification
-  would cost the second render the render-body `sync` exists to avoid; this is
-  part of the deferred `store.sync` redesign below, not a patch.
 - **A `Cancel` awaits the interrupted fibers' finalizers on the mount's run
   loop.** That await is what guarantees a `Batch` can sequence a `Cancel`
   before the command replacing it — but it means an uninterruptible finalizer
@@ -828,8 +831,7 @@ excess property at ["key"]` in dev and worked in production. Fixed:
 
 ## Open work
 
-Five items. Items 1, 2, 3 and 4 are closed and kept for their
-cross-references; item 5 still needs a decision before it needs code. Items 4 and 5
+Five items, all closed and kept for their cross-references. Items 4 and 5
 were found by the review of the command-leaf pass and **rejected for that
 pass**: both are byte-identical at the commit before it, so neither is a
 regression the leaf change introduced, and both needed a decision about
@@ -958,24 +960,34 @@ death and the recovery. "This feature recovers" is now a `state` assertion and
 and every existing caller still compiles. What `run` still does not do is
 report to devtools — that is `devtools.specs.md`'s open item, unchanged.
 
-### 5. Buffered work can precede `Mounted`
+### 5. Buffered work can precede `Mounted` — **closed**
 
 `start()` flushes `buffered` into the queue before folding `Mounted`. `sync`
-runs in the render body while `start` runs in a passive effect, so a props
-change between the first render and the mount effect folds `PropsChanged`
-first — its command is buffered, and the flush puts it ahead of `Mounted`'s.
-Confirmed: `sync({p:1}); sync({p:2}); start()` logs `["props-cmd", "mounted-cmd"]`.
+ran in the render body while `start` runs in a passive effect, so a props
+change between the first render and the mount effect folded `PropsChanged`
+first — its command was buffered, and the flush put it ahead of `Mounted`'s.
+Confirmed at the time: `sync({p:1}); sync({p:2}); start()` logged
+`["props-cmd", "mounted-cmd"]`.
 
-This contradicts the lifecycle-order criterion above, which is marked `[x]` and
-says `Mounted` comes first. The criterion is what is wrong — it describes the
-intent, and the intent is right; the code has a window it does not cover. A
-`Mounted` handler seeding state that a `PropsChanged` command depends on sees
-them inverted.
+This contradicted the lifecycle-order criterion above, which was marked `[x]`
+and says `Mounted` comes first. The criterion described the intent, and the
+intent is right; the code had a window it did not cover. A `Mounted` handler
+seeding state that a `PropsChanged` command depends on saw them inverted.
 
-Not independent of the deferred `store.sync` work: the window exists _because_
-`sync` folds during render while `start` runs in an effect. Moving the fold into
-an effect closes it as a side effect, which is an argument for doing that piece
-properly rather than special-casing the ordering here.
+Closed by the `store.sync` redesign under Deferred decisions, twice over.
+Under React the window is gone: `sync` runs in a layout effect, and React
+flushes pending passive effects (`start`, `Mounted`) before the render that
+would carry a later commit's props. On the store itself `sync` before the
+first `start` records and raises nothing, so the hand-driven sequence now
+logs `["mounted-cmd"]` with `Mounted`'s snapshot carrying `{p:2}`, and the
+first `sync` after `start` compares against that. Both are tests now: the
+node case in `lib.test.ts` ("before the first start, records without
+raising") and the React case in `lib.browser.test.tsx` ("`Mounted` folds
+before a `PropsChanged` that lands in the first commit"). What remains of
+the buffer is the documented path for a `dispatch` before `start`, a
+descendant's layout effect for instance, whose command still runs ahead of
+`Mounted`'s; that is a dispatch, not an ambient input, and the lifecycle
+criterion does not speak to it.
 
 ## Deferred decisions
 
@@ -996,44 +1008,83 @@ sugar over `Command.effect((dispatch) => dispatch(message.make(payload)))`;
 removing it and the brand's call-site check remains deferred — it still
 touches every example.
 
-### `store.sync` folding during render
+### `store.sync` folding during render — **executed**
 
-`sync` compares props and hooks by value and, when either moved, folds
-`PropsChanged` / `HookChanged` **in the render body**. That is a store mutation
-during render, which a discarded render repeats — the value comparison is what
-makes the repeat a no-op, and the reason the idempotence criterion above exists.
-The alternative is `sync` reporting only _whether_ ambient inputs moved and
-`component` folding in an effect, which costs a render: the change would paint on
-the render after the one that carried the props.
+`sync` used to compare props and hooks by value and, when either moved, fold
+`PropsChanged` / `HookChanged` **in the render body**, advancing its
+comparison baseline in the same call. That was a store mutation during render:
+a render React abandoned had already acted on props that never committed, and
+with a subscription keyed on those props and emitting during the hold, every
+emission forced a synchronous re-render of the committed tree, whose `sync`
+folded the committed props back, after which React retried the transition and
+`sync` folded the abandoned props again. Measured at 1, 3, 7 and 18 restarts
+of the discarded key for holds of 0, 12, 50 and 150 ms with a 5 ms tick.
 
-**Deferred**, and not merely unscheduled. Two reasons. The blast radius is not
-this pass's: it moves state into `component`, both browser tests and every
-example's render timing, on top of a leaf migration whose own scope was already
-trimmed for the same reason (see `Command.output`, below). And the one-line
-statement of it is not implementable as written — it says the fold moves to an
-effect but not whether the _comparison baseline_ moves with it, and the baseline
-advance is itself a render-phase mutation, so leaving it behind fixes nothing.
-It needs its own `/spec` pass rather than a box on this one.
+The one-line fix ("fold in an effect") was not implementable as written
+because it left the baseline advance in render, where an abandoned render
+would advance it and the committed render that followed would see no change.
+So the baseline moved with the fold. The design, as landed:
 
-**Known limitation, inherited by subscriptions.** An emitting subscription
-during a suspending transition churns: `sync` folds the transition's props in
-the render body and the diff starts the new key, the subscription's first
-`dispatch` makes `useSyncExternalStore` force a synchronous re-render on the
-sync lane, and that render commits the props React was about to discard, so
-the key flips back and forth once per abandoned render. The browser case
-"a discarded render's subscription is stopped by the committed one" uses a
-non-emitting feed for that reason: with an emission the render is never
-discarded and the case has nothing to show. Measured in
-`lib.stress.browser.test.tsx`: the discarded key restarts once per emission
-or two for as long as the abandoned render is held (1 restart at 0 ms, 3 at
-12 ms, 7 at 50 ms, 18 at 150 ms with a 5 ms tick), so the churn is bounded
-by the hold time and the emission rate, not by the keys involved. Fixed by
-this redesign, not before it.
+- **Comparison** happens in `store.sync`, called from a `useLayoutEffect`
+  with no dependency list: once per committed render, never for a render
+  React discards. Nothing in the render body reads or writes the baseline.
+  The candidate of comparing in the render body and folding in the effect
+  was evaluated and rejected: the effect has to compare anyway (a result
+  computed in render is only valid for that render's own commit, and the
+  effect cannot tell which render it belongs to without comparing), so a
+  render-body comparison is a second equivalence per commit with no consumer.
+- **The fold** happens in that same layout effect: `PropsChanged`, then
+  `HookChanged`, each notifying subscribers as any fold does. A fold that
+  moved state makes `useSyncExternalStore` schedule a synchronous re-render,
+  which React flushes at the end of the same commit, before the browser
+  paints. The `syncing` flag no longer suppresses notification; it only keeps
+  `sync`'s two folds to one subscription diff.
+- **The baseline advances** inside `sync`, with the fold, from the committed
+  props and hooks. Before the first `start`, `sync` only records: `Mounted`
+  is the first lifecycle action a feature ever folds, and its snapshot
+  carries the props and hooks in force at mount. After `stop` or a dead
+  mount, `sync` folds as it always did; its command is dropped as any
+  lifecycle command is then.
+- **An abandoned render costs the store nothing.** Props validation
+  (`useMemo` on props identity) and the `useUnsafeHooks` call still run,
+  because they are React's. The abandoned render's subscription keys are
+  never started, and a transition that suspends and later commits starts its
+  new key on the commit that shows it, not on its first render attempt.
+- **A props-driven change costs two renders and one paint.** Render N carries
+  the new props with the old state and commits; the layout effect folds; the
+  synchronous re-render N+1 commits the new state; the browser paints once,
+  after N+1. Measured in `lib.browser.test.tsx` "a props change costs two
+  renders and one frame, measured": a `MutationObserver` sees the DOM pass
+  through the intermediate value and the first `requestAnimationFrame` after
+  the click reads the final one. The previous design paid one render; the
+  second is the price of never touching the store from render.
+- **Hook order in `Mount`** is `useSyncExternalStore`, `useUnsafeHooks`, the
+  layout effect, the mount effect. The old "`useSyncExternalStore` after
+  `sync`, deliberately" note is void: no fold runs during render, so there is
+  nothing for the hook's post-render consistency check to catch, and the
+  order between the two is immaterial.
+
+Two entries close with it. `useUnsafeHooks` no longer lags: the hook is called
+with the state the render reads, a fold that moves state re-renders
+synchronously, the hook re-evaluates against the new state, and the next
+layout effect raises `HookChanged` if its value moved, all before paint. A
+`HookChanged` handler whose state change moves the hook's value again has no
+fixed point and hits React's nested-update limit; that is the reducer's to
+own, and the same rule the docs already give for a hook returning a fresh
+object. And Open work item 5 is closed: the window between the first render
+and the mount effect no longer holds a fold, and `sync` before the first
+`start` records without raising, so `Mounted` folds before any `PropsChanged`
+on the store as well as under React.
+
+Pinned by `lib.stress.browser.test.tsx` "50 abandoned transitions held 50 ms
+with an emitting subscription never start the discarded key": zero starts of
+the discarded key, the committed key never interrupted, the emissions never
+paused.
 
 This supersedes old open item #5 ("the `useSyncExternalStore`-after-`sync`
-ordering has no discriminating test"), which the previous spec rewrite promoted
-into an acceptance criterion. The untested-ordering observation stands and is
-recorded there; the redesign it proposed is what is deferred here.
+ordering has no discriminating test"), which the previous spec rewrite
+promoted into an acceptance criterion; with the fold out of render that
+criterion is retired rather than tested.
 
 ### Subscriptions split from commands (`Cmd` / `Sub`) — **retired**, landed
 

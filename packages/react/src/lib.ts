@@ -850,8 +850,9 @@ export interface LifecycleHandlers<Props, State, Action, H extends AnyHooks, R =
 
   /**
    * Fires when props change **by value** (`Schema.toEquivalence`), so an
-   * unchanged parent re-render folds nothing. Returning the same state
-   * reference is the no-op.
+   * unchanged parent re-render folds nothing. Raised after the render that
+   * carried the props commits, never for a render React abandons. Returning
+   * the same state reference is the no-op.
    */
   readonly PropsChanged?: LifecycleHandler<"PropsChanged", Props, State, Action, H, R>;
 
@@ -1438,10 +1439,13 @@ export interface FeatureStore<Props, State, Action, H extends AnyHooks> {
   readonly dispatch: Dispatch<Action>;
 
   /**
-   * The snapshot's ambient half, and — because it is the only thing that sees
-   * both the old and new values — the place `PropsChanged` and `HookChanged`
-   * are detected and raised. Returns the post-fold state, so a caller driving
-   * the store by hand sees the change the sync just caused.
+   * The snapshot's ambient half, and, because it is the only thing that sees
+   * both the old and new values, the place `PropsChanged` and `HookChanged`
+   * are detected and raised. Called from a layout effect, once per committed
+   * render, never from the render body. Before the first `start` it only
+   * records, so `Mounted` is the first lifecycle action folded and sees the
+   * props and hooks in force at mount. Returns the post-fold state, so a
+   * caller driving the store by hand sees the change the sync just caused.
    */
   readonly sync: (props: Props, hooks: H) => State;
 
@@ -1641,6 +1645,12 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
   let props = args.props;
   let hooks: H | undefined;
   let folding = false;
+  /**
+   * Set while `sync` folds, so the drain's own subscription diff stands down
+   * and `sync` diffs once after both of its folds. Notification is not
+   * suppressed: a sync-driven fold that moved state has to reach
+   * `useSyncExternalStore`, which is what re-renders the committed tree.
+   */
   let syncing = false;
 
   const snapshot = (): Snapshot<Props, State, H> => ({
@@ -1775,7 +1785,7 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
       }
     } finally {
       folding = false;
-      if (moved && !syncing) for (const subscriber of subscribers) subscriber();
+      if (moved) for (const subscriber of subscribers) subscriber();
       // Once per drain, against the settled state, outside the `folding`
       // guard: the hook is pure and `reconcile` offers rather than folds. A
       // `sync` reconciles itself, once, after its own folds.
@@ -2124,7 +2134,11 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
       const previousProps = props;
       const previousHooks = hooks;
 
-      if (previousHooks === undefined) {
+      // Before the first `start` there is nothing to raise against: the
+      // feature has folded no lifecycle action yet, so the latest props and
+      // hooks are simply what `Mounted` will see. The same holds for the
+      // first call after a hand-driven `start`, which seeds the hooks.
+      if (!everStarted || previousHooks === undefined) {
         props = nextProps;
         hooks = nextHooks;
         return state;
@@ -2482,26 +2496,31 @@ export const createRuntime: <RootR, RootE>(
         }),
       );
 
-      const committed = store.getSnapshot();
-      const hooks = useFeatureHooks(props, committed);
-
-      // In the body, not an effect: `sync` compares props and hooks by value
-      // and folds `PropsChanged`/`HookChanged`, so a props-driven change
-      // paints on the render that carried the props. A discarded render
-      // repeats the call; the value comparison makes the repeat a no-op.
-      store.sync(props, hooks);
-
-      // After `sync`, deliberately: `useSyncExternalStore` re-reads
-      // `getSnapshot` when the render finishes and schedules another render if
-      // it moved — folding first means both reads see the same state.
-      // Defensive rather than a measured fix; see `lib.specs.md`. Hook order
-      // stays stable: called unconditionally, just later in the body.
       // The third argument is the server snapshot: without it React throws
       // `Missing getServerSnapshot` under `renderToString`. The same reader is
-      // correct on both sides — the server never folds (no effects run, so no
+      // correct on both sides: the server never folds (no effects run, so no
       // `start`), and hydration reads the same deterministic
       // `initialState(props)` the server rendered.
       const state = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+
+      // Against the state this render reads. A fold that moves state
+      // re-renders synchronously, so a hook derived from state re-evaluates
+      // against the new state before paint, and the layout effect below
+      // raises `HookChanged` if its value moved.
+      const hooks = useFeatureHooks(props, state);
+
+      // In a layout effect, never in the body: the render body touches
+      // nothing in the store, so a render React abandons (a suspended or
+      // interrupted transition) costs the store nothing and never starts
+      // work for props that did not commit. No dependency list: `sync`
+      // compares props and hooks by value and is the dedupe. Layout rather
+      // than passive: a fold that moves state makes `useSyncExternalStore`
+      // schedule a synchronous re-render, which React flushes at the end of
+      // this commit, so a props-driven change costs two renders and one
+      // paint. Measured in `lib.browser.test.tsx`.
+      useLayoutEffect(() => {
+        store.sync(props, hooks);
+      });
 
       // `Mounted` stays in an effect: it must not fire for a render React
       // throws away. `start`/`stop` rather than a single `dispose` lets the

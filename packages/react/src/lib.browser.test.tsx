@@ -6,11 +6,11 @@
  * What is left, and what only a browser can answer, is whether a feature
  * actually paints: that `render` reaches the document, that a dispatch from a
  * real click repaints, that an output crosses the boundary into a parent's
- * `on<Tag>` prop, and that a props change costs one render rather than two.
+ * `on<Tag>` prop, and that a props change reaches the screen in one frame.
  */
 
 import { Effect, Layer, Schema } from "effect";
-import { Component, StrictMode, useState } from "react";
+import { Component, StrictMode, useLayoutEffect, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import { afterEach, expect, test, vi } from "vite-plus/test";
@@ -162,7 +162,7 @@ test("an output raised from a threshold crossing reaches the parent", async () =
   await vi.waitFor(() => expect(reached).toHaveBeenCalledWith({ at: 10 }));
 });
 
-test("a props change repaints on the render that carried it, not the one after", async () => {
+test("a props change paints in the flush that carried it", async () => {
   // A parent that owns `step`, so changing it is an ordinary React re-render.
   const Parent = () => {
     const [step, setStep] = useState(3);
@@ -179,11 +179,101 @@ test("a props change repaints on the render that carried it, not the one after",
   await mount(<Parent />);
   await vi.waitFor(() => expect(text("count")).toBe("3"));
 
-  // One `act` flush. Detecting the change in an effect would paint the old
-  // value first and correct it on a second pass; the assertion right after a
-  // single flush is what distinguishes the two.
+  // One `act` flush. The fold runs in a layout effect and the re-render it
+  // causes is flushed synchronously in the same commit, so a single flush
+  // already shows the folded value. The frame-level claim is measured below.
   await click("raise");
   expect(text("count")).toBe("7");
+});
+
+test("a hook derived from state catches up on a props-driven change in the same flush", async () => {
+  // `useUnsafeHooks` reads the state the render reads. When a props change
+  // moves state, the synchronous re-render re-evaluates the hook against the
+  // new state and the next layout effect raises `HookChanged`, so the derived
+  // value lands in the same flush rather than on the next dispatch.
+  const Derived = define({
+    props: Schema.Struct({ step: Schema.Number }),
+    state: Schema.Struct({ count: Schema.Number, big: Schema.Boolean }),
+    action: Action.of([Action("Noop", {})]),
+    useUnsafeHooks: (_props, state) => ({ big: state.count >= 10 }),
+  }).create({
+    initialState: (props) => ({ count: props.step, big: false }),
+    reducer: {
+      Noop: (_action, { state }) => state,
+      PropsChanged: (_action, { state, props }) => ({ ...state, count: props.step }),
+      HookChanged: (_action, { state, hooks }) => ({ ...state, big: hooks.big }),
+    },
+    render: ({ state }) => (
+      <span data-testid="derived">
+        {state.count}:{String(state.big)}
+      </span>
+    ),
+  });
+  const DerivedView = component(Derived, { name: "Derived" });
+
+  const Parent = () => {
+    const [step, setStep] = useState(3);
+    return (
+      <div>
+        <button data-testid="raise" onClick={() => setStep(12)}>
+          raise
+        </button>
+        <DerivedView step={step} />
+      </div>
+    );
+  };
+
+  await mount(<Parent />);
+  await vi.waitFor(() => expect(text("derived")).toBe("3:false"));
+
+  await click("raise");
+  expect(text("derived")).toBe("12:true");
+});
+
+test("`Mounted` folds before a `PropsChanged` that lands in the first commit", async () => {
+  // A parent whose layout effect changes the feature's prop during the very
+  // first commit. React flushes the pending passive effects before the sync
+  // re-render that update schedules, so `start()` folds `Mounted` first and
+  // the second commit's layout effect folds `PropsChanged` after it, with
+  // their commands in the same order.
+  const log: Array<string> = [];
+
+  const Ordered = define({
+    props: Schema.Struct({ step: Schema.Number }),
+    state: Schema.Struct({ step: Schema.Number }),
+    action: Action.of([Action("Noop", {})]),
+  }).create({
+    initialState: (props) => ({ step: props.step }),
+    reducer: {
+      Noop: (_action, { state }) => state,
+      Mounted: (_action, { state }) => {
+        log.push("Mounted");
+        return [state, Command.effect(() => Effect.sync(() => void log.push("mounted-cmd")))];
+      },
+      PropsChanged: (_action, { props }) => {
+        log.push("PropsChanged");
+        return [
+          { step: props.step },
+          Command.effect(() => Effect.sync(() => void log.push("props-cmd"))),
+        ];
+      },
+    },
+    render: ({ state }) => <span data-testid="step">{state.step}</span>,
+  });
+  const OrderedView = component(Ordered, { name: "Ordered" });
+
+  const Parent = () => {
+    const [step, setStep] = useState(1);
+    useLayoutEffect(() => setStep(7), []);
+    return <OrderedView step={step} />;
+  };
+
+  await mount(<Parent />);
+  await vi.waitFor(() => expect(text("step")).toBe("7"));
+  await vi.waitFor(() => expect(log).toHaveLength(4));
+
+  expect(log.filter((entry) => !entry.endsWith("-cmd"))).toEqual(["Mounted", "PropsChanged"]);
+  expect(log.filter((entry) => entry.endsWith("-cmd"))).toEqual(["mounted-cmd", "props-cmd"]);
 });
 
 test("props identity churn alone does not raise `PropsChanged`", async () => {
@@ -485,14 +575,14 @@ test("an output with no matching prop throws rather than vanishing", async () =>
   expect(String(errors[0])).toMatch(/onReached/);
 });
 
-test("a props change costs exactly one render, counted", async () => {
-  // The one-render claim was asserted indirectly (the painted value after a
-  // single flush) and never counted, so this counts it.
-  //
-  // It is not the regression guard for the `useSyncExternalStore`-after-`sync`
-  // ordering, and should not be read as one: the count still measures one when
-  // that ordering is reverted. What it pins is the claim itself — a props
-  // change costs one render — against any future change that breaks it.
+test("a props change costs two renders and one frame, measured", async () => {
+  // The fold lives in a layout effect, so a props change renders twice: once
+  // with the new props and the old state, and once more, synchronously, after
+  // the layout effect folds `PropsChanged`. What must not happen is a frame
+  // between the two. Outside `act`, so React's own scheduling decides what
+  // reaches the browser: a `MutationObserver` records the DOM passing through
+  // the intermediate value, and the first animation frame after the click,
+  // which runs before the browser paints, must already read the final one.
   let renders = 0;
 
   const Counted = define({
@@ -505,9 +595,9 @@ test("a props change costs exactly one render, counted", async () => {
       Noop: (_action, { state }) => state,
       PropsChanged: (_action, { props }) => ({ mirrored: props.step }),
     },
-    render: ({ state }) => {
+    render: ({ state, props }) => {
       renders += 1;
-      return <span data-testid="mirrored">{state.mirrored}</span>;
+      return <span data-testid="mirrored">{`${props.step}:${state.mirrored}`}</span>;
     },
   });
 
@@ -526,15 +616,44 @@ test("a props change costs exactly one render, counted", async () => {
   };
 
   await mount(<Parent />);
-  await vi.waitFor(() => expect(text("mirrored")).toBe("1"));
+  await vi.waitFor(() => expect(text("mirrored")).toBe("1:1"));
 
+  const target = container!.querySelector('[data-testid="mirrored"]')!;
+  const passed: Array<string> = [];
+  const observer = new MutationObserver((records) => {
+    for (const record of records) {
+      passed.push(
+        record.type === "characterData"
+          ? (record.oldValue ?? "")
+          : Array.from(record.removedNodes, (node) => node.textContent ?? "").join(""),
+      );
+    }
+  });
+  observer.observe(target, {
+    characterData: true,
+    characterDataOldValue: true,
+    childList: true,
+    subtree: true,
+  });
+
+  const flags = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
   const baseline = renders;
-  await click("bump-step");
+  flags.IS_REACT_ACT_ENVIRONMENT = false;
+  try {
+    const frame = new Promise<string>((resolve) => {
+      requestAnimationFrame(() => resolve(text("mirrored")));
+    });
+    container!.querySelector<HTMLButtonElement>('[data-testid="bump-step"]')!.click();
+    expect(await frame).toBe("2:2");
+  } finally {
+    flags.IS_REACT_ACT_ENVIRONMENT = true;
+    observer.disconnect();
+  }
 
-  expect(text("mirrored")).toBe("2");
-  // One render for the new props. Two would mean the fold tripped
-  // `useSyncExternalStore`'s post-render consistency check.
-  expect(renders - baseline).toBe(1);
+  // Two commits: the DOM held the intermediate value between them, and the
+  // frame never saw it.
+  expect(renders - baseline).toBe(2);
+  expect(passed).toContain("2:1");
 });
 
 test("declared `children` render, and changing them alone does not raise `PropsChanged`", async () => {

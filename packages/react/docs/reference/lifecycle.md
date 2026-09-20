@@ -157,10 +157,10 @@ console.log(Next.command(mounted) !== undefined);
 // => false
 ```
 
-`Mounted` returns no command here, because there is no handler for it. A
-feature whose `Mounted` handler does return a command still has its command
-queued ahead of a `PropsChanged` fold that lands between the first render and
-the mount effect.
+`Mounted` returns no command here, because there is no handler for it.
+`Mounted` is the first lifecycle action a feature folds. A props change that
+lands in the first commit folds `PropsChanged` after it, and its command runs
+after the `Mounted` command.
 
 ## `PropsChanged`
 
@@ -195,9 +195,16 @@ console.log(Next.state(newRoom));
 ```
 
 A changed `roomId` also changes the key `subscriptions` returns, so the
-runtime stops the old room's fiber and starts the new one on the same render
-pass. `PropsChanged` here only resets `members`; nothing in the reducer
-starts, rebooks or cancels the feed.
+runtime stops the old room's fiber and starts the new one when the render
+that carries the new prop commits, before the browser paints. `PropsChanged`
+here only resets `members`; nothing in the reducer starts, rebooks or cancels
+the feed.
+
+The runtime compares props after a render commits, never during the render.
+A render that React abandons, such as a transition that suspends, raises no
+`PropsChanged` and starts no subscription. A props change costs two renders
+and one paint. The first carries the new props, the second carries the state
+`PropsChanged` produced, and both land in the same frame.
 
 A `Children` prop is opaque and compares equal to any value, so a fresh node
 never raises `PropsChanged`. The reducer's `snapshot.props.children` can
@@ -229,13 +236,16 @@ console.log(Next.state(hookChanged));
 A hook returning a fresh object or a fresh function on every render raises
 `HookChanged` on every render. Memoize inside the hook, or return primitives.
 
-A key built from `snapshot.hooks` restarts under the same rule: `sync`
+A key built from `snapshot.hooks` restarts under the same rule: the runtime
 evaluates the `subscriptions` hook after a `HookChanged` fold, on the same
 terms as after `PropsChanged`.
 
-`useUnsafeHooks` sees the committed state read before the fold of
-`PropsChanged` and `HookChanged`, so a hook value derived from state can lag
-until the next dispatch or ambient change.
+`useUnsafeHooks` reads the state the render reads. When `PropsChanged` moves
+state, the feature renders again before the browser paints. The hook runs
+against the new state, and a changed value raises `HookChanged` in the same
+frame. A `HookChanged` handler whose state change moves the hook value again
+never settles, and it hits React's update limit. Derive a value that holds
+still once state has caught up.
 
 ## `Error`
 

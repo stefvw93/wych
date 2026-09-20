@@ -42,9 +42,8 @@ let log: Array<string> = [];
 
 /**
  * `announce: false` builds a feed that never dispatches, for the transition
- * case: an emission during a pending transition would make
- * `useSyncExternalStore` force a synchronous re-render and hide the render
- * React discards behind one it commits.
+ * case, so its log holds only what the diff did and no `Tick` re-renders the
+ * committed tree while the transition is pending.
  */
 const make = (name: string, announce: boolean) => {
   const feature = Presence.create({
@@ -238,13 +237,14 @@ test("StrictMode's double mount starts exactly one subscription per key on the s
   expect(new Set(recorder.events.map((event) => event.instance)).size).toBe(1);
 });
 
-test("a discarded render's subscription is stopped by the committed one", async () => {
-  // A transition to room `b` renders the feature with `b` — `sync` folds
-  // `PropsChanged` in the render body, so `room:b` starts — and then suspends
+test("a discarded render never declares its subscription", async () => {
+  // A transition to room `b` renders the feature with `b` and then suspends
   // on a sibling that never resolves, so React keeps the committed `a` on
-  // screen and abandons the render. A synchronous update back to `a` commits,
-  // and its diff stops `room:b`. The churn is bounded by the keys the
-  // discarded render declared: one stop, one start, then the way back.
+  // screen and abandons the render. The render body touches nothing in the
+  // store, and the layout effect that folds `PropsChanged` never runs for a
+  // render that does not commit, so `room:b` is never started. The
+  // synchronous update back to `a` commits props equal to the baseline and
+  // folds nothing either.
   const pending = new Promise<never>(() => {});
   const Suspender = ({ room }: { readonly room: string }) => {
     if (room === "b") throw pending;
@@ -275,24 +275,24 @@ test("a discarded render's subscription is stopped by the committed one", async 
   await vi.waitFor(() => expect(live()).toEqual(["room:a"]));
 
   await click("to-b");
+  await flush();
 
-  // The transition never commits: `a` stays on screen and no fallback shows,
-  // yet the store has folded `b` and the discarded render's key is running.
-  await vi.waitFor(() => expect(live()).toEqual(["room:b"]));
+  // The transition never commits: `a` stays on screen, no fallback shows,
+  // and the store never heard of `b`.
+  expect(live()).toEqual(["room:a"]);
   expect(text("room")).toBe("a");
   expect(container?.querySelector('[data-testid="fallback"]')).toBeNull();
+  expect(transitions("PropsChanged")).toHaveLength(0);
 
   await click("to-a");
+  await flush();
 
-  await vi.waitFor(() => expect(live()).toEqual(["room:a"]));
+  expect(live()).toEqual(["room:a"]);
   expect(text("room")).toBe("a");
-  expect(log).toEqual([
-    "room:a:start",
-    "room:a:stop",
-    "room:b:start",
-    "room:b:stop",
-    "room:a:start",
-  ]);
+  expect(log).toEqual(["room:a:start"]);
+  expect(transitions("PropsChanged")).toHaveLength(0);
+  expect(tagged("SubscriptionStarted").map((event) => event.key)).toEqual(["room:a"]);
+  expect(tagged("SubscriptionStopped")).toHaveLength(0);
   expect(transitions("Mounted")).toHaveLength(1);
   expect(transitions("Unmounted")).toHaveLength(0);
 });

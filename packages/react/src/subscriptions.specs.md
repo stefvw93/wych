@@ -173,14 +173,16 @@ contract, stated once here and loudly in the docs: the runtime cannot see
 inside a closure, so the key must say what the closure captured. Rejected
 alternatives are under Deferred decisions.
 
-**Sync-driven folds during render run the diff.** `store.sync` folds
-`PropsChanged` in the render body and already offers that fold's command to
-the mount queue from there; the diff is the same kind of side effect, and the
-fork itself happens on the mount fiber, not in the render body. A render React
-discards can churn — stop and restart a key that flipped and flipped back —
-bounded by the keys involved. That churn is inherited from the deferred
-`store.sync` decision in `lib.specs.md`, which this makes more urgent, not
-something this pass fixes.
+**Sync-driven folds run the diff from the layout effect.** `store.sync` is
+called once per committed render, from a `useLayoutEffect` in `component`,
+never from the render body; it folds `PropsChanged` / `HookChanged`, offers
+their commands, and diffs once after both. The fork itself happens on the
+mount fiber. A render React discards never reaches `sync`, so a key the
+discarded render would have declared is never started and the committed key
+is never interrupted: a suspended transition into a new room starts that
+room's feed on the commit that shows it. The design is recorded in
+`lib.specs.md` under Deferred decisions, `store.sync` folding during render,
+executed.
 
 ## Quiescence — what `Feature.run` waits for
 
@@ -555,9 +557,6 @@ Three things the exercises hit that the next pass on this code will hit too:
 - **A subscription cannot be cancelled by a handler**, by design (see Deferred
   decisions), so a one-off "drop this feed now" without a state change has no
   spelling.
-- **Discarded-render churn** is real until the `store.sync` redesign in
-  `lib.specs.md` lands, and with an emitting source it is per emission: see
-  the measurement under that deferred decision.
 
 ## Open work
 
@@ -657,13 +656,13 @@ only a mount can show is the effect scheduling React owns:
 - **StrictMode double-mount starts exactly one subscription per key** on the
   surviving mount, with one `SubscriptionStopped(Unmounted)` for the
   simulated unmount.
-- **A discarded render's subscription is stopped by the committed one** — a
-  props flip inside a transition that suspends and is abandoned, on the
-  pattern the latest-ref test already uses. The feed in this case does not
-  emit: an emission during a pending transition makes
-  `useSyncExternalStore` force a synchronous re-render on the sync lane,
-  which commits the render the case needs React to discard. See the
-  `store.sync` known limitation in `lib.specs.md`.
+- **A discarded render never declares its subscription** — a props flip
+  inside a transition that suspends and is abandoned, on the pattern the
+  latest-ref test already uses. The store never hears of the abandoned
+  props: no `PropsChanged`, no start of the new key, no stop of the old one,
+  and the way back folds nothing either. The feed in this case does not emit,
+  so the log holds only what the diff did; the emitting variant is the
+  stress case in `lib.stress.browser.test.tsx`.
 
 The docs pages that build the presence example are executed by
 `docs:check --run`; `docs/examples/presence-stream` is type-checked by
