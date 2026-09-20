@@ -549,12 +549,100 @@ const declaredKeys = (subscriptions: Subscriptions<any, any>): Array<string> =>
   Object.keys(subscriptions).filter((key) => subscriptions[key] !== undefined);
 
 /**
+ * One diff of the declared set: the keys `next` declares, against the keys
+ * `previous` declared. Stops before starts is the caller's job; a key in both
+ * is unchanged, whatever its fiber is doing.
+ */
+const diffDeclared = (
+  previous: ReadonlySet<string>,
+  next: Subscriptions<any, any>,
+): {
+  readonly wanted: ReadonlySet<string>;
+  readonly stopping: ReadonlyArray<string>;
+  readonly starting: ReadonlyArray<readonly [string, Subscription<any, any>]>;
+} => {
+  const keys = declaredKeys(next);
+  const wanted = new Set(keys);
+  const stopping: Array<string> = [];
+  for (const key of previous) if (!wanted.has(key)) stopping.push(key);
+  const starting: Array<readonly [string, Subscription<any, any>]> = [];
+  for (const key of keys) if (!previous.has(key)) starting.push([key, next[key]!]);
+  return { wanted, stopping, starting };
+};
+
+/**
  * The second book a mount (or a `run`) keeps beside its fiber book: one fiber
  * per declared key. A fiber that completed or died stays booked until its key
  * leaves the declared set, so a declared key that is done is unchanged, not
  * restarted. Never counted in `inFlight`.
+ *
+ * `fork` books the fiber as the body's first step, before `sub.effect` runs,
+ * and again after `forkChild` returns: `forkChild` schedules the body on the
+ * dispatcher, and when the op budget yields the forking fiber between the
+ * fork and the booking after it, the body runs first, and a death there would
+ * find the key unbooked. The booking after the fork stays for a fiber
+ * stopped before its body ever ran. Both book the same fiber, in either
+ * order. The exit is observed inside the body rather than by a watcher:
+ * nothing counts a subscription as in flight, so a death has to reach
+ * `onExit` before the fiber completes, and a fiber interrupted before it
+ * starts has nothing to report.
+ *
+ * `stop` interrupts the named fibers, awaited, so a stopped subscription's
+ * finalizer has run and its last emission cannot land after its stop, and
+ * unbooks them first, so their exit is not reported: a fiber that ended as
+ * its key was being stopped has been reported by the stop already.
  */
-type SubscriptionBook = Map<string, Fiber.Fiber<void>>;
+const subscriptionBook = (deps: {
+  /** Where a subscription's emissions go, with the key they came from. */
+  readonly emit: (key: string, message: { readonly _tag: string }) => Effect.Effect<void>;
+  /** How a fiber still booked under `key` ended. Interruption included; callers filter. */
+  readonly onExit: (key: string, exit: Exit.Exit<void>) => void;
+}) => {
+  const book = new Map<string, Fiber.Fiber<void>>();
+
+  const fork = (key: string, sub: Subscription<any, any>) =>
+    Effect.gen(function* () {
+      const fiber: Fiber.Fiber<void> = yield* Effect.forkChild(
+        Effect.withFiber((current) => {
+          const self = current as Fiber.Fiber<void>;
+          book.set(key, self);
+          return Effect.suspend(() => sub.effect((message) => deps.emit(key, message))).pipe(
+            Effect.asVoid,
+            Effect.onExit((exit) =>
+              Effect.sync(() => {
+                if (book.get(key) === self) deps.onExit(key, exit);
+              }),
+            ),
+          );
+        }),
+      );
+      book.set(key, fiber);
+    });
+
+  const stop = (keys: Iterable<string>) =>
+    Effect.suspend(() => {
+      const fibers: Array<Fiber.Fiber<void>> = [];
+      for (const key of keys) {
+        const fiber = book.get(key);
+        if (fiber === undefined) continue;
+        book.delete(key);
+        fibers.push(fiber);
+      }
+      return Fiber.interruptAll(fibers);
+    });
+
+  return {
+    fork,
+    stop,
+    /** Every booked key, running, done or died. */
+    keys: () => [...book.keys()],
+    get size() {
+      return book.size;
+    },
+  } as const;
+};
+
+type SubscriptionBook = ReturnType<typeof subscriptionBook>;
 
 /**
  * Attribution for a command's fibers. `tag` is the issuing action's, filled by
@@ -1248,11 +1336,7 @@ export const define: <
 
               const queue = yield* Queue.unbounded<Entry>();
               const book = fiberBook();
-              // The second book. Never counted in `inFlight`, so a subscription
-              // that never completes holds nothing open — that is the whole
-              // point of the split.
-              const running: SubscriptionBook = new Map();
-              let declared: ReadonlyArray<string> = [];
+              let declared: ReadonlySet<string> = new Set();
               const emitted: { _tag: string }[] = [];
               const outputs: { _tag: string }[] = [];
               const defects: RunDefect[] = [];
@@ -1269,15 +1353,28 @@ export const define: <
               // The store's rule, minus the sink and the boundary: record the
               // death, and fold `Error` when the feature handles it. `"runtime"`
               // origin: the action is the runtime's own, so it is not `emitted`.
-              const raise = (error: unknown, from: string): Effect.Effect<void> => {
+              const raise = (error: unknown, from: string): void => {
                 const handled = from !== "Error" && handlesError;
                 defects.push({ from, error, handled });
-                if (!handled) return Effect.void;
-                return Queue.offer(queue, {
+                if (!handled) return;
+                Queue.offerUnsafe(queue, {
                   msg: { _tag: "Error", error, cause: Cause.die(error), from },
                   origin: "runtime",
-                }).pipe(Effect.asVoid);
+                });
               };
+
+              // The second book. Never counted in `inFlight`, so a subscription
+              // that never completes holds nothing open — that is the whole
+              // point of the split.
+              const running = subscriptionBook({
+                emit: (_key, msg) =>
+                  Queue.offer(queue, { msg, origin: "subscription" }).pipe(Effect.asVoid),
+                onExit: (key, exit) => {
+                  if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {
+                    raise(Cause.squash(exit.cause), key);
+                  }
+                },
+              });
 
               const { interpret } = commandInterpreter({
                 book,
@@ -1294,65 +1391,12 @@ export const define: <
                 // still booked, so the drain loop cannot reach quiescence
                 // between the death and its `Error` fold.
                 onExit: (exit, ctx) =>
-                  !Exit.isFailure(exit) || Cause.hasInterruptsOnly(exit.cause)
-                    ? Effect.void
-                    : raise(Cause.squash(exit.cause), ctx.tag),
+                  Effect.sync(() => {
+                    if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {
+                      raise(Cause.squash(exit.cause), ctx.tag);
+                    }
+                  }),
               });
-
-              // One fork per key. The exit is observed inside the fiber's own
-              // body (`onExit`), not by a watcher on `Fiber.await`: nothing
-              // counts a subscription as in flight, so a death has to queue its
-              // `Error` before the fiber completes, or the drain loop reaches
-              // quiescence between the two. A fiber interrupted before it
-              // starts never runs the body, and has nothing to report. The
-              // guard keeps a fiber that died as its key was being stopped
-              // from reporting after its stop.
-              //
-              // The body books its own fiber as its first step, before
-              // `sub.effect` runs: `forkChild` schedules the body on the
-              // dispatcher, and when the op budget yields this fiber between
-              // the fork and the booking below, the body runs first — a death
-              // there would find the key unbooked. The booking below stays for
-              // a fiber stopped before its body ever ran. Both book the same
-              // fiber, in either order.
-              const fork = (key: string, sub: Subscription<any, any>) =>
-                Effect.gen(function* () {
-                  const fiber: Fiber.Fiber<void> = yield* Effect.forkChild(
-                    Effect.withFiber((current) => {
-                      const self = current as Fiber.Fiber<void>;
-                      running.set(key, self);
-                      return Effect.suspend(() =>
-                        sub.effect((msg) =>
-                          Queue.offer(queue, { msg, origin: "subscription" }).pipe(Effect.asVoid),
-                        ),
-                      ).pipe(
-                        Effect.asVoid,
-                        Effect.onExit((exit) =>
-                          running.get(key) !== self ||
-                          !Exit.isFailure(exit) ||
-                          Cause.hasInterruptsOnly(exit.cause)
-                            ? Effect.void
-                            : raise(Cause.squash(exit.cause), key),
-                        ),
-                      );
-                    }),
-                  );
-                  running.set(key, fiber);
-                });
-
-              const stopAll = (keys: ReadonlyArray<string>) =>
-                Effect.gen(function* () {
-                  const fibers: Array<Fiber.Fiber<void>> = [];
-                  for (const key of keys) {
-                    const fiber = running.get(key);
-                    if (fiber === undefined) continue;
-                    running.delete(key);
-                    fibers.push(fiber);
-                  }
-                  // Awaited, so a stopped subscription's finalizer has run and
-                  // its last emission cannot land after its key is gone.
-                  yield* Fiber.interruptAll(fibers);
-                });
 
               // The diff, on the store's rules: keys only, stops before starts,
               // a key still in the book — running, done or died — is unchanged.
@@ -1362,15 +1406,12 @@ export const define: <
                   try {
                     next = subscriptions({ ...snapshot, state });
                   } catch (error) {
-                    return yield* raise(error, from);
+                    return raise(error, from);
                   }
-                  const keys = declaredKeys(next);
-                  const wanted = new Set(keys);
-                  yield* stopAll(declared.filter((key) => !wanted.has(key)));
-                  for (const key of keys) {
-                    if (!running.has(key)) yield* fork(key, next[key]!);
-                  }
-                  declared = keys;
+                  const { wanted, stopping, starting } = diffDeclared(declared, next);
+                  yield* running.stop(stopping);
+                  for (const [key, sub] of starting) yield* running.fork(key, sub);
+                  declared = wanted;
                 });
 
               // Drain until quiescent: nothing queued and nothing running. The
@@ -1394,8 +1435,8 @@ export const define: <
                 // `Unmounted` empties the declared set, as `stop()` does on the
                 // store; every other action re-evaluates the hook.
                 if (entry.msg._tag === "Unmounted") {
-                  yield* stopAll(declared);
-                  declared = [];
+                  yield* running.stop(declared);
+                  declared = new Set();
                 } else if (parts.subscriptions !== undefined) {
                   yield* reconcile(entry.msg._tag);
                 }
@@ -1411,8 +1452,8 @@ export const define: <
               // The report is the declared set at resolve; then nothing leaks
               // past the returned Effect — awaited, so a finalizer inside a
               // subscription has run by the time the caller reads the result.
-              const subscriptionKeys = declared;
-              yield* stopAll(declared);
+              const subscriptionKeys = [...declared];
+              yield* running.stop(declared);
 
               return { state, emitted, outputs, defects, subscriptions: subscriptionKeys };
             }).pipe(Effect.provide(options.layer)),
@@ -1826,13 +1867,7 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
       return;
     }
 
-    const keys = declaredKeys(next);
-    const wanted = new Set(keys);
-    const stopping: Array<string> = [];
-    for (const key of declared) if (!wanted.has(key)) stopping.push(key);
-    const starting: Array<readonly [string, Subscription<any, any>]> = [];
-    for (const key of keys) if (!declared.has(key)) starting.push([key, next[key]!]);
-
+    const { wanted, stopping, starting } = diffDeclared(declared, next);
     declared = wanted;
     if (stopping.length === 0 && starting.length === 0) return;
 
@@ -1906,95 +1941,13 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
         }),
     });
 
-    /**
-     * Interrupt the named subscriptions, awaited — so a stopped subscription's
-     * finalizer has run and its last `dispatch` cannot land after its
-     * `SubscriptionStopped` — and unbook them.
-     */
-    const stopSubscriptions = (keys: Iterable<string>) =>
-      Effect.suspend(() => {
-        const fibers: Array<Fiber.Fiber<void>> = [];
-        for (const key of keys) {
-          const fiber = cells.subscriptions.get(key);
-          if (fiber === undefined) continue;
-          cells.subscriptions.delete(key);
-          fibers.push(fiber);
-        }
-        return Fiber.interruptAll(fibers);
-      });
-
-    /**
-     * `forkLeaf` minus the `inFlight` increment and the group booking. The
-     * exit is observed inside the body (`onExit`) rather than by a watcher: a
-     * fiber interrupted before it starts never runs the body, and an
-     * interruption is exactly the case with nothing to report. `dispatch`
-     * folds into the mount that forked it, as a command's does.
-     *
-     * The body books its own fiber as its first step, before `sub.effect`
-     * runs: `forkChild` schedules the body on the dispatcher, and when the op
-     * budget yields the mount fiber between the fork and the booking after it,
-     * the body runs first — a death there would find the key unbooked and go
-     * unreported. The booking after the fork stays for a fiber stopped before
-     * its body ever ran. Both book the same fiber, in either order.
-     */
-    const forkSubscription = (key: string, sub: Subscription<any, any>) =>
-      Effect.gen(function* () {
-        const cause: DevtoolsCause = { _tag: "Subscription", key };
-        const fiber: Fiber.Fiber<void> = yield* Effect.forkChild(
-          Effect.withFiber((current) => {
-            const self = current as Fiber.Fiber<void>;
-            cells.subscriptions.set(key, self);
-            return Effect.suspend(() =>
-              sub.effect((action) => Effect.sync(() => fold(action, cause, cells))),
-            ).pipe(
-              Effect.asVoid,
-              Effect.onExit((exit) =>
-                Effect.sync(() => {
-                  // A fiber that ended as its key was being stopped has been
-                  // reported `Undeclared` or `Unmounted` already.
-                  if (cells.subscriptions.get(key) !== self) return;
-                  if (Exit.isFailure(exit)) {
-                    if (Cause.hasInterruptsOnly(exit.cause)) return;
-                    raiseDefect(Cause.squash(exit.cause), key, cause, cells);
-                    const target = devtools();
-                    if (target !== undefined) {
-                      report({
-                        _tag: "SubscriptionStopped",
-                        name,
-                        instance,
-                        cause,
-                        key,
-                        reason: "Died",
-                      });
-                    }
-                    return;
-                  }
-                  const target = devtools();
-                  if (target !== undefined) {
-                    report({
-                      _tag: "SubscriptionStopped",
-                      name,
-                      instance,
-                      cause,
-                      key,
-                      reason: "Completed",
-                    });
-                  }
-                }),
-              ),
-            );
-          }),
-        );
-        cells.subscriptions.set(key, fiber);
-      });
-
     // Stop the subscriptions, run the `Unmounted` command with services still
     // alive, then drain to quiescence: in-flight commands finish, and what
     // they emit folds. Nothing starts during a teardown, so a `Subscriptions`
     // item met in the drain is dropped.
     const teardown = (command: Command<any, any> | undefined) =>
       Effect.gen(function* () {
-        yield* stopSubscriptions([...cells.subscriptions.keys()]);
+        yield* cells.subscriptions.stop(cells.subscriptions.keys());
 
         if (command !== undefined) {
           yield* interpret(command, { tag: "Unmounted" });
@@ -2011,8 +1964,8 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
         const work = yield* Queue.take(cells.queue);
 
         if (work._tag === "Subscriptions") {
-          yield* stopSubscriptions(work.stop);
-          for (const [key, sub] of work.start) yield* forkSubscription(key, sub);
+          yield* cells.subscriptions.stop(work.stop);
+          for (const [key, sub] of work.start) yield* cells.subscriptions.fork(key, sub);
           continue;
         }
 
@@ -2073,10 +2026,28 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
     // `Queue.unbounded` captures the current fiber's dispatcher, so there is
     // no synchronous constructor to reach for; `runSync` of a sync effect is
     // exactly that constructor.
+    // `dispatch` from a subscription folds into the mount that forked it, as
+    // a command's does; the closures below run only once `cells` exists.
     const cells: Mount = {
       queue: Effect.runSync(Queue.unbounded<Work>()),
       book: fiberBook(),
-      subscriptions: new Map(),
+      subscriptions: subscriptionBook({
+        emit: (key, action) =>
+          Effect.sync(() => fold(action, { _tag: "Subscription", key }, cells)),
+        onExit: (key, exit) => {
+          const cause: DevtoolsCause = { _tag: "Subscription", key };
+          let reason: "Died" | "Completed" = "Completed";
+          if (Exit.isFailure(exit)) {
+            if (Cause.hasInterruptsOnly(exit.cause)) return;
+            raiseDefect(Cause.squash(exit.cause), key, cause, cells);
+            reason = "Died";
+          }
+          const target = devtools();
+          if (target !== undefined) {
+            report({ _tag: "SubscriptionStopped", name, instance, cause, key, reason });
+          }
+        },
+      }),
     };
 
     mount = cells;
