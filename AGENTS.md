@@ -48,9 +48,12 @@ release. Add a tool name to select part of the graph. For example, run
   Run them after a change to `packages/react/src/lib.ts`, `devtools.ts` or
   `utils/task.ts`, and before a release:
   - `vp -C packages/react run bench`: tinybench through Vitest bench mode,
-    compared against `packages/react/bench/baseline.json`. The ratio column
-    is a prompt to look, not a gate. `run bench:baseline` rewrites the file
-    after an intended change; commit it with that change.
+    compared against a local `packages/react/bench/baseline.json`. The file
+    is gitignored: tinybench numbers only compare on the machine that wrote
+    them, so run `run bench:baseline` before a change and `run bench` after,
+    same machine, same session. The ratio column is a prompt to look, not a
+    gate. Cross-machine, only the intra-run ratios in the summary mean
+    anything.
   - `vp -C packages/react run stress`: the `stress` (node) and
     `stress-browser` (Chromium) projects: load, chaos, leak and property
     tests. `stress:node` and `stress:browser` run one; `STRESS_SCALE=4`

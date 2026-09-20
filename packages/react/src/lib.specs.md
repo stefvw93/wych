@@ -611,14 +611,23 @@ tests. Fixtures and probes are in `src/__fixtures__/stress.ts`.
 
 From `packages/react`:
 
-    vp run bench             # against bench/baseline.json, informational ratio column
-    vp run bench:baseline    # rewrite bench/baseline.json
+    vp run bench:baseline    # write bench/baseline.json (local, gitignored)
+    vp run bench             # against it, informational ratio column
     vp run stress            # node then browser
     vp run stress:node       # STRESS_SCALE=4 for a headroom run
     vp run stress:browser
 
 ### Baseline
 
+`bench/baseline.json` is not committed. Absolute tinybench numbers only
+compare against the machine that wrote them, and hosted CI runners are
+noisier than a laptop, so the workflow is: `bench:baseline` before a change,
+`bench` after, same machine, same session. What is stable across hardware is
+the intra-run ratios in the summary (sink overhead against the no-sink
+control, `batch 100` against `batch 10`, `diff on` against `diff off`); read
+those when comparing runs from different machines.
+
+The table below records magnitudes on one named machine, as documentation.
 Written 2026-09-19 on an AMD Ryzen 7 5700X3D, Node v24.21.0,
 `effect@4.0.0-rc.112`, React 19.2.8, headless Chromium. Indicative only:
 tinybench varies 10 to 20 percent between runs and the compare column is a

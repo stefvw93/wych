@@ -126,7 +126,9 @@ export default defineConfig({
         command: "node scripts/docs-check.mjs --run",
         input: ["docs/**/*.md", "src/**/*.ts", "scripts/docs-check.mjs", "tsconfig.json"],
       },
-      // Benchmarks against the committed baseline; `bench:baseline` rewrites it.
+      // Benchmarks against a local, gitignored baseline; `bench:baseline` writes
+      // it. Numbers only compare on the machine that wrote them, so the file is
+      // never committed. Without it `bench` still runs and only logs a read error.
       bench: {
         command: "vp test bench --project bench --compare bench/baseline.json",
         cache: false,
