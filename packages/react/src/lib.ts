@@ -1654,14 +1654,15 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
     readonly target: Mount | undefined;
   }> = [];
 
-  let active = false;
-  let everStarted = false;
   /**
-   * Set when the mount fiber died on its own — a feature layer that failed to
-   * build — as opposed to being stopped. The one state in which new work may
-   * re-arm the store: see `offer`.
+   * Where the store is in its life. `idle` until the first `start`; `live`
+   * while a mount is armed; `stopped` after `stop`, or after the mount fiber
+   * ended; `dead` when the mount fiber died on its own — a feature layer that
+   * failed to build — as opposed to being stopped, the one state in which new
+   * work may re-arm the store (see `offer`). A `mount` is installed while
+   * `live`, and stays installed after `stop` until its teardown drains.
    */
-  let dead = false;
+  let phase: "idle" | "live" | "stopped" | "dead" = "idle";
   let state = initialState(args.props);
   let props = args.props;
   let hooks: H | undefined;
@@ -1695,11 +1696,11 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
       Queue.offerUnsafe(to.queue, work);
       return true;
     }
-    if (!everStarted) {
+    if (phase === "idle") {
       buffered.push(work);
       return true;
     }
-    if (dead && !active && demand) {
+    if (phase === "dead" && demand) {
       start();
       // A layer that fails synchronously has already released the mount
       // again by the time `start` returns; the work is dropped and the
@@ -1822,8 +1823,8 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
     // is. `start()` folds `Mounted` and reconciles from scratch against the
     // rebuilt layer, so nothing is diffed here. Lifecycle-, command- and
     // defect-caused folds never re-arm, for the reasons `offer` gives.
-    if (cells === undefined || !active) {
-      if (dead && !active && cause._tag === "Dispatch" && declares(from, cause)) start();
+    if (cells === undefined || phase !== "live") {
+      if (phase === "dead" && cause._tag === "Dispatch" && declares(from, cause)) start();
       return;
     }
 
@@ -1895,7 +1896,7 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
     const release = (): void => {
       if (mount !== cells) return;
       mount = undefined;
-      active = false;
+      phase = "stopped";
     };
 
     const { interpret } = commandInterpreter({
@@ -1973,11 +1974,16 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
       Effect.catchCause((cause) =>
         Effect.sync(() => {
           if (Cause.hasInterruptsOnly(cause)) return;
-          release();
-          dead = true;
-          // The subscriptions were children of the scope that just closed; a
-          // re-arm through `start()` evaluates from scratch.
-          declared = new Set();
+          // Only for the installed mount: a layer that fails after a remount
+          // has already replaced its mount must not mark the live one dead or
+          // forget its declared set. The defect is still reported.
+          if (mount === cells) {
+            mount = undefined;
+            phase = "dead";
+            // The subscriptions were children of the scope that just closed;
+            // a re-arm through `start()` evaluates from scratch.
+            declared = new Set();
+          }
           raiseDefect(Cause.squash(cause), "Mounted", LIFECYCLE);
         }),
       ),
@@ -1986,10 +1992,8 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
   };
 
   const start = (): void => {
-    if (active) return;
-    active = true;
-    everStarted = true;
-    dead = false;
+    if (phase === "live") return;
+    phase = "live";
 
     // `Queue.unbounded` captures the current fiber's dispatcher, so there is
     // no synchronous constructor to reach for; `runSync` of a sync effect is
@@ -2040,8 +2044,8 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
     const fibers = mount === undefined ? 0 : inFlight(mount.book);
     return {
       mounted: mount !== undefined,
-      active,
-      dead,
+      active: phase === "live",
+      dead: phase === "dead",
       queued: mount === undefined ? 0 : Queue.sizeUnsafe(mount.queue),
       inFlight: fibers,
       groups: mount?.book.size ?? 0,
@@ -2073,7 +2077,7 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
       // feature has folded no lifecycle action yet, so the latest props and
       // hooks are simply what `Mounted` will see. The same holds for the
       // first call after a hand-driven `start`, which seeds the hooks.
-      if (!everStarted || previousHooks === undefined) {
+      if (phase === "idle" || previousHooks === undefined) {
         props = nextProps;
         hooks = nextHooks;
         return state;
@@ -2107,12 +2111,10 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
     stop: () => {
       // A dead mount has no fiber to tear down, but the component is going
       // away all the same: `Unmounted` still folds and is still reported, and
-      // `dead` clears so a later dispatch drops instead of re-arming a
-      // component React has already let go of.
-      const wasDead = dead;
-      dead = false;
-      if (!active && !wasDead) return;
-      active = false;
+      // the phase leaves `dead` so a later dispatch drops instead of re-arming
+      // a component React has already let go of.
+      if (phase !== "live" && phase !== "dead") return;
+      phase = "stopped";
 
       const cells = mount;
 
