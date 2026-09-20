@@ -576,21 +576,16 @@ const diffDeclared = (
  * leaves the declared set, so a declared key that is done is unchanged, not
  * restarted. Never counted in `inFlight`.
  *
- * `fork` books the fiber as the body's first step, before `sub.effect` runs,
- * and again after `forkChild` returns: `forkChild` schedules the body on the
- * dispatcher, and when the op budget yields the forking fiber between the
- * fork and the booking after it, the body runs first, and a death there would
- * find the key unbooked. The booking after the fork stays for a fiber
- * stopped before its body ever ran. Both book the same fiber, in either
- * order. The exit is observed inside the body rather than by a watcher:
- * nothing counts a subscription as in flight, so a death has to reach
- * `onExit` before the fiber completes, and a fiber interrupted before it
- * starts has nothing to report.
+ * `fork` books the fiber and then attaches the exit observer, on
+ * `forkLeaf`'s terms: an observer attached after the fiber has already exited
+ * fires at attach, so a death between the fork and the booking is reported
+ * against a booked key. The observer reports only while the key is still
+ * booked to that fiber: a fiber that ended as its key was being stopped has
+ * been reported by the stop already.
  *
- * `stop` interrupts the named fibers, awaited, so a stopped subscription's
- * finalizer has run and its last emission cannot land after its stop, and
- * unbooks them first, so their exit is not reported: a fiber that ended as
- * its key was being stopped has been reported by the stop already.
+ * `stop` unbooks the named fibers first, then interrupts them, awaited, so a
+ * stopped subscription's finalizer has run and its last emission cannot land
+ * after its stop.
  */
 const subscriptionBook = (deps: {
   /** Where a subscription's emissions go, with the key they came from. */
@@ -601,23 +596,17 @@ const subscriptionBook = (deps: {
   const book = new Map<string, Fiber.Fiber<void>>();
 
   const fork = (key: string, sub: Subscription<any, any>) =>
-    Effect.gen(function* () {
-      const fiber: Fiber.Fiber<void> = yield* Effect.forkChild(
-        Effect.withFiber((current) => {
-          const self = current as Fiber.Fiber<void>;
-          book.set(key, self);
-          return Effect.suspend(() => sub.effect((message) => deps.emit(key, message))).pipe(
-            Effect.asVoid,
-            Effect.onExit((exit) =>
-              Effect.sync(() => {
-                if (book.get(key) === self) deps.onExit(key, exit);
-              }),
-            ),
-          );
-        }),
-      );
-      book.set(key, fiber);
-    });
+    Effect.map(
+      Effect.forkChild(
+        Effect.asVoid(Effect.suspend(() => sub.effect((message) => deps.emit(key, message)))),
+      ),
+      (fiber: Fiber.Fiber<void>) => {
+        book.set(key, fiber);
+        fiber.addObserver((exit) => {
+          if (book.get(key) === fiber) deps.onExit(key, exit);
+        });
+      },
+    );
 
   const stop = (keys: Iterable<string>) =>
     Effect.suspend(() => {
@@ -688,14 +677,15 @@ const commandInterpreter = (deps: {
    * Runs after a command's fiber settles, however it settled — `run` needs it
    * to wake a `Queue.take` that quiescence would otherwise never unblock.
    */
-  readonly settled: Effect.Effect<void>;
+  readonly settled: () => void;
   /**
    * How a command's fiber ended. `forkLeaf` forks and returns, so a dying
    * command dies on a fiber nobody awaits — without this hook every defect
    * from a command is discarded silently. Interruption is normal here
-   * (`Cancel`, unmount), so callers filter on it.
+   * (`Cancel`, unmount), so callers filter on it. Runs before the fiber is
+   * unbooked, so a fold it queues cannot be mistaken for quiescence.
    */
-  readonly onExit?: (exit: Exit.Exit<void>, ctx: CommandContext) => Effect.Effect<void>;
+  readonly onExit?: (exit: Exit.Exit<void>, ctx: CommandContext) => void;
   readonly book: FiberBook;
 }): {
   readonly interpret: (
@@ -710,39 +700,40 @@ const commandInterpreter = (deps: {
     ...(book.groups.get(target) ?? []),
   ];
 
-  /** Fork one leaf, register it under `ctx`'s group, unregister however it ends. */
+  /**
+   * Fork one leaf, register it under `ctx`'s group, unregister however it
+   * ends.
+   *
+   * The exit is observed through `fiber.addObserver`, not from inside the
+   * leaf: a fiber interrupted before the scheduler has started it never runs
+   * its body, so an `Effect.ensuring` baked into the body would never run
+   * either. The observer fires synchronously inside that interrupt, at attach
+   * when the fiber has already exited, and once after a deferred interrupt
+   * (`lib.probe.test.ts`). Booked before the observer is attached, so an
+   * observer that fires at attach finds the booking it undoes.
+   */
   const forkLeaf = (ctx: CommandContext, run: Effect.Effect<void, never, any>) =>
-    Effect.gen(function* () {
-      book.inFlight += 1;
-
-      const fiber: Fiber.Fiber<void> = yield* Effect.forkChild(run);
+    Effect.map(Effect.forkChild(run), (fiber: Fiber.Fiber<void>) => {
       const name = ctx.key ?? ctx.tag;
       const group = book.groups.get(name) ?? new Set<Fiber.Fiber<void>>();
       book.groups.set(name, group);
       group.add(fiber);
+      book.inFlight += 1;
 
       // No identity guard on the delete: a Set is deleted only when empty, by
-      // the cleanup that emptied it, and cleanups run exactly once — so a
-      // registered instance can never be a stale one.
-      const cleanup = Effect.sync(() => {
-        book.inFlight -= 1;
-        group.delete(fiber);
-        if (group.size === 0) book.groups.delete(name);
+      // the observer that emptied it, and observers run exactly once — so a
+      // registered instance can never be a stale one. `finally`: the
+      // bookkeeping has to survive an `onExit` that throws.
+      fiber.addObserver((exit) => {
+        try {
+          deps.onExit?.(exit, ctx);
+        } finally {
+          book.inFlight -= 1;
+          group.delete(fiber);
+          if (group.size === 0) book.groups.delete(name);
+          deps.settled();
+        }
       });
-
-      // A fiber interrupted before the scheduler has started it never runs its
-      // own body — including an `Effect.ensuring` baked into that body —
-      // verified against the installed effect version. So cleanup cannot live
-      // in the leaf; a separate watcher on `Fiber.await` observes the Exit
-      // whether or not the fiber ever got to start. `ensuring`, not `andThen`:
-      // the bookkeeping has to survive an `onExit` that dies.
-      yield* Fiber.await(fiber).pipe(
-        Effect.flatMap((exit) =>
-          deps.onExit === undefined ? Effect.void : deps.onExit(exit, ctx),
-        ),
-        Effect.ensuring(Effect.andThen(cleanup, deps.settled)),
-        Effect.forkChild,
-      );
     });
 
   const interpret = (
@@ -1035,9 +1026,9 @@ interface StoreInternals {
   readonly inFlight: number;
   /** Groups with at least one fiber booked. */
   readonly groups: number;
-  /** Command fibers booked across every group, exited or not. */
+  /** Command fibers booked across every group. A fiber is unbooked by its exit observer, synchronously. */
   readonly fibers: number;
-  /** Booked command fibers that have not exited: interrupted ones stay booked until their watcher's cleanup runs. */
+  /** Booked command fibers that have not exited. Equal to `fibers` unless an interrupt is deferred by an uninterruptible region. */
   readonly live: number;
   /** Subscription fibers booked, running, done or died. */
   readonly subscriptions: number;
@@ -1383,19 +1374,13 @@ export const define: <
                 // an interrupted/cancelled group) still has to wake the drain loop's
                 // `Queue.take` — otherwise quiescence is reached but nothing is left
                 // to unblock it. A no-op entry does that uniformly.
-                settled: Queue.offer(queue, {
-                  msg: { _tag: "__settled__" },
-                  origin: "settled",
-                }).pipe(Effect.asVoid),
-                // The fold is queued before `settled` and while the fiber is
-                // still booked, so the drain loop cannot reach quiescence
-                // between the death and its `Error` fold.
-                onExit: (exit, ctx) =>
-                  Effect.sync(() => {
-                    if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {
-                      raise(Cause.squash(exit.cause), ctx.tag);
-                    }
-                  }),
+                settled: () =>
+                  Queue.offerUnsafe(queue, { msg: { _tag: "__settled__" }, origin: "settled" }),
+                onExit: (exit, ctx) => {
+                  if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {
+                    raise(Cause.squash(exit.cause), ctx.tag);
+                  }
+                },
               });
 
               // The diff, on the store's rules: keys only, stops before starts,
@@ -1932,13 +1917,12 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
     const { interpret } = commandInterpreter({
       book: cells.book,
       emit: (message, ctx) => Effect.sync(() => fold(message, commandCause(ctx), cells)),
-      settled: Effect.sync(() => Queue.offerUnsafe(cells.queue, { _tag: "Settled" })),
-      onExit: (exit, ctx) =>
-        Effect.sync(() => {
-          if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {
-            raiseDefect(Cause.squash(exit.cause), ctx.tag, commandCause(ctx), cells);
-          }
-        }),
+      settled: () => Queue.offerUnsafe(cells.queue, { _tag: "Settled" }),
+      onExit: (exit, ctx) => {
+        if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {
+          raiseDefect(Cause.squash(exit.cause), ctx.tag, commandCause(ctx), cells);
+        }
+      },
     });
 
     // Stop the subscriptions, run the `Unmounted` command with services still
