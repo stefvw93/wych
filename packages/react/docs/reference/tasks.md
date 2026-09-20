@@ -50,11 +50,22 @@ const Mailbox = define({
 export const mailbox = Mailbox.create({
   initialState: Mailbox.initialState(() => ({ folder: "", subjects: Task.idle })),
   reducer: Mailbox.reducer({
-    Opened: ({ folder }, { state }) =>
-      Task.start({ ...state, folder }, "subjects", loadMail.run(folder)),
-    Cancelled: (_payload, { state }) => [{ ...state, subjects: Task.idle }, loadMail.cancel],
-    LoadMailResolved: ({ value }, { state }) => ({ ...state, subjects: Task.resolved(value) }),
-    LoadMailRejected: ({ error }, { state }) => ({ ...state, subjects: Task.rejected(error) }),
+    Opened: ({ folder }, { draft }) => {
+      draft.folder = folder;
+      return Task.start(draft, "subjects", loadMail.run(folder));
+    },
+    Cancelled: (_payload, { draft }) => {
+      draft.subjects = Task.idle;
+      return [draft, loadMail.cancel];
+    },
+    LoadMailResolved: ({ value }, { draft }) => {
+      draft.subjects = Task.resolved(value);
+      return draft;
+    },
+    LoadMailRejected: ({ error }, { draft }) => {
+      draft.subjects = Task.rejected(error);
+      return draft;
+    },
   }),
   render: Mailbox.render(({ state }) =>
     Task.match(state.subjects, {
@@ -164,9 +175,14 @@ tags, spread into the reducer:
 
 ```ts continue
 const viaInto = Mailbox.reducer({
-  Opened: ({ folder }, { state }) =>
-    Task.start({ ...state, folder }, "subjects", loadMail.run(folder)),
-  Cancelled: (_payload, { state }) => [{ ...state, subjects: Task.idle }, loadMail.cancel],
+  Opened: ({ folder }, { draft }) => {
+    draft.folder = folder;
+    return Task.start(draft, "subjects", loadMail.run(folder));
+  },
+  Cancelled: (_payload, { draft }) => {
+    draft.subjects = Task.idle;
+    return [draft, loadMail.cancel];
+  },
   ...loadMail.into("subjects"),
 });
 ```
@@ -186,14 +202,20 @@ hand.
 
 ```ts continue
 const overridden = Mailbox.reducer({
-  Opened: ({ folder }, { state }) =>
-    Task.start({ ...state, folder }, "subjects", loadMail.run(folder)),
-  Cancelled: (_payload, { state }) => [{ ...state, subjects: Task.idle }, loadMail.cancel],
+  Opened: ({ folder }, { draft }) => {
+    draft.folder = folder;
+    return Task.start(draft, "subjects", loadMail.run(folder));
+  },
+  Cancelled: (_payload, { draft }) => {
+    draft.subjects = Task.idle;
+    return [draft, loadMail.cancel];
+  },
   ...loadMail.into("subjects"),
-  LoadMailResolved: (action, { state }) => {
+  LoadMailResolved: (action, { draft }) => {
     console.log(action.value.length);
     // => 1
-    return { ...state, subjects: Task.resolved(action.value) };
+    draft.subjects = Task.resolved(action.value);
+    return draft;
   },
 });
 
@@ -308,13 +330,23 @@ the state unchanged while the task is `Pending`.
 
 ```ts continue
 const takeFirst = Mailbox.reducer({
-  Opened: ({ folder }, { state }) =>
-    Task.isPending(state.subjects)
-      ? state
-      : Task.start({ ...state, folder }, "subjects", loadMail.run(folder)),
-  Cancelled: (_payload, { state }) => [{ ...state, subjects: Task.idle }, loadMail.cancel],
-  LoadMailResolved: ({ value }, { state }) => ({ ...state, subjects: Task.resolved(value) }),
-  LoadMailRejected: ({ error }, { state }) => ({ ...state, subjects: Task.rejected(error) }),
+  Opened: ({ folder }, { state, draft }) => {
+    if (Task.isPending(state.subjects)) return state;
+    draft.folder = folder;
+    return Task.start(draft, "subjects", loadMail.run(folder));
+  },
+  Cancelled: (_payload, { draft }) => {
+    draft.subjects = Task.idle;
+    return [draft, loadMail.cancel];
+  },
+  LoadMailResolved: ({ value }, { draft }) => {
+    draft.subjects = Task.resolved(value);
+    return draft;
+  },
+  LoadMailRejected: ({ error }, { draft }) => {
+    draft.subjects = Task.rejected(error);
+    return draft;
+  },
 });
 ```
 
@@ -495,6 +527,22 @@ console.log(started[0]);
 
 // @ts-expect-error "folder" is not a TaskValue field
 const typo = Task.start({ folder: "inbox", subjects: Task.idle }, "folder", loadMail.run("inbox"));
+```
+
+Inside a handler, `Task.start` is usually called on `draft`: it writes
+`Pending` into the draft in place and returns the draft in the tuple, so the
+fold finishes it like any other write. `mailbox`'s own `Opened` handler does
+this.
+
+```ts continue
+const openedFromDraft = mailbox.reduce(Opened.make({ folder: "inbox" }), {
+  state: { folder: "", subjects: Task.idle },
+  props: {},
+  hooks: {},
+});
+
+console.log(Next.state(openedFromDraft));
+// => { folder: "inbox", subjects: { _tag: "Pending" } }
 ```
 
 The command may be lazy. The thunk receives the state with `Pending` already

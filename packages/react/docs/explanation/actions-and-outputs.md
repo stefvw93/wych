@@ -52,16 +52,24 @@ navigate away. The dialog does not know and should not.
 
 ```tsx continue
 const reducer = Dialog.reducer({
-  Opened: (_payload, { state }) => ({ ...state, open: true, typed: "" }),
-  Typed: ({ text }, { state }) => ({ ...state, typed: text }),
-  ConfirmClicked: (_payload, { state, props }) =>
-    state.typed === props.confirmWord
-      ? [{ ...state, open: false }, Command.output(Confirmed, {})]
-      : state,
-  Closed: ({ reason }, { state }) => [
-    { ...state, open: false },
-    Command.output(Dismissed, { reason }),
-  ],
+  Opened: (_payload, { draft }) => {
+    draft.open = true;
+    draft.typed = "";
+    return draft;
+  },
+  Typed: ({ text }, { draft }) => {
+    draft.typed = text;
+    return draft;
+  },
+  ConfirmClicked: (_payload, { draft, state, props }) => {
+    if (state.typed !== props.confirmWord) return draft;
+    draft.open = false;
+    return [draft, Command.output(Confirmed, {})];
+  },
+  Closed: ({ reason }, { draft }) => {
+    draft.open = false;
+    return [draft, Command.output(Dismissed, { reason })];
+  },
 });
 
 const dialog = Dialog.create({

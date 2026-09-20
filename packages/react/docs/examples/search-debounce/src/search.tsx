@@ -13,21 +13,27 @@ export const searchFeature = define({
 }).create({
   initialState: () => ({ query: "", hits: [] }),
   reducer: {
-    Typed: ({ query }, { state }) => [
-      { ...state, query },
-      Command.restart(
-        "query",
-        Command.effect((dispatch) =>
-          Effect.gen(function* () {
-            yield* Effect.sleep("300 millis");
-            const api = yield* SearchApi;
-            const hits = yield* api.hits(query);
-            yield* dispatch(Loaded.make({ hits }));
-          }),
+    Typed: ({ query }, { draft }) => {
+      draft.query = query;
+      return [
+        draft,
+        Command.restart(
+          "query",
+          Command.effect((dispatch) =>
+            Effect.gen(function* () {
+              yield* Effect.sleep("300 millis");
+              const api = yield* SearchApi;
+              const hits = yield* api.hits(query);
+              yield* dispatch(Loaded.make({ hits }));
+            }),
+          ),
         ),
-      ),
-    ],
-    Loaded: ({ hits }, { state }) => ({ ...state, hits }),
+      ];
+    },
+    Loaded: ({ hits }, { draft }) => {
+      draft.hits = [...hits];
+      return draft;
+    },
   },
   render: ({ state, dispatch }) => (
     <div>
@@ -64,8 +70,15 @@ export const taskSearch = define({
 }).create({
   initialState: () => ({ query: "", results: Task.idle }),
   reducer: {
-    Typed: ({ query }, { state }) => Task.start({ ...state, query }, "results", search.run(query)),
-    Cleared: (_payload, { state }) => [{ ...state, query: "", results: Task.idle }, search.cancel],
+    Typed: ({ query }, { draft }) => {
+      draft.query = query;
+      return Task.start(draft, "results", search.run(query));
+    },
+    Cleared: (_payload, { draft }) => {
+      draft.query = "";
+      draft.results = Task.idle;
+      return [draft, search.cancel];
+    },
     ...search.into("results"),
   },
   render: ({ state, dispatch }) => (
@@ -110,15 +123,15 @@ export const everySearch = define({
 }).create({
   initialState: () => ({ results: Task.idle }),
   reducer: {
-    Typed: ({ query }, { state }) => Task.start(state, "results", searchEvery.run(query)),
-    SearchEveryResolved: ({ value }, { state }) => ({
-      ...state,
-      results: Task.resolved(value),
-    }),
-    SearchEveryRejected: ({ error }, { state }) => ({
-      ...state,
-      results: Task.rejected(error),
-    }),
+    Typed: ({ query }, { draft }) => Task.start(draft, "results", searchEvery.run(query)),
+    SearchEveryResolved: ({ value }, { draft }) => {
+      draft.results = Task.resolved(value);
+      return draft;
+    },
+    SearchEveryRejected: ({ error }, { draft }) => {
+      draft.results = Task.rejected(error);
+      return draft;
+    },
   },
   render: () => null,
 });
@@ -143,12 +156,23 @@ export const pagedSearch = define({
 }).create({
   initialState: () => ({ query: "", page: 1, results: Task.idle }),
   reducer: {
-    Typed: ({ query }, { state }) =>
-      Task.start({ ...state, query, page: 1 }, "results", (next) => searchPage.run(next)),
-    MoreClicked: (_payload, { state }) =>
-      Task.start({ ...state, page: state.page + 1 }, "results", (next) => searchPage.run(next)),
-    SearchPageResolved: ({ value }, { state }) => ({ ...state, results: Task.resolved(value) }),
-    SearchPageRejected: ({ error }, { state }) => ({ ...state, results: Task.rejected(error) }),
+    Typed: ({ query }, { draft }) => {
+      draft.query = query;
+      draft.page = 1;
+      return Task.start(draft, "results", (next) => searchPage.run(next));
+    },
+    MoreClicked: (_payload, { draft }) => {
+      draft.page += 1;
+      return Task.start(draft, "results", (next) => searchPage.run(next));
+    },
+    SearchPageResolved: ({ value }, { draft }) => {
+      draft.results = Task.resolved(value);
+      return draft;
+    },
+    SearchPageRejected: ({ error }, { draft }) => {
+      draft.results = Task.rejected(error);
+      return draft;
+    },
   },
   render: ({ state, dispatch }) => (
     <div>

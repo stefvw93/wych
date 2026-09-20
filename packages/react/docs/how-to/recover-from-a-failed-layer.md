@@ -41,13 +41,20 @@ export const dashboard = Dashboard.create({
   initialState: Dashboard.initialState(() => ({ status: "connecting", attempts: 0, value: 0 })),
   reducer: Dashboard.reducer({
     Mounted: (_payload, { state }) => [state, loadMetrics],
-    Retry: (_payload, { state }) => [{ ...state, status: "connecting" }, loadMetrics],
-    Loaded: ({ value }, { state }) => ({ ...state, status: "loaded", value }),
-    Error: ({ from }, { state }) => {
+    Retry: (_payload, { draft }) => {
+      draft.status = "connecting";
+      return [draft, loadMetrics];
+    },
+    Loaded: ({ value }, { draft }) => {
+      draft.status = "loaded";
+      draft.value = value;
+      return draft;
+    },
+    Error: ({ from }, { draft, state }) => {
       const attempts = state.attempts + 1;
-      return from === "Mounted" && attempts < 3
-        ? { ...state, status: "failed", attempts }
-        : { ...state, status: "gaveUp", attempts };
+      draft.status = from === "Mounted" && attempts < 3 ? "failed" : "gaveUp";
+      draft.attempts = attempts;
+      return draft;
     },
   }),
   render: Dashboard.render(({ state, dispatch }) => (

@@ -64,12 +64,18 @@ const dashboard = Dashboard.create({
   initialState: () => ({ latest: 0, paused: false }),
   reducer: {
     Mounted: (_payload, { state, props }) => [state, poll(props.intervalMs)],
-    Sampled: ({ value }, { state }) => ({ ...state, latest: value }),
-    Paused: (_payload, { state }) => [{ ...state, paused: true }, Command.cancel("poll")],
-    Resumed: (_payload, { state, props }) => [
-      { ...state, paused: false },
-      Command.restart("poll", poll(props.intervalMs)),
-    ],
+    Sampled: ({ value }, { draft }) => {
+      draft.latest = value;
+      return draft;
+    },
+    Paused: (_payload, { draft }) => {
+      draft.paused = true;
+      return [draft, Command.cancel("poll")];
+    },
+    Resumed: (_payload, { draft, props }) => {
+      draft.paused = false;
+      return [draft, Command.restart("poll", poll(props.intervalMs))];
+    },
     RefreshedNow: (_payload, { state }) => [
       state,
       Command.effect((dispatch) =>
@@ -180,8 +186,8 @@ console.log(summarizeCommand(loadHistory.cancel));
 ```
 
 Cancelling writes no state. A task left `Pending` after a cancel renders a
-permanently disabled button, so the handler clears the field in the same
-return: `[{ ...state, history: Task.idle }, loadHistory.cancel]`.
+permanently disabled button, so the handler clears the field with
+`draft.history = Task.idle` and returns `[draft, loadHistory.cancel]`.
 
 ## What `batch` is for
 

@@ -32,35 +32,49 @@ const initialState = ByHand.initialState((props) => ({
 }));
 
 const reducer = ByHand.reducer({
-  TextChanged: ({ text }, { state, props }) => ({
-    ...state,
-    text,
-    dirty: text !== props.initialText,
-  }),
-  Reverted: (_payload, { state, props }) => ({ ...state, text: props.initialText, dirty: false }),
+  TextChanged: ({ text }, { draft, props }) => {
+    draft.text = text;
+    draft.dirty = text !== props.initialText;
+    return draft;
+  },
+  Reverted: (_payload, { draft, props }) => {
+    draft.text = props.initialText;
+    draft.dirty = false;
+    return draft;
+  },
   // A save already pending is ignored: the rule lives in the handler, not
   // in the disabled button.
-  SaveClicked: (_payload, { state, props }) =>
-    state.saving
-      ? state
-      : [
-          { ...state, saving: true, error: "" },
-          Command.effect((dispatch) =>
-            Effect.gen(function* () {
-              const api = yield* NotesApi;
-              const revision = yield* api.save({ id: props.noteId, text: state.text });
-              yield* dispatch(Saved.make({ revision }));
-            }).pipe(
-              Effect.catchCause((cause) => {
-                const error = Cause.squash(cause);
-                const message = error instanceof Error ? error.message : String(error);
-                return dispatch(SaveFailed.make({ message }));
-              }),
-            ),
-          ),
-        ],
-  Saved: (_payload, { state }) => ({ ...state, saving: false, dirty: false }),
-  SaveFailed: ({ message }, { state }) => ({ ...state, saving: false, error: message }),
+  SaveClicked: (_payload, { draft, state, props }) => {
+    if (state.saving) return draft;
+    draft.saving = true;
+    draft.error = "";
+    return [
+      draft,
+      Command.effect((dispatch) =>
+        Effect.gen(function* () {
+          const api = yield* NotesApi;
+          const revision = yield* api.save({ id: props.noteId, text: state.text });
+          yield* dispatch(Saved.make({ revision }));
+        }).pipe(
+          Effect.catchCause((cause) => {
+            const error = Cause.squash(cause);
+            const message = error instanceof Error ? error.message : String(error);
+            return dispatch(SaveFailed.make({ message }));
+          }),
+        ),
+      ),
+    ];
+  },
+  Saved: (_payload, { draft }) => {
+    draft.saving = false;
+    draft.dirty = false;
+    return draft;
+  },
+  SaveFailed: ({ message }, { draft }) => {
+    draft.saving = false;
+    draft.error = message;
+    return draft;
+  },
 });
 
 const render = ByHand.render(({ state, dispatch }) => (

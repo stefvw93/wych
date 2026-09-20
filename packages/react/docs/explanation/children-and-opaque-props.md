@@ -56,8 +56,14 @@ compiler holds callers to it.
 const table = Table.create({
   initialState: () => ({ sortBy: "name", selected: "" }),
   reducer: {
-    Sorted: ({ by }, { state }) => ({ ...state, sortBy: by }),
-    Selected: ({ id }, { state }) => ({ ...state, selected: id }),
+    Sorted: ({ by }, { draft }) => {
+      draft.sortBy = by;
+      return draft;
+    },
+    Selected: ({ id }, { draft }) => {
+      draft.selected = id;
+      return draft;
+    },
   },
   render: ({ state, props, dispatch }) =>
     props.rows.length === 0 ? (
@@ -105,11 +111,15 @@ from an earlier render.
 
 ```tsx continue
 const stale = Table.reducer({
-  Sorted: ({ by }, { state, props }) => {
+  Sorted: ({ by }, { draft, props }) => {
     props.children; // may be an earlier render's function
-    return { ...state, sortBy: by };
+    draft.sortBy = by;
+    return draft;
   },
-  Selected: ({ id }, { state }) => ({ ...state, selected: id }),
+  Selected: ({ id }, { draft }) => {
+    draft.selected = id;
+    return draft;
+  },
 });
 ```
 

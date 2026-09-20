@@ -56,8 +56,15 @@ const taskSearch = define({
   initialState: () => ({ query: "", results: Task.idle }),
   reducer: {
     // Take latest: a new Typed interrupts the fiber still resolving the old one.
-    Typed: ({ query }, { state }) => Task.start({ ...state, query }, "results", search.run(query)),
-    Cleared: (_payload, { state }) => [{ ...state, query: "", results: Task.idle }, search.cancel],
+    Typed: ({ query }, { draft }) => {
+      draft.query = query;
+      return Task.start(draft, "results", search.run(query));
+    },
+    Cleared: (_payload, { draft }) => {
+      draft.query = "";
+      draft.results = Task.idle;
+      return [draft, search.cancel];
+    },
     ...search.into("results"),
   },
   render: ({ state, dispatch }) => (

@@ -47,32 +47,47 @@ sequence, and a devtools transition a pair of plain values.
 const uploader = Uploader.create({
   initialState: () => ({ name: "", percent: 0, status: "idle" }),
   reducer: {
-    Picked: ({ name }, { state }) => [
-      { ...state, name, percent: 0, status: "uploading" },
-      Command.restart(
-        "upload",
-        Command.effect((dispatch) =>
-          Effect.gen(function* () {
-            const uploads = yield* Uploads;
-            yield* Stream.runForEach(uploads.upload(name), (percent) =>
-              dispatch(Progressed.make({ percent })),
-            );
-            yield* dispatch(Finished.make({}));
-          }).pipe(
-            Effect.catchCause((cause) =>
-              dispatch(Failed.make({ message: String(Cause.squash(cause)) })),
+    Picked: ({ name }, { draft }) => {
+      draft.name = name;
+      draft.percent = 0;
+      draft.status = "uploading";
+      return [
+        draft,
+        Command.restart(
+          "upload",
+          Command.effect((dispatch) =>
+            Effect.gen(function* () {
+              const uploads = yield* Uploads;
+              yield* Stream.runForEach(uploads.upload(name), (percent) =>
+                dispatch(Progressed.make({ percent })),
+              );
+              yield* dispatch(Finished.make({}));
+            }).pipe(
+              Effect.catchCause((cause) =>
+                dispatch(Failed.make({ message: String(Cause.squash(cause)) })),
+              ),
             ),
           ),
         ),
-      ),
-    ],
-    Progressed: ({ percent }, { state }) => ({ ...state, percent }),
-    Finished: (_payload, { state }) => ({ ...state, percent: 100, status: "done" }),
-    Failed: ({ message }, { state }) => ({ ...state, status: message }),
-    Cancelled: (_payload, { state }) => [
-      { ...state, status: "cancelled" },
-      Command.cancel("upload"),
-    ],
+      ];
+    },
+    Progressed: ({ percent }, { draft }) => {
+      draft.percent = percent;
+      return draft;
+    },
+    Finished: (_payload, { draft }) => {
+      draft.percent = 100;
+      draft.status = "done";
+      return draft;
+    },
+    Failed: ({ message }, { draft }) => {
+      draft.status = message;
+      return draft;
+    },
+    Cancelled: (_payload, { draft }) => {
+      draft.status = "cancelled";
+      return [draft, Command.cancel("upload")];
+    },
   },
   render: () => null,
 });
@@ -184,15 +199,17 @@ console.log(stopped.state.status);
 ## A command can be lazy
 
 A handler that writes state inline often needs that same state in the
-command. The lazy form hands the thunk the state it sits beside, so the
-handler keeps its one-expression body. `Next.lazy(state, thunk)` is that
+command. The lazy form hands the thunk the state it sits beside. `Next.lazy(state, thunk)` is that
 `[state, thunk]` tuple with a name, and it types the thunk's argument as the
 state the handler just built.
 
 ```ts continue
 const lazily = Uploader.reducer({
-  Picked: ({ name }, { state }) =>
-    Next.lazy({ ...state, name, percent: 0, status: "uploading" }, (next) =>
+  Picked: ({ name }, { draft }) => {
+    draft.name = name;
+    draft.percent = 0;
+    draft.status = "uploading";
+    return Next.lazy(draft, (next) =>
       Command.effect((dispatch) =>
         Effect.gen(function* () {
           const uploads = yield* Uploads;
@@ -201,11 +218,24 @@ const lazily = Uploader.reducer({
           );
         }).pipe(Effect.catchCause(() => E.void)),
       ),
-    ),
-  Progressed: ({ percent }, { state }) => ({ ...state, percent }),
-  Finished: (_payload, { state }) => ({ ...state, status: "done" }),
-  Failed: ({ message }, { state }) => ({ ...state, status: message }),
-  Cancelled: (_payload, { state }) => [{ ...state, status: "cancelled" }, Command.cancel("upload")],
+    );
+  },
+  Progressed: ({ percent }, { draft }) => {
+    draft.percent = percent;
+    return draft;
+  },
+  Finished: (_payload, { draft }) => {
+    draft.status = "done";
+    return draft;
+  },
+  Failed: ({ message }, { draft }) => {
+    draft.status = message;
+    return draft;
+  },
+  Cancelled: (_payload, { draft }) => {
+    draft.status = "cancelled";
+    return [draft, Command.cancel("upload")];
+  },
 });
 ```
 

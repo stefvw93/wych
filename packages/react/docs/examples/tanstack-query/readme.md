@@ -56,14 +56,16 @@ useUnsafeHooks: (props) => {
 },
 ```
 
-The `HookChanged` handler adopts the fetched text as the draft, but only when
-it actually changed:
+The `HookChanged` handler adopts the fetched text as the draft field, but
+only when it actually changed. `snapshot.draft`'s own name and the state
+field it writes both happen to be called `draft`:
 
 ```ts
-HookChanged: ({ previous }, { state, hooks }) =>
-  hooks.text !== undefined && hooks.text !== previous.text
-    ? { ...state, draft: hooks.text }
-    : state,
+HookChanged: ({ previous }, { draft, hooks }) => {
+  if (hooks.text === undefined || hooks.text === previous.text) return draft;
+  draft.draft = hooks.text;
+  return draft;
+},
 ```
 
 `Submitted` starts the `save` task. On success it invalidates the note's

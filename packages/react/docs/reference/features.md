@@ -122,11 +122,15 @@ supply types, so each piece can live in its own file.
 const initialState = NoteEditor.initialState(() => ({ text: "", dirty: false }));
 
 const reducer = NoteEditor.reducer({
-  Typed: ({ text }, { state }) => ({ ...state, text, dirty: true }),
-  Saved: (_payload, { state, props }) => [
-    { ...state, dirty: false },
-    Command.output(NoteSaved, { noteId: props.noteId, text: state.text }),
-  ],
+  Typed: ({ text }, { draft }) => {
+    draft.text = text;
+    draft.dirty = true;
+    return draft;
+  },
+  Saved: (_payload, { draft, props }) => {
+    draft.dirty = false;
+    return [draft, Command.output(NoteSaved, { noteId: props.noteId, text: draft.text })];
+  },
 });
 
 const render = NoteEditor.render(({ state, dispatch }) => (
@@ -150,8 +154,12 @@ error.
 
 ```ts continue
 const excess = NoteEditor.reducer({
-  // @ts-expect-error state has no property "wordCount"
-  Typed: ({ text }, { state }) => ({ ...state, text, wordCount: text.length }),
+  Typed: ({ text }, { draft }) => {
+    draft.text = text;
+    // @ts-expect-error state has no property "wordCount"
+    draft.wordCount = text.length;
+    return draft;
+  },
   Saved: (_payload, { state }) => state,
 });
 ```
@@ -160,7 +168,11 @@ A handler for an output tag is a compile error too. Outputs have no handler.
 
 ```ts continue
 const outputHandler = NoteEditor.reducer({
-  Typed: ({ text }, { state }) => ({ ...state, text, dirty: true }),
+  Typed: ({ text }, { draft }) => {
+    draft.text = text;
+    draft.dirty = true;
+    return draft;
+  },
   Saved: (_payload, { state }) => state,
   // @ts-expect-error "NoteSaved" is an output, so it has no handler
   NoteSaved: (_payload, { state }) => state,
@@ -213,6 +225,128 @@ type EditorRenderSnapshot = RenderSnapshot<
 `render`'s `dispatch` carries the outbound vocabulary as well, so the view can
 announce an output without a mirror action.
 
+## `ReducerSnapshot` and `snapshot.draft`
+
+```ts fragment
+interface ReducerSnapshot<Props, State, H> extends Snapshot<Props, State, H> {
+  readonly draft: Draft<State>;
+}
+```
+
+A reducer handler receives a `ReducerSnapshot`: `state`, `props` and `hooks`,
+plus `draft`, a mutable view of `state`. Write into it and return it, alone or
+beside a command, and the fold replaces it with the finished value before
+anything else reads the `Next`. `render` and `subscriptions` receive a plain
+`Snapshot`, with no `draft`: neither is a place to change state. The `reducer`
+above already writes this way.
+
+```ts fragment
+type Draft<T> = T extends { readonly pipe: unknown }
+  ? T // Option, Chunk, Effect and the rest of Effect's data types pass through
+  : T extends ReadonlyArray<infer E>
+    ? Array<Draft<E>>
+    : T extends object
+      ? { -readonly [K in keyof T]: Draft<T[K]> }
+      : T; // primitives and functions pass through
+```
+
+Arrays and plain objects lose `readonly`, recursively, so a nested array or
+record is as mutable as the top level. Same key set as `State`, so a draft is
+assignable to `State`, and an excess key on it is a compile error, the same as
+on a spread.
+
+The one place the mutable type bites: a drafted array field is `Array<E>`,
+and a `ReadonlyArray<E>` does not go into it. An action payload declared with
+`Schema.Array` decodes to a `ReadonlyArray`, so `draft.hits = hits` is a
+compile error where `draft.hits = [...hits]` is not. The copy is shallow and
+the fold freezes the result either way. `Task.resolved` and `Task.rejected`
+are typed for this already, so `draft.results = Task.resolved(value)` needs
+no copy.
+
+### Finishing rules
+
+`reduce` applies these for every caller, `run` and the store included:
+
+- Returned the draft, wrote into it: the finished value takes its place.
+  Untouched siblings are the same objects as in `state`, and the result is
+  deep-frozen.
+- Returned the draft, wrote nothing: the finished value is `state` itself, by
+  reference. That is the no-op.
+- Returned another state, wrote nothing into the draft: the returned state
+  wins. Reading the draft costs nothing.
+- Returned another state, wrote into the draft: a `TypeError`. Two next states
+  and no rule that picks one.
+
+```ts continue
+const mixedReducer = NoteEditor.reducer({
+  Typed: ({ text }, { state, draft }) => {
+    draft.dirty = true;
+    return { ...state, text };
+  },
+  Saved: (_payload, { state }) => state,
+});
+
+const mixedFeature = NoteEditor.create({ initialState, reducer: mixedReducer, render });
+
+mixedFeature.reduce(Typed.make({ text: "hi" }), {
+  state: { text: "", dirty: false },
+  props: { noteId: "n_1", autosave: true },
+  hooks: {},
+});
+// throws TypeError: handler wrote into snapshot.draft and returned a different state
+```
+
+A `LazyCommand` in the tuple runs at `Next.command`, after the fold replaced
+the draft, so the thunk sees the finished state, never the proxy; the [`Next`
+section](#next) below shows it.
+
+### The proxy is revoked once the fold ends
+
+The drafter revokes every proxy at finish. A copy that holds draft children
+(`{ ...draft }`) is unreadable once the handler returns: read what you need
+before returning, or return the draft itself and let the fold finish it.
+
+```ts continue
+let leaked: unknown;
+
+const leakyReducer = NoteEditor.reducer({
+  Typed: (_payload, { draft }) => {
+    leaked = draft;
+    return draft;
+  },
+  Saved: (_payload, { state }) => state,
+});
+
+const leakyFeature = NoteEditor.create({ initialState, reducer: leakyReducer, render });
+
+leakyFeature.reduce(Typed.make({ text: "hi" }), {
+  state: { text: "", dirty: false },
+  props: { noteId: "n_1", autosave: true },
+  hooks: {},
+});
+
+let threwOnRead = false;
+try {
+  (leaked as { text: unknown }).text;
+} catch {
+  threwOnRead = true;
+}
+console.log(threwOnRead);
+// => true
+```
+
+### Spread is still valid
+
+A one-field change reads fine as a spread, and a spread handler beside a
+drafting one is unaffected: its result is a plain object, not frozen.
+
+```ts continue
+const spreadForm = NoteEditor.reducer({
+  Typed: ({ text }, { state }) => ({ ...state, text, dirty: true }),
+  Saved: (_payload, { state }) => state,
+});
+```
+
 ## `Next`
 
 ```ts fragment
@@ -233,16 +367,21 @@ than the wider state schema.
 
 ```ts continue
 const lazyReducer = NoteEditor.reducer({
-  Typed: ({ text }, { state }) =>
-    Next.lazy({ ...state, text, dirty: true }, (next) =>
+  Typed: ({ text }, { draft }) => {
+    draft.text = text;
+    draft.dirty = true;
+    return Next.lazy(draft, (next) =>
       Command.effect(() => Effect.sync(() => localStorage.setItem("draft", next.text))),
-    ),
+    );
+  },
   Saved: (_payload, { state }) => state,
 });
 ```
 
 `Next.command` resolves a lazy command once, by calling it with the tuple's own
-state. `Next.state` reads the state whichever form was returned.
+state. `Next.state` reads the state whichever form was returned. The thunk
+above receives the finished state: the fold has already replaced `draft` with
+its frozen value by the time `next.text` is read.
 
 ```ts continue
 const bare: NextType<{ readonly text: string }, never> = { text: "hello" };
@@ -259,10 +398,15 @@ console.log(Next.command(bare));
 feature.reduce(
   action: Action | LifecycleAction<Props, H>,
   snapshot: Snapshot<Props, State, H>,
+  drafter?: DrafterService,
 ): Next<State, Action | Output, R>
 ```
 
-The reducer as one pure function. No React, no Effect runtime.
+The reducer as one pure function. No React, no Effect runtime. `drafter`
+builds `snapshot.draft`; it defaults to `mutativeDrafter`, so a test hands one
+of its own only to swap the drafting library. See
+[Runtime](/docs/reference/runtime#drafter) for `DrafterService` and how to
+install a custom one at the root.
 
 ```ts continue
 const typed = noteEditor.reduce(Typed.make({ text: "hi" }), {
@@ -408,7 +552,10 @@ const flaky = define({
   initialState: () => ({ crashed: false }),
   reducer: {
     Boomed: (_action, { state }) => [state, dying],
-    Error: (_action, { state }) => ({ ...state, crashed: true }),
+    Error: (_action, { draft }) => {
+      draft.crashed = true;
+      return draft;
+    },
   },
   render: () => null,
 });

@@ -39,16 +39,19 @@ const Cart = define({
 export const cart = Cart.create({
   initialState: Cart.initialState(() => ({ items: [] })),
   reducer: Cart.reducer({
-    Added: ({ sku }, { state, props }) => [
-      { items: [...state.items, sku] },
-      Command.effect((dispatch) =>
-        Effect.gen(function* () {
-          const checkout = yield* Checkout;
-          const orderId = yield* checkout.place(props.customerId);
-          yield* dispatch({ _tag: "Ordered", orderId });
-        }),
-      ),
-    ],
+    Added: ({ sku }, { draft, props }) => {
+      draft.items.push(sku);
+      return [
+        draft,
+        Command.effect((dispatch) =>
+          Effect.gen(function* () {
+            const checkout = yield* Checkout;
+            const orderId = yield* checkout.place(props.customerId);
+            yield* dispatch({ _tag: "Ordered", orderId });
+          }),
+        ),
+      ];
+    },
     Ordered: ({ orderId }, { state }) => [state, Command.output(OrderPlaced, { orderId })],
   }),
   render: Cart.render(({ state, dispatch }) => (
@@ -120,15 +123,18 @@ const AnalyticsLayer = Layer.succeed(Analytics)({ track: () => Effect.void });
 const tracked = Cart.create({
   initialState: Cart.initialState(() => ({ items: [] })),
   reducer: Cart.reducer({
-    Added: ({ sku }, { state }) => [
-      { items: [...state.items, sku] },
-      Command.effect(() =>
-        Effect.gen(function* () {
-          const analytics = yield* Analytics;
-          yield* analytics.track(sku);
-        }),
-      ),
-    ],
+    Added: ({ sku }, { draft }) => {
+      draft.items.push(sku);
+      return [
+        draft,
+        Command.effect(() =>
+          Effect.gen(function* () {
+            const analytics = yield* Analytics;
+            yield* analytics.track(sku);
+          }),
+        ),
+      ];
+    },
     Ordered: ({ orderId }, { state }) => [state, Command.output(OrderPlaced, { orderId })],
   }),
   render: Cart.render(() => null),
@@ -275,6 +281,79 @@ const PlaceOrderButton = () => {
   return <button onClick={() => runtime.runFork(placeOrder)}>Place order</button>;
 };
 ```
+
+## `Drafter`
+
+```ts fragment
+Drafter: Context.Reference<DrafterService>; // default: mutativeDrafter
+```
+
+A `Context.Reference` on the same terms as `Devtools`: total to read, so
+installing nothing costs nothing. Every handler's `snapshot.draft` is made
+through it. `mutative` is a dependency of the library, so the default needs no
+installation.
+
+```ts fragment
+interface DrafterService {
+  readonly create: <T>(base: T) => DraftHandle<T>;
+}
+
+interface DraftHandle<T> {
+  readonly draft: Draft<T>;
+  readonly finish: () => T;
+}
+```
+
+One method. `create(base)` opens a draft over `base` and returns the proxy
+plus the call that closes it: `finish()` returns `base` by reference when
+nothing was written, a new value otherwise.
+
+```ts continue
+import { Drafter, drafterLayer } from "@wych/react";
+import type { Draft, DraftHandle, DrafterService } from "@wych/react";
+
+const cloneDrafter: DrafterService = {
+  create<T>(base: T): DraftHandle<T> {
+    const draft = structuredClone(base);
+    return { draft: draft as Draft<T>, finish: () => draft };
+  },
+};
+
+const { component: withCloneDrafter } = createRuntime(
+  Layer.mergeAll(CheckoutLayer, drafterLayer(cloneDrafter)),
+);
+```
+
+`drafterLayer(service)` is `Layer<never>`, so merging it into the root layer
+changes no type. `Drafter`'s default is `mutativeDrafter`: Mutative with
+`enableAutoFreeze`, so a state that went through a draft is deep-frozen
+afterwards.
+
+### A custom drafter: Immer
+
+Immer is not a dependency of the library. A user who wants it instead of
+Mutative writes the same one method with `createDraft` and `finishDraft`.
+
+```ts fragment
+import { createDraft, finishDraft } from "immer";
+import { drafterLayer } from "@wych/react";
+import type { DrafterService } from "@wych/react";
+
+const immerDrafter: DrafterService = {
+  create: (base) => {
+    const draft = createDraft(base);
+    return { draft, finish: () => finishDraft(draft) };
+  },
+};
+
+const { component } = createRuntime(Layer.mergeAll(CheckoutLayer, drafterLayer(immerDrafter)));
+```
+
+**Known limitation.** The store reads `Drafter` from the mount's own context
+once that context exists, and caches it from then on. Until the context
+exists, an async root layer still building, every fold drafts with the
+default. A custom drafter installed at the root is not seen by a fold that
+lands before the root layer resolves.
 
 ## Server rendering
 

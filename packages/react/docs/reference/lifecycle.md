@@ -64,27 +64,33 @@ action handler. `Mounted` and `Unmounted` therefore receive `{}`.
 const room = Room.create({
   initialState: Room.initialState(() => ({ members: [], failed: "" })),
   reducer: Room.reducer({
-    Arrived: ({ members }, { state }) => ({ ...state, members }),
+    Arrived: ({ members }, { draft }) => {
+      draft.members = [...members];
+      return draft;
+    },
 
-    PropsChanged: ({ previous }, { state, props }) =>
-      previous.roomId === props.roomId ? state : { ...state, members: [] },
+    PropsChanged: ({ previous }, { draft, props }) => {
+      if (previous.roomId === props.roomId) return draft;
+      draft.members = [];
+      return draft;
+    },
 
     HookChanged: ({ previous }, { state }) => {
       console.log(previous.channel);
       return state;
     },
 
-    Error: ({ error, cause, from }, { state, props }) => ({
-      ...state,
-      failed:
+    Error: ({ error, cause, from }, { draft, props }) => {
+      draft.failed =
         from === "Mounted"
           ? "connect failed"
           : from === `watch:${props.roomId}`
             ? "watch died"
             : Cause.hasDies(cause)
               ? "bug"
-              : String(error),
-    }),
+              : String(error);
+      return draft;
+    },
 
     Unmounted: (_payload, { state, props }) => [
       state,

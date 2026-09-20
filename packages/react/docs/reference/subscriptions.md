@@ -50,7 +50,10 @@ The one constructor. `effect` is the same leaf `Command.effect` takes:
 const presence = Presence.create({
   initialState: () => ({ online: [] }),
   reducer: {
-    Changed: ({ userId }, { state }) => ({ ...state, online: [...state.online, userId] }),
+    Changed: ({ userId }, { draft }) => {
+      draft.online.push(userId);
+      return draft;
+    },
   },
   subscriptions: ({ props }) => ({
     [`presence:${props.roomId}`]: Subscription.effect((dispatch) =>
@@ -267,8 +270,14 @@ const Room = define({
 const flaky = Room.create({
   initialState: () => ({ online: [], failed: false }),
   reducer: {
-    Changed: ({ userId }, { state }) => ({ ...state, online: [...state.online, userId] }),
-    Error: ({ from }, { state }) => ({ ...state, failed: from === "presence:general" }),
+    Changed: ({ userId }, { draft }) => {
+      draft.online.push(userId);
+      return draft;
+    },
+    Error: ({ from }, { draft }) => {
+      draft.failed = from === "presence:general";
+      return draft;
+    },
   },
   subscriptions: () => ({
     "presence:general": Subscription.effect(() => Effect.die(new Error("socket closed"))),
@@ -305,10 +314,10 @@ nothing.
 
 ```ts continue
 const untouched = Presence.reducer({
-  Changed: ({ userId }, { state }) => [
-    { ...state, online: [...state.online, userId] },
-    Command.cancel("presence:general"),
-  ],
+  Changed: ({ userId }, { draft }) => {
+    draft.online.push(userId);
+    return [draft, Command.cancel("presence:general")];
+  },
 });
 ```
 
@@ -340,7 +349,10 @@ no annotation on either. `create` infers the same way.
 const presenceWithSubscriptions = Presence.create({
   initialState: () => ({ online: [] }),
   reducer: {
-    Changed: ({ userId }, { state }) => ({ ...state, online: [...state.online, userId] }),
+    Changed: ({ userId }, { draft }) => {
+      draft.online.push(userId);
+      return draft;
+    },
   },
   subscriptions: ({ props }) => ({
     [`presence:${props.roomId}`]: Subscription.effect((dispatch) =>

@@ -50,18 +50,26 @@ export const noteEditor = define({
   initialState: () => ({ draft: "", save: Task.idle }),
   reducer: {
     // The cache filled or refetched: adopt the server text as the draft.
-    HookChanged: ({ previous }, { state, hooks }) =>
-      hooks.text !== undefined && hooks.text !== previous.text
-        ? { ...state, draft: hooks.text }
-        : state,
-    Typed: ({ text }, { state }) => ({ ...state, draft: text }),
-    Submitted: (_payload, { state, props }) =>
-      Task.start(state, "save", save.run({ id: props.noteId, text: state.draft })),
-    SaveResolved: ({ value }, { state, props }) => [
-      { ...state, draft: value, save: Task.resolved(value) },
-      Command.output(Saved, { id: props.noteId }),
-    ],
-    SaveRejected: ({ error }, { state }) => ({ ...state, save: Task.rejected(error) }),
+    HookChanged: ({ previous }, { draft, hooks }) => {
+      if (hooks.text === undefined || hooks.text === previous.text) return draft;
+      draft.draft = hooks.text;
+      return draft;
+    },
+    Typed: ({ text }, { draft }) => {
+      draft.draft = text;
+      return draft;
+    },
+    Submitted: (_payload, { draft, props }) =>
+      Task.start(draft, "save", save.run({ id: props.noteId, text: draft.draft })),
+    SaveResolved: ({ value }, { draft, props }) => {
+      draft.draft = value;
+      draft.save = Task.resolved(value);
+      return [draft, Command.output(Saved, { id: props.noteId })];
+    },
+    SaveRejected: ({ error }, { draft }) => {
+      draft.save = Task.rejected(error);
+      return draft;
+    },
   },
   render: ({ state, hooks, dispatch }) => (
     <form

@@ -31,7 +31,9 @@ import {
 } from "./devtools";
 import { createElement, type ReactNode } from "react";
 import { probe } from "./__fixtures__/stress";
+import { drafterLayer, mutativeDrafter, type DrafterService } from "./draft";
 import { Action, Children, Command, createFeatureStore, define, Next, Subscription } from "./lib";
+import { Task } from "./utils/task";
 
 // ---------------------------------------------------------------------------
 // Vocabularies (Action, Action.output, Action.of)
@@ -801,13 +803,16 @@ describe("Feature.run", () => {
     expect(state).toEqual({ count: 1 });
   });
 
-  it("the snapshot handed to a handler carries only state, props and hooks", async () => {
+  it("the snapshot handed to a handler carries only state, props and hooks as own keys", async () => {
     // `run` builds its snapshot from the whole `options` object, which also
     // holds `layer`. A fourth key is invisible to the type — excess-property
     // checking does not fire on a non-fresh spread — and harmless to read, but
     // it puts a `Layer` on the one object this file claims is entirely
-    // encodable, and a cast reaches it from userland.
+    // encodable, and a cast reaches it from userland. `draft` is reachable
+    // but lives on the prototype, so it is never an own key either, and the
+    // drafter behind it is not reachable at all.
     const seen: ReadonlyArray<string>[] = [];
+    let reachable = false;
 
     const Feature = define({ props: RunProps, state: RunState, action: Action.of([Bump]) });
     const feature = Feature.create({
@@ -815,6 +820,7 @@ describe("Feature.run", () => {
       reducer: {
         Bump: (_action, snapshot) => {
           seen.push(Object.keys(snapshot).sort());
+          reachable = "draft" in snapshot;
           return { count: snapshot.state.count + 1 };
         },
       },
@@ -826,6 +832,7 @@ describe("Feature.run", () => {
     );
 
     expect(seen).toEqual([["hooks", "props", "state"]]);
+    expect(reachable).toBe(true);
   });
 
   it("run() logs nothing of its own", async () => {
@@ -980,6 +987,250 @@ describe("Feature.run — defects", () => {
 
     expect(state).toEqual({ count: 2 });
     expect(defects).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// snapshot.draft
+// ---------------------------------------------------------------------------
+
+describe("snapshot.draft", () => {
+  const Toggled = Action("Toggled", { id: Schema.String });
+  const Renamed = Action("Renamed", { id: Schema.String, text: Schema.String });
+  const Reset = Action("Reset", {});
+  const Mixed = Action("Mixed", {});
+  const Leaky = Action("Leaky", {});
+  const Todo = Schema.Struct({ id: Schema.String, text: Schema.String, done: Schema.Boolean });
+  const Todos = define({
+    props: Schema.Struct({}),
+    state: Schema.Struct({ todos: Schema.Array(Todo), renamed: Schema.Number }),
+    action: Action.of([Toggled, Renamed, Reset, Mixed, Leaky]),
+  });
+  const persist = Command.effect(() => Effect.void);
+  let leaked: unknown;
+  const todos = Todos.create({
+    initialState: () => ({ todos: [], renamed: 0 }),
+    reducer: {
+      Toggled: ({ id }, { draft }) => {
+        const todo = draft.todos.find((t) => t.id === id);
+        if (todo) todo.done = !todo.done;
+        return draft;
+      },
+      Renamed: ({ id, text }, { draft }) => {
+        const todo = draft.todos.find((t) => t.id === id);
+        if (todo) todo.text = text;
+        draft.renamed += 1;
+        return [
+          draft,
+          (next) => {
+            leaked = next;
+            return persist;
+          },
+        ];
+      },
+      Reset: (_action, { state }) => ({ ...state, todos: [] }),
+      // Wrote into the draft, returned another state: the defect case.
+      Mixed: (_action, { draft, state }) => {
+        draft.renamed += 1;
+        return state;
+      },
+      // Read the draft, returned another state: fine, the draft is untouched.
+      Leaky: (_action, { draft, state }) => {
+        leaked = draft;
+        return { ...state, renamed: state.renamed + 100 };
+      },
+    },
+    render: () => null,
+  });
+
+  const start = {
+    state: {
+      todos: [
+        { id: "a", text: "one", done: false },
+        { id: "b", text: "two", done: false },
+      ],
+      renamed: 0,
+    },
+    props: {},
+    hooks: {},
+  };
+
+  it("a written draft comes back finished, with untouched siblings shared", () => {
+    const next = Next.state(todos.reduce(Toggled.make({ id: "b" }), start));
+
+    expect(next.todos[1]).toEqual({ id: "b", text: "two", done: true });
+    // Structural sharing: the sibling that was not written is the same object.
+    expect(next.todos[0]).toBe(start.state.todos[0]);
+    // The base never moved.
+    expect(start.state.todos[1]!.done).toBe(false);
+    // The finished state is frozen, deeply.
+    expect(Object.isFrozen(next)).toBe(true);
+    expect(Object.isFrozen(next.todos[1])).toBe(true);
+  });
+
+  it("an untouched draft returned is the state itself, by reference", () => {
+    const next = Next.state(todos.reduce(Toggled.make({ id: "missing" }), start));
+    expect(next).toBe(start.state);
+  });
+
+  it("a draft in a tuple is finished before the lazy command reads it", () => {
+    leaked = undefined;
+    const next = todos.reduce(Renamed.make({ id: "a", text: "uno" }), start);
+    const state = Next.state(next);
+    expect(state.todos[0]!.text).toBe("uno");
+    expect(state.renamed).toBe(1);
+
+    // `Next.command` is where the thunk runs, on the tuple's own state: the
+    // finished value, not the proxy.
+    expect(Next.command(next)).toBeDefined();
+    expect(leaked).toBe(state);
+    expect(() => (leaked as { todos: unknown }).todos).not.toThrow();
+  });
+
+  it("a spread handler beside a draft handler is unaffected", () => {
+    const next = Next.state(todos.reduce(Reset.make({}), start));
+    expect(next).toEqual({ todos: [], renamed: 0 });
+    expect(Object.isFrozen(next)).toBe(false);
+  });
+
+  it("a written draft not returned is a defect from that action", async () => {
+    expect(() => todos.reduce(Mixed.make({}), start)).toThrow(
+      /wrote into snapshot.draft and returned a different state/,
+    );
+
+    // A throwing handler is a throwing handler: under `run` the Effect dies
+    // with it, as it does for any handler that throws.
+    await expect(
+      Effect.runPromise(todos.run([Mixed.make({})], { props: {}, hooks: {}, layer: Layer.empty })),
+    ).rejects.toThrow(/wrote into snapshot.draft/);
+
+    // Under the store it is routed like every other handler throw: a defect
+    // from that action, the state it had kept.
+    const runtime = ManagedRuntime.make(Layer.empty) as unknown as ManagedRuntime.ManagedRuntime<
+      any,
+      any
+    >;
+    const defects: unknown[] = [];
+    const store = createFeatureStore({
+      feature: todos as never,
+      props: {},
+      equivalence: { props: Equivalence.strictEqual(), hooks: Equivalence.strictEqual() },
+      runtime,
+      layer: undefined,
+      emit: () => {},
+      defect: (error) => void defects.push(error),
+    });
+    store.start();
+    store.dispatch(Mixed.make({}) as never);
+    expect(defects.map((error) => (error as Error).message)).toEqual([
+      "handler wrote into snapshot.draft and returned a different state",
+    ]);
+    expect(store.getSnapshot()).toEqual({ todos: [], renamed: 0 });
+    store.stop();
+    await runtime.dispose();
+  });
+
+  it("a read-only draft not returned is discarded and the proxy revoked", () => {
+    leaked = undefined;
+    const next = Next.state(todos.reduce(Leaky.make({}), start));
+    expect(next.renamed).toBe(100);
+    // The proxy handed out is dead once the fold ends.
+    expect(() => (leaked as { todos: unknown }).todos).toThrow();
+  });
+
+  it("a handler that throws with an open draft still closes it", () => {
+    const Boom = Action("Boom", {});
+    const feature = define({
+      props: Schema.Struct({}),
+      state: Schema.Struct({ n: Schema.Number }),
+      action: Action.of([Boom]),
+    }).create({
+      initialState: () => ({ n: 0 }),
+      reducer: {
+        Boom: (_action, { draft }) => {
+          leaked = draft;
+          draft.n = 1;
+          throw new Error("boom");
+        },
+      },
+      render: () => null,
+    });
+
+    expect(() => feature.reduce(Boom.make({}), { state: { n: 0 }, props: {}, hooks: {} })).toThrow(
+      "boom",
+    );
+    expect(() => (leaked as { n: number }).n).toThrow();
+  });
+
+  it("Task.start writes Pending into a draft instead of spreading it", () => {
+    const Clicked = Action("Clicked", {});
+    const load = Task("Load", { success: Schema.String, onError: Task.errorMessage });
+    const feature = define({
+      props: Schema.Struct({}),
+      state: Schema.Struct({
+        items: Schema.Array(Schema.Number),
+        load: Task.schema(Schema.String),
+      }),
+      action: Action.of([Clicked, ...load.actions]),
+    }).create({
+      initialState: () => ({ items: [], load: Task.idle }),
+      reducer: {
+        Clicked: (_action, { draft }) => {
+          draft.items.push(1);
+          return Task.start(draft, "load", load.run(Effect.succeed("ok")));
+        },
+        ...load.into("load"),
+      },
+      render: () => null,
+    });
+
+    const next = feature.reduce(Clicked.make({}), {
+      state: { items: [], load: Task.idle },
+      props: {},
+      hooks: {},
+    });
+    expect(Next.state(next)).toEqual({ items: [1], load: Task.pending });
+    expect(Next.command(next)).toBeDefined();
+    // The returned state is the finished draft, so its children are readable.
+    expect(Next.state(next).items.length).toBe(1);
+  });
+
+  it("`reduce` and `run` take a drafter from the caller or the layer, the store from the runtime", async () => {
+    const seen: string[] = [];
+    const spy = (name: string): DrafterService => ({
+      create: (base) => {
+        seen.push(name);
+        return mutativeDrafter.create(base);
+      },
+    });
+
+    todos.reduce(Toggled.make({ id: "a" }), start, spy("reduce"));
+    await Effect.runPromise(
+      todos.run([Toggled.make({ id: "a" })], {
+        props: {},
+        hooks: {},
+        layer: drafterLayer(spy("run")),
+      }),
+    );
+
+    const runtime = ManagedRuntime.make(
+      drafterLayer(spy("store")),
+    ) as unknown as ManagedRuntime.ManagedRuntime<any, any>;
+    const store = createFeatureStore({
+      feature: todos as never,
+      props: {},
+      equivalence: { props: Equivalence.strictEqual(), hooks: Equivalence.strictEqual() },
+      runtime,
+      layer: undefined,
+      emit: () => {},
+      defect: () => {},
+    });
+    store.start();
+    store.dispatch(Toggled.make({ id: "a" }) as never);
+    store.stop();
+    await runtime.dispose();
+
+    expect(seen).toEqual(["reduce", "run", "store"]);
   });
 });
 

@@ -119,21 +119,36 @@ what it tells its parent. The React version spread the same facts over four
 The reducer is one pure function of `(payload, snapshot)`. A handler returns
 the next state, or the next state beside a `Command`.
 
+A draft does not change this. `snapshot.draft` is a mutable view of `state`;
+the handler still returns the next state, now written by mutating the draft
+instead of spreading it. The runtime finishes the draft into a plain frozen
+value before anything else reads it, and nothing outside the handler ever
+sees the proxy.
+
 ```tsx continue
 const loginForm = Login.create({
   initialState: () => ({ email: "", password: "", session: Task.idle }),
   reducer: {
-    EmailTyped: ({ email }, { state }) => ({ ...state, email }),
-    PasswordTyped: ({ password }, { state }) => ({ ...state, password }),
-    Submitted: (_payload, { state }) =>
+    EmailTyped: ({ email }, { draft }) => {
+      draft.email = email;
+      return draft;
+    },
+    PasswordTyped: ({ password }, { draft }) => {
+      draft.password = password;
+      return draft;
+    },
+    Submitted: (_payload, { draft, state }) =>
       Task.isPending(state.session)
-        ? state
-        : Task.start(state, "session", login.run({ email: state.email, password: state.password })),
-    LoginResolved: ({ value }, { state }) => [
-      { ...state, session: Task.resolved(value) },
-      Command.output(SignedIn, { userId: value }),
-    ],
-    LoginRejected: ({ error }, { state }) => ({ ...state, session: Task.rejected(error) }),
+        ? draft
+        : Task.start(draft, "session", login.run({ email: state.email, password: state.password })),
+    LoginResolved: ({ value }, { draft }) => {
+      draft.session = Task.resolved(value);
+      return [draft, Command.output(SignedIn, { userId: value })];
+    },
+    LoginRejected: ({ error }, { draft }) => {
+      draft.session = Task.rejected(error);
+      return draft;
+    },
   },
   render: ({ state, dispatch }) => (
     <form
@@ -281,8 +296,14 @@ const Login = define({
 const loginForm = Login.create({
   initialState: () => ({ email: "", offline: false }),
   reducer: {
-    EmailTyped: ({ email }, { state }) => ({ ...state, email }),
-    HookChanged: (_payload, { state, hooks }) => ({ ...state, offline: !hooks.online }),
+    EmailTyped: ({ email }, { draft }) => {
+      draft.email = email;
+      return draft;
+    },
+    HookChanged: (_payload, { draft, hooks }) => {
+      draft.offline = !hooks.online;
+      return draft;
+    },
   },
   render: ({ state }) => (state.offline ? "offline" : state.email),
 });

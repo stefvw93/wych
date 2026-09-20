@@ -1,4 +1,5 @@
 import { Cause, Effect, Option, Schema } from "effect";
+import { isLiveDraft, type Draft } from "../draft";
 import { Action, Command, type LazyCommand, type Message } from "../lib";
 
 // ---------------------------------------------------------------------------
@@ -470,6 +471,10 @@ export interface TaskConstructors extends TaskConstructor<"internal"> {
    * renamed field is a compile error rather than a field that stays `Idle`.
    * Reach for the tuple directly when the fold writes something other than
    * `Pending` — a take-first guard, or a field cleared rather than started.
+   *
+   * Handed `snapshot.draft`, it writes `Pending` into the draft and returns
+   * the draft, never a spread of it: a draft's children are proxies that are
+   * revoked once the fold ends, so a copy holding them is unreadable.
    */
   readonly start: <State, Key extends TaskKeys<State>, Action, R>(
     state: State,
@@ -477,11 +482,19 @@ export interface TaskConstructors extends TaskConstructor<"internal"> {
     command: Command<Action, R> | LazyCommand<State, Action, R>,
   ) => readonly [State, Command<Action, R> | LazyCommand<State, Action, R>];
 
-  /** For the `Resolved` handler: `{ ...state, search: Task.resolved(action.value) }`. */
-  readonly resolved: <Success>(value: Success) => Resolved<Success>;
+  /**
+   * For the `Resolved` handler: `draft.search = Task.resolved(action.value)`,
+   * or `{ ...state, search: Task.resolved(action.value) }`.
+   *
+   * Typed at the value's `Draft` so it lands in both: a `Schema.Array`
+   * success decodes to a `ReadonlyArray`, which a drafted field (mutable
+   * array) would refuse, while a mutable array fits the read-only field.
+   * The value itself is passed through untouched.
+   */
+  readonly resolved: <Success>(value: Success) => Resolved<Draft<Success>>;
 
-  /** For the `Rejected` handler: `{ ...state, search: Task.rejected(action.error) }`. */
-  readonly rejected: <Failure>(error: Failure) => Rejected<Failure>;
+  /** For the `Rejected` handler, on the same terms as `resolved`. */
+  readonly rejected: <Failure>(error: Failure) => Rejected<Draft<Failure>>;
 
   /** `Cause` → its message, or its name when the message is empty. Pairs with the default `Schema.String` failure. */
   readonly errorMessage: TaskOnError<string>;
@@ -602,9 +615,15 @@ const helpers: Omit<TaskConstructors, "output"> = {
   schema: buildSchema,
   idle,
   pending: pendingValue,
-  start: (state, key, command) => [{ ...state, [key]: pendingValue }, command],
-  resolved: (value) => ({ _tag: "Resolved", value }),
-  rejected: (error) => ({ _tag: "Rejected", error }),
+  start: (state, key, command) => {
+    if (isLiveDraft(state)) {
+      (state as Record<PropertyKey, unknown>)[key] = pendingValue;
+      return [state, command];
+    }
+    return [{ ...state, [key]: pendingValue }, command];
+  },
+  resolved: (value) => ({ _tag: "Resolved", value: value as never }),
+  rejected: (error) => ({ _tag: "Rejected", error: error as never }),
   errorMessage,
   // The cast is the one place the four-way dispatch is not proven to
   // TypeScript: `cases` is exhaustive by its type, so the lookup cannot miss.

@@ -45,9 +45,15 @@ The no-op, for a handler where a bare state return reads worse.
 
 ```ts continue
 const noneReducer = Search.reducer({
-  Queried: ({ text }, { state }) => [{ ...state, text }, Command.none],
+  Queried: ({ text }, { draft }) => {
+    draft.text = text;
+    return [draft, Command.none];
+  },
   Cleared: (_payload, { state }) => state,
-  Results: ({ hits }, { state }) => ({ ...state, hits }),
+  Results: ({ hits }, { draft }) => {
+    draft.hits = [...hits];
+    return draft;
+  },
 });
 ```
 
@@ -65,18 +71,27 @@ its own failures before it returns.
 
 ```ts continue
 const effectReducer = Search.reducer({
-  Queried: ({ text }, { state }) => [
-    { ...state, text },
-    Command.effect((dispatch) =>
-      Effect.gen(function* () {
-        const api = yield* SearchApi;
-        const hits = yield* api.query(text);
-        yield* dispatch({ _tag: "Results", hits });
-      }),
-    ),
-  ],
-  Cleared: (_payload, { state }) => ({ ...state, hits: [] }),
-  Results: ({ hits }, { state }) => ({ ...state, hits }),
+  Queried: ({ text }, { draft }) => {
+    draft.text = text;
+    return [
+      draft,
+      Command.effect((dispatch) =>
+        Effect.gen(function* () {
+          const api = yield* SearchApi;
+          const hits = yield* api.query(text);
+          yield* dispatch({ _tag: "Results", hits });
+        }),
+      ),
+    ];
+  },
+  Cleared: (_payload, { draft }) => {
+    draft.hits = [];
+    return draft;
+  },
+  Results: ({ hits }, { draft }) => {
+    draft.hits = [...hits];
+    return draft;
+  },
 });
 ```
 
@@ -126,21 +141,30 @@ It interrupts nothing, defers nothing, and serialises nothing.
 
 ```ts continue
 const keyedReducer = Search.reducer({
-  Queried: ({ text }, { state }) => [
-    { ...state, text },
-    Command.keyed(
-      "query",
-      Command.effect((dispatch) =>
-        Effect.gen(function* () {
-          const api = yield* SearchApi;
-          const hits = yield* api.query(text);
-          yield* dispatch({ _tag: "Results", hits });
-        }),
+  Queried: ({ text }, { draft }) => {
+    draft.text = text;
+    return [
+      draft,
+      Command.keyed(
+        "query",
+        Command.effect((dispatch) =>
+          Effect.gen(function* () {
+            const api = yield* SearchApi;
+            const hits = yield* api.query(text);
+            yield* dispatch({ _tag: "Results", hits });
+          }),
+        ),
       ),
-    ),
-  ],
-  Cleared: (_payload, { state }) => [{ ...state, hits: [] }, Command.cancel("query")],
-  Results: ({ hits }, { state }) => ({ ...state, hits }),
+    ];
+  },
+  Cleared: (_payload, { draft }) => {
+    draft.hits = [];
+    return [draft, Command.cancel("query")];
+  },
+  Results: ({ hits }, { draft }) => {
+    draft.hits = [...hits];
+    return draft;
+  },
 });
 ```
 
@@ -178,9 +202,18 @@ own right, so one handler can invalidate work another action started.
 
 ```ts continue
 const cancelReducer = Search.reducer({
-  Queried: ({ text }, { state }) => [{ ...state, text }, Command.none],
-  Cleared: (_payload, { state }) => [{ ...state, hits: [] }, Command.cancel("query")],
-  Results: ({ hits }, { state }) => ({ ...state, hits }),
+  Queried: ({ text }, { draft }) => {
+    draft.text = text;
+    return [draft, Command.none];
+  },
+  Cleared: (_payload, { draft }) => {
+    draft.hits = [];
+    return [draft, Command.cancel("query")];
+  },
+  Results: ({ hits }, { draft }) => {
+    draft.hits = [...hits];
+    return draft;
+  },
 });
 ```
 
@@ -200,22 +233,31 @@ that batch.
 
 ```ts continue
 const takeLatest = Search.reducer({
-  Queried: ({ text }, { state }) => [
-    { ...state, text },
-    Command.restart(
-      "query",
-      Command.effect((dispatch) =>
-        Effect.gen(function* () {
-          yield* Effect.sleep("300 millis");
-          const api = yield* SearchApi;
-          const hits = yield* api.query(text);
-          yield* dispatch({ _tag: "Results", hits });
-        }),
+  Queried: ({ text }, { draft }) => {
+    draft.text = text;
+    return [
+      draft,
+      Command.restart(
+        "query",
+        Command.effect((dispatch) =>
+          Effect.gen(function* () {
+            yield* Effect.sleep("300 millis");
+            const api = yield* SearchApi;
+            const hits = yield* api.query(text);
+            yield* dispatch({ _tag: "Results", hits });
+          }),
+        ),
       ),
-    ),
-  ],
-  Cleared: (_payload, { state }) => [{ ...state, hits: [] }, Command.cancel("query")],
-  Results: ({ hits }, { state }) => ({ ...state, hits }),
+    ];
+  },
+  Cleared: (_payload, { draft }) => {
+    draft.hits = [];
+    return [draft, Command.cancel("query")];
+  },
+  Results: ({ hits }, { draft }) => {
+    draft.hits = [...hits];
+    return draft;
+  },
 });
 ```
 
@@ -256,9 +298,15 @@ const WithOutput = define({
 });
 
 const outputReducer = WithOutput.reducer({
-  Queried: ({ text }, { state }) => [{ ...state, text }, Command.output(Picked, { hit: text })],
+  Queried: ({ text }, { draft }) => {
+    draft.text = text;
+    return [draft, Command.output(Picked, { hit: text })];
+  },
   Cleared: (_payload, { state }) => state,
-  Results: ({ hits }, { state }) => ({ ...state, hits }),
+  Results: ({ hits }, { draft }) => {
+    draft.hits = [...hits];
+    return draft;
+  },
 });
 ```
 
@@ -277,7 +325,10 @@ const addresses: ReadonlyArray<Group> = ["query", "Queried"];
 
 const grouped = Search.reducer({
   // books under "Queried", the issuing action's tag
-  Queried: ({ text }, { state }) => [{ ...state, text }, Command.effect(() => Effect.void)],
+  Queried: ({ text }, { draft }) => {
+    draft.text = text;
+    return [draft, Command.effect(() => Effect.void)];
+  },
   // books under "query"
   Cleared: (_payload, { state }) => [
     state,
@@ -286,7 +337,10 @@ const grouped = Search.reducer({
       Command.effect(() => Effect.void),
     ),
   ],
-  Results: ({ hits }, { state }) => ({ ...state, hits }),
+  Results: ({ hits }, { draft }) => {
+    draft.hits = [...hits];
+    return draft;
+  },
 });
 ```
 
@@ -340,15 +394,21 @@ two-argument form of `keyed` or `restart` there.
 
 ```ts continue
 const contextual = Search.reducer({
-  Queried: ({ text }, { state }) => [
-    { ...state, text },
-    // @ts-expect-error dispatch is typed never through .pipe
-    Command.effect((dispatch) => dispatch({ _tag: "Results", hits: [] })).pipe(
-      Command.keyed("query"),
-    ),
-  ],
+  Queried: ({ text }, { draft }) => {
+    draft.text = text;
+    return [
+      draft,
+      // @ts-expect-error dispatch is typed never through .pipe
+      Command.effect((dispatch) => dispatch({ _tag: "Results", hits: [] })).pipe(
+        Command.keyed("query"),
+      ),
+    ];
+  },
   Cleared: (_payload, { state }) => state,
-  Results: ({ hits }, { state }) => ({ ...state, hits }),
+  Results: ({ hits }, { draft }) => {
+    draft.hits = [...hits];
+    return draft;
+  },
 });
 ```
 
@@ -357,18 +417,24 @@ cancel written first in a batch does not pin the batch to `never`.
 
 ```ts continue
 const cancelFirst = Search.reducer({
-  Queried: ({ text }, { state }) => [
-    { ...state, text },
-    Command.batch(
-      Command.cancel("query"),
-      Command.keyed(
-        "query",
-        Command.effect((dispatch) => dispatch({ _tag: "Results", hits: [] })),
+  Queried: ({ text }, { draft }) => {
+    draft.text = text;
+    return [
+      draft,
+      Command.batch(
+        Command.cancel("query"),
+        Command.keyed(
+          "query",
+          Command.effect((dispatch) => dispatch({ _tag: "Results", hits: [] })),
+        ),
       ),
-    ),
-  ],
+    ];
+  },
   Cleared: (_payload, { state }) => state,
-  Results: ({ hits }, { state }) => ({ ...state, hits }),
+  Results: ({ hits }, { draft }) => {
+    draft.hits = [...hits];
+    return draft;
+  },
 });
 ```
 

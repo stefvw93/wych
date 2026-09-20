@@ -73,21 +73,31 @@ payload and a snapshot.
 
 ```ts continue
 const reducer = Editor.reducer({
-  TextChanged: (payload, snapshot) => ({
-    text: payload.text,
-    dirty: payload.text !== snapshot.props.initialText,
-  }),
-  Reverted: (_payload, snapshot) => ({ text: snapshot.props.initialText, dirty: false }),
+  TextChanged: (payload, snapshot) => {
+    snapshot.draft.text = payload.text;
+    snapshot.draft.dirty = payload.text !== snapshot.props.initialText;
+    return snapshot.draft;
+  },
+  Reverted: (_payload, snapshot) => {
+    snapshot.draft.text = snapshot.props.initialText;
+    snapshot.draft.dirty = false;
+    return snapshot.draft;
+  },
 });
 ```
 
 The reducer is pure. It returns the next state. Nothing here runs an effect and
 nothing mutates `snapshot.state`.
 
+Each handler above writes into `snapshot.draft`, a mutable view of `state`,
+and returns it. The runtime finishes the draft into the next state before
+anything else reads it; see [Features](/docs/reference/features) for the
+rules `draft` follows.
+
 > `payload` is the action without its `_tag`: for `TextChanged` that is
-> `{ text }`, for `Reverted` it is `{}`. `snapshot` is `{ state, props, hooks }`.
-> Later chapters destructure both, `({ text }, { props })`, once the shape is
-> familiar.
+> `{ text }`, for `Reverted` it is `{}`. `snapshot` is
+> `{ state, props, hooks, draft }`. Later chapters destructure both,
+> `({ text }, { draft, props })`, once the shape is familiar.
 
 ## 5. Write the view
 

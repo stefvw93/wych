@@ -57,13 +57,19 @@ const cart = define({
 }).create({
   initialState: () => ({ items: [], charge: Task.idle }),
   reducer: {
-    Added: (item, { state }) => ({ ...state, items: [...state.items, item] }),
-    Submitted: (_payload, { state }) => Task.start(state, "charge", charge.run(total(state.items))),
-    ChargeResolved: ({ value }, { state }) => [
-      { ...state, charge: Task.resolved(value) },
-      Command.output(Ordered, { total: total(state.items) }),
-    ],
-    ChargeRejected: ({ error }, { state }) => ({ ...state, charge: Task.rejected(error) }),
+    Added: (item, { draft }) => {
+      draft.items.push(item);
+      return draft;
+    },
+    Submitted: (_payload, { draft }) => Task.start(draft, "charge", charge.run(total(draft.items))),
+    ChargeResolved: ({ value }, { draft, state }) => {
+      draft.charge = Task.resolved(value);
+      return [draft, Command.output(Ordered, { total: total(state.items) })];
+    },
+    ChargeRejected: ({ error }, { draft }) => {
+      draft.charge = Task.rejected(error);
+      return draft;
+    },
   },
   render: () => null,
 });
@@ -91,7 +97,7 @@ test("Added appends and issues no command", () => {
 });
 ```
 
-Pick `reduce` when the claim is about one transition. You supply the snapshot, so any state is one object literal away, and there is no layer to build.
+Pick `reduce` when the claim is about one transition. You supply the snapshot, so any state is one object literal away, and there is no layer to build. A handler's `draft` is finished before `reduce` returns the `Next`, so `Next.state(next)` is always a plain value, never the proxy.
 
 `reduce` runs nothing. A handler that returns a command hands you the command as data, so a test can assert that work was requested without running it.
 
@@ -185,7 +191,10 @@ const scanner = define({
   initialState: () => ({ status: "idle" }),
   reducer: {
     Scanned: (_action, { state }) => [state, dying],
-    Error: (_action, { state }) => ({ ...state, status: "failed" }),
+    Error: (_action, { draft }) => {
+      draft.status = "failed";
+      return draft;
+    },
   },
   render: () => null,
 });

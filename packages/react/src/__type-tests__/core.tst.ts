@@ -1,6 +1,8 @@
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 import { expect, test } from "tstyche";
 import type { ComponentProps, FC, ReactNode } from "react";
+import { drafterLayer, mutativeDrafter, type Draft } from "../draft";
+import { Task, type TaskValue } from "../utils/task";
 import {
   Action,
   type AnyVocabulary,
@@ -1244,4 +1246,190 @@ test("`Next.command` resolves a lazy command to the command type", () => {
   expect(Next.command(lazy)).type.toBe<
     Command<{ readonly _tag: "X" }, PipeableFooService> | undefined
   >();
+});
+
+// ---------------------------------------------------------------------------
+// snapshot.draft
+// ---------------------------------------------------------------------------
+
+const Todo = Schema.Struct({ id: Schema.String, done: Schema.Boolean });
+const Toggled = Action("Toggled", { id: Schema.String });
+const Ping = Action("Ping", {});
+const Drafting = define({
+  props: Schema.Struct({ listId: Schema.String }),
+  state: Schema.Struct({
+    todos: Schema.Array(Todo),
+    opt: Schema.Option(Schema.Number),
+    load: Task.schema(Schema.String),
+  }),
+  action: Action.of([Toggled, Ping]),
+});
+
+test("`snapshot.draft` is a mutable `Draft<State>` that keeps the key set", () => {
+  Drafting.create({
+    initialState: () => ({ todos: [], opt: Option.none(), load: Task.idle }),
+    reducer: {
+      Toggled: ({ id }, { draft, state, props }) => {
+        expect(draft).type.toBe<Draft<typeof state>>();
+        // Arrays and plain objects lose `readonly`, recursively.
+        expect(draft.todos).type.toBe<Array<{ id: string; done: boolean }>>();
+        draft.todos.push({ id, done: false });
+        draft.todos[0]!.done = true;
+        // An Effect data type passes through: same type, still immutable.
+        expect(draft.opt).type.toBe<Option.Option<number>>();
+        // The read-only snapshot beside it is untouched.
+        expect(state.todos).type.toBe<
+          ReadonlyArray<{ readonly id: string; readonly done: boolean }>
+        >();
+        expect(props).type.toBe<{ readonly listId: string }>();
+        // A draft is a `State`, so it is a valid `Next` alone or in a tuple.
+        return draft;
+      },
+      Ping: (_action, { draft }) => [draft, Command.none],
+    },
+    render: () => null,
+  });
+
+  // A wrong shape on the draft is the same error a wrong shape on a spread is.
+  Drafting.create({
+    initialState: () => ({ todos: [], opt: Option.none(), load: Task.idle }),
+    reducer: {
+      Toggled: (_action, { draft }) => {
+        // @ts-expect-error 'string' is not assignable to type 'boolean'
+        draft.todos[0]!.done = "yes";
+        return draft;
+      },
+      Ping: (_action, { draft }) => draft,
+    },
+    render: () => null,
+  });
+});
+
+test("`Task.start` and `Next.lazy` accept a draft, and `Exhaustive` sees no excess", () => {
+  const load = Task("Load", { success: Schema.String, onError: Task.errorMessage });
+  const WithTask = define({
+    props: Schema.Struct({}),
+    state: Schema.Struct({ todos: Schema.Array(Todo), load: Task.schema(Schema.String) }),
+    action: Action.of([Toggled, ...load.actions]),
+  });
+
+  // Direct calls, not `toBeCallableWith`: the handlers need the contextual
+  // types the object literal gets only as a real argument.
+  WithTask.create({
+    initialState: () => ({ todos: [], load: Task.idle }),
+    reducer: {
+      Toggled: (_action, { draft }) => Task.start(draft, "load", load.run(Effect.succeed("x"))),
+      ...load.into("load"),
+    },
+    render: () => null,
+  });
+
+  WithTask.create({
+    initialState: () => ({ todos: [], load: Task.idle }),
+    reducer: {
+      Toggled: (_action, { draft }) =>
+        Next.lazy(draft, (next) => {
+          expect(next).type.toBe<
+            Draft<{
+              readonly todos: ReadonlyArray<{ readonly id: string; readonly done: boolean }>;
+              readonly load: TaskValue<string, string>;
+            }>
+          >();
+          return Command.none;
+        }),
+      ...load.into("load"),
+    },
+    render: () => null,
+  });
+
+  // The key must still be a task field of the draft.
+  WithTask.create({
+    initialState: () => ({ todos: [], load: Task.idle }),
+    reducer: {
+      // @ts-expect-error '"todos"' is not assignable to parameter of type '"load"'
+      Toggled: (_action, { draft }) => Task.start(draft, "todos", load.run(Effect.succeed("x"))),
+      ...load.into("load"),
+    },
+    render: () => null,
+  });
+});
+
+test("`Task.resolved` of a readonly array lands in a drafted field and in the state", () => {
+  const load = Task("Load", { success: Schema.Array(Todo), onError: Task.errorMessage });
+  const Loading = define({
+    props: Schema.Struct({}),
+    state: Schema.Struct({ load: Task.schema(Schema.Array(Todo)) }),
+    action: Action.of([...load.actions]),
+  });
+
+  Loading.create({
+    initialState: () => ({ load: Task.idle }),
+    reducer: {
+      // `value` is `ReadonlyArray<…>`; the drafted field is `Array<…>`.
+      LoadResolved: ({ value }, { draft }) => {
+        expect(value).type.toBe<ReadonlyArray<{ readonly id: string; readonly done: boolean }>>();
+        draft.load = Task.resolved(value);
+        return draft;
+      },
+      LoadRejected: ({ error }, { state }) => ({ ...state, load: Task.rejected(error) }),
+    },
+    render: () => null,
+  });
+});
+
+test("a command beside a draft still carries `R` to `component`", () => {
+  const needsFooDraft = Drafting.create({
+    initialState: () => ({ todos: [], opt: Option.none(), load: Task.idle }),
+    reducer: {
+      Toggled: (_action, { draft }) => [draft, Command.effect(() => fooEffect)],
+      Ping: (_action, { draft }) => draft,
+    },
+    render: () => null,
+  });
+
+  expect(createRuntime(Layer.empty).component).type.not.toBeCallableWith(needsFooDraft, {
+    name: "NeedsFooDraft",
+  });
+  expect(createRuntime(fooLayer).component).type.toBeCallableWith(needsFooDraft, {
+    name: "NeedsFooDraft",
+  });
+});
+
+test("`render` and `subscriptions` see no draft", () => {
+  Drafting.create({
+    initialState: () => ({ todos: [], opt: Option.none(), load: Task.idle }),
+    reducer: {
+      Toggled: (_action, { draft }) => draft,
+      Ping: (_action, { draft }) => draft,
+    },
+    render: (snapshot) => {
+      expect(snapshot).type.not.toHaveProperty("draft");
+      return null;
+    },
+    subscriptions: (snapshot) => {
+      expect(snapshot).type.not.toHaveProperty("draft");
+      return {};
+    },
+  });
+});
+
+test("`reduce` takes an optional drafter; the `Drafter` service is a `Reference`", () => {
+  const feature = Drafting.create({
+    initialState: () => ({ todos: [], opt: Option.none(), load: Task.idle }),
+    reducer: {
+      Toggled: (_action, { draft }) => draft,
+      Ping: (_action, { draft }) => draft,
+    },
+    render: () => null,
+  });
+  const snapshot = { state: feature.reduce, props: { listId: "l" }, hooks: {} } as never;
+
+  expect(feature.reduce).type.toBeCallableWith(Toggled.make({ id: "a" }), snapshot);
+  expect(feature.reduce).type.toBeCallableWith(
+    Toggled.make({ id: "a" }),
+    snapshot,
+    mutativeDrafter,
+  );
+  // Installing one widens nothing: a `Reference` layer has no requirement.
+  expect(drafterLayer(mutativeDrafter)).type.toBe<Layer.Layer<never>>();
 });

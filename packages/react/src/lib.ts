@@ -38,6 +38,15 @@ import {
   type DevtoolsEvent,
   type DevtoolsSink,
 } from "./devtools";
+import {
+  closeDraft,
+  Drafter,
+  mutativeDrafter,
+  openDraft,
+  type Draft,
+  type DraftHandle,
+  type DrafterService,
+} from "./draft";
 
 // ---------------------------------------------------------------------------
 // Display
@@ -857,6 +866,79 @@ export interface Snapshot<Props, State, H extends AnyHooks> {
   readonly hooks: H;
 }
 
+/**
+ * What a reducer handler receives: the snapshot, plus a draft of its state.
+ *
+ * `draft` is a mutable view of `state`, made on first read and never for a
+ * handler that does not touch it. Write into it and return it, alone or
+ * beside a command; the fold replaces it with the finished value. An
+ * untouched draft finishes to `state` itself, so returning it is the
+ * no-op. Returning any other state discards the draft, and throws if the
+ * draft was written to. `render` and `subscriptions` see a plain
+ * `Snapshot`: neither is a place to change state.
+ */
+export interface ReducerSnapshot<Props, State, H extends AnyHooks> extends Snapshot<
+  Props,
+  State,
+  H
+> {
+  readonly draft: Draft<State>;
+}
+
+/**
+ * The one snapshot a handler is called with. The getter is on the
+ * prototype: an accessor in an object literal costs V8 a fresh shape per
+ * fold, twenty times the price of the fold itself; on a prototype it is a
+ * property lookup.
+ */
+class FoldSnapshot<Props, State, H extends AnyHooks> implements ReducerSnapshot<Props, State, H> {
+  #handle: DraftHandle<State> | undefined;
+  readonly #drafter: DrafterService;
+
+  // Own keys stay `state`, `props`, `hooks`: the snapshot is the one object
+  // this module claims is entirely encodable, and `Object.keys` is how a
+  // test checks that. `draft` is on the prototype; the drafter is private.
+  constructor(
+    readonly state: State,
+    readonly props: Props,
+    readonly hooks: H,
+    drafter: DrafterService,
+  ) {
+    this.#drafter = drafter;
+  }
+
+  get draft(): Draft<State> {
+    return (this.#handle ??= openDraft(this.#drafter, this.state)).draft;
+  }
+
+  /**
+   * Close the draft, if one was opened, and put the finished state where
+   * the handler returned the draft. A handler that wrote into the draft and
+   * returned something else is a defect: two next states, and no rule that
+   * picks one.
+   */
+  finish(next: Next<State, any, any>): Next<State, any, any> {
+    if (this.#handle === undefined) return next;
+    // Take the tuple apart before the close: `Array.isArray` on a revoked
+    // proxy throws, and a bare draft is a proxy.
+    const tuple = Array.isArray(next);
+    const returned = tuple ? next[0] : next;
+    const finished = closeDraft(this.#handle);
+    if (returned !== this.#handle.draft) {
+      if (finished !== this.state) {
+        throw new TypeError("handler wrote into snapshot.draft and returned a different state");
+      }
+      return next;
+    }
+    return tuple ? [finished, next[1]] : finished;
+  }
+
+  /** Close an open draft after a handler threw: unbook and revoke, decide nothing. */
+  discard(): void {
+    if (this.#handle !== undefined) closeDraft(this.#handle);
+  }
+}
+
 export type Dispatch<Action> = (action: Action) => void;
 
 export interface RenderSnapshot<Props, State, Action, H extends AnyHooks> extends Snapshot<
@@ -914,7 +996,7 @@ export type LifecycleAction<Props, H extends AnyHooks> =
  */
 type LifecycleHandler<Tag extends LifecycleTag, Props, State, Action, H extends AnyHooks, R> = (
   payload: Simplify<Omit<Extract<LifecycleAction<Props, H>, { readonly _tag: Tag }>, "_tag">>,
-  snapshot: Snapshot<Props, State, H>,
+  snapshot: ReducerSnapshot<Props, State, H>,
 ) => Next<State, Action, R>;
 
 /**
@@ -1001,7 +1083,7 @@ export type Reducer<
 > = {
   readonly [K in keyof A["cases"]]: (
     payload: Simplify<Omit<A["cases"][K]["Type"], "_tag">>,
-    snapshot: Snapshot<Props, State, H>,
+    snapshot: ReducerSnapshot<Props, State, H>,
   ) => Next<State, Emit<A, O>, R>;
 } & LifecycleHandlers<Props, State, Emit<A, O>, H, R>;
 
@@ -1080,12 +1162,15 @@ export interface Feature<in Props, State, Action, Output, H extends AnyHooks = {
   readonly [internals]: FeatureInternals<Props, State, Action | Output, H>;
 
   /**
-   * The reducer as one pure function,
-   * with the snapshot standing in for the state.
+   * The reducer as one pure function, with the snapshot standing in for the
+   * state. The handler's `draft` is made here, over `snapshot.state`, and
+   * finished before the result is returned, so a test never sees a proxy.
+   * `drafter` is `mutativeDrafter` unless a test hands it another.
    */
   readonly reduce: (
     action: Action | LifecycleAction<Props, H>,
     snapshot: Snapshot<Props, State, H>,
+    drafter?: DrafterService,
   ) => Next<State, Action | Output, R>;
 
   /**
@@ -1281,6 +1366,7 @@ export const define: <
       const reduce = (
         action: { readonly _tag: string },
         snapshot: Snapshot<any, any, any>,
+        drafter: DrafterService = mutativeDrafter,
       ): Next<any, any, any> => {
         const handler = handlerFor(parts.reducer, action._tag);
         if (handler) {
@@ -1289,7 +1375,17 @@ export const define: <
           // `on<Tag>` prop. What the handler holds cannot smuggle a tag into
           // state or a command's payload.
           const { _tag, ...payload } = action;
-          const next = handler(payload as never, snapshot);
+          const fold = new FoldSnapshot(snapshot.state, snapshot.props, snapshot.hooks, drafter);
+          // `finish` runs whether or not the handler threw: an open draft
+          // must be closed and unbooked before the defect propagates.
+          let next: Next<any, any, any>;
+          try {
+            next = handler(payload as never, fold);
+          } catch (error) {
+            fold.discard();
+            throw error;
+          }
+          next = fold.finish(next);
           if (action._tag !== "Unmounted") return next;
           const command = Next.command(next);
           return command === undefined ? snapshot.state : [snapshot.state, command];
@@ -1330,6 +1426,8 @@ export const define: <
               const defects: RunDefect[] = [];
               const handlesError = handlerFor(parts.reducer, "Error") !== undefined;
               const snapshot = { props: options.props, hooks: options.hooks };
+              // Total: a `Reference` reads its default when the layer has none.
+              const drafter = yield* Effect.service(Drafter);
               let state = parts.initialState(options.props);
 
               for (const action of actions) {
@@ -1410,7 +1508,7 @@ export const define: <
                   emitted.push(entry.msg);
                 }
 
-                const next = reduce(entry.msg, { ...snapshot, state });
+                const next = reduce(entry.msg, { ...snapshot, state }, drafter);
                 const command = Next.command(next);
                 state = Next.state(next);
                 if (command) yield* interpret(command, { tag: entry.msg._tag });
@@ -1595,6 +1693,21 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
   const outputs = new Set(outputTags);
 
   /**
+   * The drafter behind every handler's `snapshot.draft`, read from the root
+   * context on the sink's terms: once the context exists, then cached. Until
+   * then (an async root layer, still building) the default drafts, which
+   * only a custom drafter can tell apart.
+   */
+  let drafter: DrafterService | undefined;
+  const drafterFor = (): DrafterService => {
+    if (drafter !== undefined) return drafter;
+    const context = runtime.cachedContext;
+    if (context === undefined) return mutativeDrafter;
+    drafter = Context.getUnsafe(context, Drafter);
+    return drafter;
+  };
+
+  /**
    * A unit of work for the mount fiber.
    */
   type Work =
@@ -1743,7 +1856,7 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
     }
 
     const previous = state;
-    const next = feature.reduce(action as never, snapshot());
+    const next = feature.reduce(action as never, snapshot(), drafterFor());
     const command = Next.command(next);
     const nextState = Next.state(next);
     const moved = nextState !== state;
@@ -2138,7 +2251,9 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
       let thrown: { readonly error: unknown } | undefined;
 
       try {
-        teardown = Next.command(feature.reduce({ _tag: "Unmounted" } as never, snapshot()));
+        teardown = Next.command(
+          feature.reduce({ _tag: "Unmounted" } as never, snapshot(), drafterFor()),
+        );
       } catch (error) {
         thrown = { error };
       }

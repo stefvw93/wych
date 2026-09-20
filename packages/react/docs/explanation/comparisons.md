@@ -47,9 +47,18 @@ const Search = define({
 const searchFeature = Search.create({
   initialState: () => ({ query: "", results: Task.idle }),
   reducer: {
-    Typed: ({ query }, { state }) => Task.start({ ...state, query }, "results", search.run(query)),
-    SearchResolved: ({ value }, { state }) => ({ ...state, results: Task.resolved(value) }),
-    SearchRejected: ({ error }, { state }) => ({ ...state, results: Task.rejected(error) }),
+    Typed: ({ query }, { draft }) => {
+      draft.query = query;
+      return Task.start(draft, "results", search.run(query));
+    },
+    SearchResolved: ({ value }, { draft }) => {
+      draft.results = Task.resolved(value);
+      return draft;
+    },
+    SearchRejected: ({ error }, { draft }) => {
+      draft.results = Task.rejected(error);
+      return draft;
+    },
   },
   render: ({ state, dispatch }) => (
     <input
@@ -82,6 +91,10 @@ const runSearch = createAsyncThunk("search/run", async (query: string, { extra }
   extra.searchApi.hits(query),
 );
 ```
+
+Both reducers mutate a draft (RTK's through Immer inside `createSlice`,
+Wych's through `snapshot.draft`), but where RTK's handler mutates and
+returns nothing, Wych's handler returns the draft it wrote into.
 
 Wych's state lives on the mount. There is no store to subscribe a component
 to, because `search.results` only exists where `<Search />` is mounted.
@@ -244,8 +257,10 @@ case .typed(let query):
 
 ```ts fragment
 // Wych: the same shape, addressed by a group name instead of a cancellation id
-Typed: ({ query }, { state }) =>
-  Task.start({ ...state, query }, "results", search.run(query)),
+Typed: ({ query }, { draft }) => {
+  draft.query = query;
+  return Task.start(draft, "results", search.run(query));
+},
 // Task's default mode is "latest": Command.restart under the group "Task/Search"
 ```
 

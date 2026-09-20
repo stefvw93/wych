@@ -32,25 +32,31 @@ const Editor = define({
 export const editor = Editor.create({
   initialState: (props) => ({ text: props.initialText, dirty: false, save: Task.idle }),
   reducer: {
-    TextChanged: ({ text }, { props }) => ({
-      text,
-      dirty: text !== props.initialText,
-      save: Task.idle,
-    }),
-    Reverted: (_payload, { props }) => ({
-      text: props.initialText,
-      dirty: false,
-      save: Task.idle,
-    }),
-    SaveClicked: (_payload, { state, props }) =>
+    TextChanged: ({ text }, { draft, props }) => {
+      draft.text = text;
+      draft.dirty = text !== props.initialText;
+      draft.save = Task.idle;
+      return draft;
+    },
+    Reverted: (_payload, { draft, props }) => {
+      draft.text = props.initialText;
+      draft.dirty = false;
+      draft.save = Task.idle;
+      return draft;
+    },
+    SaveClicked: (_payload, { draft, state, props }) =>
       Task.isPending(state.save)
-        ? state
-        : Task.start(state, "save", saveNote.run({ id: props.noteId, text: state.text })),
-    SaveResolved: ({ value }, { state, props }) => [
-      { ...state, dirty: false, save: Task.resolved(value) },
-      Command.output(Saved, { id: props.noteId, revision: value }),
-    ],
-    SaveRejected: ({ error }, { state }) => ({ ...state, save: Task.rejected(error) }),
+        ? draft
+        : Task.start(draft, "save", saveNote.run({ id: props.noteId, text: state.text })),
+    SaveResolved: ({ value }, { draft, props }) => {
+      draft.dirty = false;
+      draft.save = Task.resolved(value);
+      return [draft, Command.output(Saved, { id: props.noteId, revision: value })];
+    },
+    SaveRejected: ({ error }, { draft }) => {
+      draft.save = Task.rejected(error);
+      return draft;
+    },
   },
   render: ({ state, dispatch }) => (
     <form>

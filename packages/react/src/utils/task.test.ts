@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Option, Schema } from "effect";
 import { describe, expect, it } from "vite-plus/test";
-import { Action, Children, define } from "../lib";
+import { Action, Children, Command, define } from "../lib";
 import { Task, type TaskCases, type TaskValue } from "./task";
 
 class Api extends Context.Service<Api, { readonly load: Effect.Effect<string, Error> }>()("Api") {}
@@ -312,6 +312,55 @@ describe("Task with `run`", () => {
 });
 
 // --- announced ---------------------------------------------------------------
+
+describe("Task.start on a draft", () => {
+  it("writes Pending into the draft and returns the draft, not a copy", () => {
+    const search = Task("Search", { success: Schema.String, onError: Task.errorMessage });
+    const State = Schema.Struct({
+      items: Schema.Array(Schema.String),
+      search: Task.schema(Schema.String),
+    });
+    const F = define({
+      props: Props,
+      state: State,
+      action: Action.of([Clicked, ...search.actions]),
+    });
+    let handed: unknown;
+    let returned: unknown;
+    const feature = F.create({
+      initialState: F.initialState(() => ({ items: [], search: Task.idle })),
+      reducer: F.reducer({
+        Clicked: (_a, { draft }) => {
+          handed = draft;
+          draft.items.push("x");
+          const next = Task.start(draft, "search", search.run(load));
+          returned = next[0];
+          return next;
+        },
+        ...search.into("search"),
+      }),
+      render: F.render(() => null),
+    });
+
+    const next = feature.reduce(Clicked.make({}), {
+      state: { items: [], search: Task.idle },
+      props: {},
+      hooks: {},
+    });
+
+    // The tuple's state was the draft itself, so the fold could finish it.
+    expect(returned).toBe(handed);
+    expect(next).toEqual([{ items: ["x"], search: Task.pending }, expect.anything()]);
+  });
+
+  it("spreads a plain state as before", () => {
+    const state = { search: Task.idle, other: 1 };
+    const [next] = Task.start(state, "search", Command.none);
+    expect(next).toEqual({ search: Task.pending, other: 1 });
+    expect(next).not.toBe(state);
+    expect(state.search).toBe(Task.idle);
+  });
+});
 
 describe("Task.output", () => {
   const search = Task.output("Search", { success: Schema.String, onError: Task.errorMessage });

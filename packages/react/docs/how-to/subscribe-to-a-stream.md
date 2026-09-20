@@ -47,12 +47,19 @@ One decision here: the stream's element type is the action's payload, so `Change
 const presence = Presence.create({
   initialState: () => ({ online: [] }),
   reducer: {
-    Changed: ({ userId, online }, { state }) => ({
-      ...state,
-      online: online ? [...state.online, userId] : state.online.filter((id) => id !== userId),
-    }),
-    PropsChanged: ({ previous }, { state, props }) =>
-      previous.roomId === props.roomId ? state : { ...state, online: [] },
+    Changed: ({ userId, online }, { draft }) => {
+      if (online) {
+        draft.online.push(userId);
+      } else {
+        draft.online = draft.online.filter((id) => id !== userId);
+      }
+      return draft;
+    },
+    PropsChanged: ({ previous }, { draft, props }) => {
+      if (previous.roomId === props.roomId) return draft;
+      draft.online = [];
+      return draft;
+    },
   },
   subscriptions: ({ props }) => ({
     [`presence:${props.roomId}`]: Subscription.effect((dispatch) =>

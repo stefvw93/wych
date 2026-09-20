@@ -35,6 +35,8 @@ One instance goes to both sides: `QueryClientProvider` for hooks, and the runtim
 
 ## Define the feature
 
+The state field below is also called `draft` (the textarea's text), unrelated to the snapshot's `draft` (the mutable view the reducer writes into); `draft.draft = ...` in `HookChanged` and elsewhere is the second, dot the first.
+
 ```tsx continue
 import { Action, Command, define, Task } from "@wych/react";
 import { Effect, Schema } from "effect";
@@ -81,18 +83,26 @@ const noteEditor = define({
   initialState: () => ({ draft: "", save: Task.idle }),
   reducer: {
     // The cache filled or refetched: adopt the server text as the draft.
-    HookChanged: ({ previous }, { state, hooks }) =>
-      hooks.text !== undefined && hooks.text !== previous.text
-        ? { ...state, draft: hooks.text }
-        : state,
-    Typed: ({ text }, { state }) => ({ ...state, draft: text }),
-    Submitted: (_payload, { state, props }) =>
-      Task.start(state, "save", save.run({ id: props.noteId, text: state.draft })),
-    SaveResolved: ({ value }, { state, props }) => [
-      { ...state, draft: value, save: Task.resolved(value) },
-      Command.output(Saved, { id: props.noteId }),
-    ],
-    SaveRejected: ({ error }, { state }) => ({ ...state, save: Task.rejected(error) }),
+    HookChanged: ({ previous }, { draft, hooks }) => {
+      if (hooks.text === undefined || hooks.text === previous.text) return draft;
+      draft.draft = hooks.text;
+      return draft;
+    },
+    Typed: ({ text }, { draft }) => {
+      draft.draft = text;
+      return draft;
+    },
+    Submitted: (_payload, { draft, props }) =>
+      Task.start(draft, "save", save.run({ id: props.noteId, text: draft.draft })),
+    SaveResolved: ({ value }, { draft, props }) => {
+      draft.draft = value;
+      draft.save = Task.resolved(value);
+      return [draft, Command.output(Saved, { id: props.noteId })];
+    },
+    SaveRejected: ({ error }, { draft }) => {
+      draft.save = Task.rejected(error);
+      return draft;
+    },
   },
   render: ({ state, hooks, dispatch }) => (
     <form
@@ -162,10 +172,11 @@ The save is a `Task` whose `run` reads `Queries` from context, so no `import` of
 ### Hand the result to the parent
 
 ```ts fragment
-SaveResolved: ({ value }, { state, props }) => [
-  { ...state, draft: value, save: Task.resolved(value) },
-  Command.output(Saved, { id: props.noteId }),
-],
+SaveResolved: ({ value }, { draft, props }) => {
+  draft.draft = value;
+  draft.save = Task.resolved(value);
+  return [draft, Command.output(Saved, { id: props.noteId })];
+},
 ```
 
 The cache update went through the Layer because TanStack owns the cache. `Saved` leaves as an output because the parent owns what happens next: navigation, a toast, a list refresh. Put a result on the side that owns it. See [Actions and outputs](/docs/explanation/actions-and-outputs).

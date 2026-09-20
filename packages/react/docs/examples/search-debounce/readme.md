@@ -41,13 +41,15 @@ default `mode: "latest"`, which books under `Command.restart` so a new
 `Typed` cancels the fiber still resolving the old one. `everySearch` sets
 `mode: "every"`, which books under `Command.keyed` and never interrupts.
 
-`pagedSearch` writes `page + 1` and needs that number in the request.
-`Task.start` takes a thunk, which receives the state the handler built with
+`pagedSearch` writes `page + 1` into `draft` and needs that number in the
+request. `Task.start` takes a thunk, which receives the finished state with
 `Pending` written, so the request reads the page from that state:
 
 ```tsx fragment
-MoreClicked: (_payload, { state }) =>
-  Task.start({ ...state, page: state.page + 1 }, "results", (next) => searchPage.run(next)),
+MoreClicked: (_payload, { draft }) => {
+  draft.page += 1;
+  return Task.start(draft, "results", (next) => searchPage.run(next));
+},
 ```
 
 ## How It Works

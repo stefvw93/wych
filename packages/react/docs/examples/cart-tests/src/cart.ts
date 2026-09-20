@@ -36,13 +36,19 @@ export const cart = define({
 }).create({
   initialState: () => ({ items: [], charge: Task.idle }),
   reducer: {
-    Added: (item, { state }) => ({ ...state, items: [...state.items, item] }),
-    Submitted: (_payload, { state }) => Task.start(state, "charge", charge.run(total(state.items))),
-    ChargeResolved: ({ value }, { state }) => [
-      { ...state, charge: Task.resolved(value) },
-      Command.output(Ordered, { total: total(state.items) }),
-    ],
-    ChargeRejected: ({ error }, { state }) => ({ ...state, charge: Task.rejected(error) }),
+    Added: (item, { draft }) => {
+      draft.items.push(item);
+      return draft;
+    },
+    Submitted: (_payload, { draft }) => Task.start(draft, "charge", charge.run(total(draft.items))),
+    ChargeResolved: ({ value }, { draft, state }) => {
+      draft.charge = Task.resolved(value);
+      return [draft, Command.output(Ordered, { total: total(state.items) })];
+    },
+    ChargeRejected: ({ error }, { draft }) => {
+      draft.charge = Task.rejected(error);
+      return draft;
+    },
   },
   render: () => null,
 });

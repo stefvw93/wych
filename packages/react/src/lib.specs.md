@@ -6,7 +6,9 @@ A **feature** is declared with `define` and built with `create`: schema-typed pr
 action vocabulary, an optional outbound output vocabulary, optional ambient
 hooks, and a reducer. The reducer is pure — it returns the next state and,
 optionally, a `Command` describing work to do. The runtime interprets commands
-as Effects.
+as Effects. A handler builds the next state by hand or through
+`snapshot.draft`, a mutable view it writes into and returns (see
+"`snapshot.draft`" below); either way the fold receives a plain next state.
 
 Three consumers, one core:
 
@@ -287,6 +289,74 @@ subscriptions: ({ props }) => ({
 });
 ```
 
+## `snapshot.draft`, the mutable half of a handler
+
+A reducer handler receives a `ReducerSnapshot`: the read-only `state`,
+`props` and `hooks`, plus `draft`, a mutable view of `state` (`Draft<State>`).
+The handler writes into the draft and returns it, alone or beside a command,
+and the fold replaces it with the finished value before anything else reads
+the `Next`. The handler contract does not change: it still returns
+`Next<State>`, and a draft is a `State`. There is no `void` return and no
+"return the command only" form — `return draft` is what says a handler
+mutated.
+
+**Lazy.** `draft` is a getter on the prototype of the one snapshot class
+(`FoldSnapshot`). A handler that never reads it costs nothing: no proxy, no
+finalize. Measured: a getter on an object literal costs V8 a fresh shape per
+fold, about 140 ns, twenty times the fold; on a prototype it is a property
+lookup, about 7 ns.
+
+**Finishing rules**, applied by `reduce` for every consumer:
+
+- Returned the draft, wrote into it: the finished value takes its place.
+  Untouched siblings are shared by reference; the result is deep-frozen.
+- Returned the draft, wrote nothing: the finished value is `state` itself,
+  by reference, so the store's `moved` check is false and nothing is
+  notified. That is the no-op.
+- Returned another state, wrote nothing into the draft: the returned state
+  wins and the draft is discarded. Reading the draft is free.
+- Returned another state, wrote into the draft: a `TypeError`, on the same
+  path as any handler that throws. Two next states and no rule that picks
+  one.
+- The handler threw: the draft is closed and unbooked, then the error
+  propagates. Nothing decides a next state.
+- A `LazyCommand` in the tuple runs at `Next.command`, after the fold
+  replaced the draft, so it sees the finished state.
+
+**Revocation.** The drafter revokes every proxy at finish. A copy that holds
+draft children (`{ ...draft }`) is unreadable once the fold ends, which is
+why `Task.start` given a draft writes `Pending` into it and returns the
+draft, never a spread. It tells a draft from a state through a module-level
+`WeakSet` of open drafts (`isLiveDraft`), filled by the getter and emptied
+at close: a proxy cannot be branded without recording a write. `Next.lazy`
+returns its tuple untouched and needs no such branch.
+
+**Where the drafter comes from.** `Drafter` is a `Context.Reference` on the
+terms `Devtools` set: total to read, `mutativeDrafter` (Mutative with
+`enableAutoFreeze`) by default, replaceable at the root with
+`drafterLayer(custom)`. A `DrafterService` is one method, `create(base)`,
+returning `{ draft, finish }`. `mutative` is a dependency of the library.
+Immer is not shipped; a user who wants it writes
+`{ create: (base) => { const draft = createDraft(base); return { draft, finish: () => finishDraft(draft) }; } }`.
+
+- `feature.reduce(action, snapshot, drafter?)` takes it as an optional
+  third argument, `mutativeDrafter` when absent, so existing hand-driven
+  tests are untouched.
+- `run` reads it from `options.layer` (`Effect.service(Drafter)`, total).
+- The store reads it from `runtime.cachedContext` once the context exists
+  and caches it, on the sink's rule. Until the context exists — an async
+  root layer still building — the default drafts.
+
+**What is not drafted.** `render` and `subscriptions` receive a plain
+`Snapshot`: neither is a place to change state. `Task.into`'s generated
+handlers spread `snapshot.state` and are unaffected. Effect data types
+inside state (`Option`, `Chunk`, anything with `pipe`) are atomic to the
+drafter and to `Draft<T>`: same value, same type, still immutable.
+
+**Rejected shapes**, recorded under Deferred decisions: a `mutate(handler)`
+wrapper, and `Drafter` as a required service with `mutative` an optional
+peer.
+
 ## Acceptance Criteria
 
 `[x]` holds today. The command-leaf pass landed, and what it did not do is in
@@ -335,6 +405,19 @@ landed with every box checked again.
 - [x] A missing handler for anything that is not a lifecycle tag throws — reachable only by bypassing the typed surface.
 - [x] Every tag-keyed lookup uses `Object.hasOwn`, so `constructor`/`toString` and the rest of `Object.prototype` cannot pose as handlers, lifecycle tags, or declared outputs.
 - [x] `Unmounted`'s handler runs but its returned state is discarded — only its command matters. `reduce` and `run` agree on this.
+
+### `snapshot.draft`
+
+- [x] A handler that writes into `draft` and returns it gets the finished value in its place: the written path is new, untouched siblings are the same objects as in `state`, the base is unchanged, and the result is deep-frozen.
+- [x] A handler that returns an untouched `draft` returns `state` itself, by reference.
+- [x] A `[draft, command]` tuple is finished before `Next.command` resolves a lazy command, so the thunk receives the finished state, not the proxy.
+- [x] A handler that spreads `state` beside a drafting handler behaves as before; its result is not frozen.
+- [x] A handler that writes into `draft` and returns another state throws a `TypeError` naming `snapshot.draft`; under the store it is a defect from that action and state is kept, under `run` the Effect dies with it as for any throwing handler.
+- [x] A handler that reads `draft` and returns another state keeps the returned state; the proxy is revoked once the fold ends.
+- [x] A handler that throws with a draft open still closes it: the proxy is revoked and the handler's own error propagates.
+- [x] `Task.start(draft, key, command)` writes `Pending` into the draft and returns the draft, so its result is the finished state; given a plain state it spreads as before.
+- [x] The snapshot's own keys are `state`, `props`, `hooks`; `draft` is reachable and lives on the prototype; the drafter is not reachable.
+- [x] `reduce` drafts with its optional third argument, `run` with the `Drafter` in `options.layer`, the store with the `Drafter` in the root runtime; each defaults to `mutativeDrafter`.
 
 ### `Feature.run`
 
@@ -412,6 +495,11 @@ landed with every box checked again.
 - [x] `Seed.useFeature()` is typed `RenderSnapshot<Props, State, Action | Output, H>`: `state` is the state schema's `Type`, `props` the props schema's `Type` side (decoded, `children` as declared), `hooks` is `H`, and `dispatch` accepts every declared action and output and rejects an undeclared tag and a declared tag with the wrong payload.
 - [x] `useFeature` is present on **both** `component` overloads — with and without `layer` — and on a feature with no outputs (`Output` = `never`) `dispatch` accepts the actions alone.
 - [x] `Seed` remains assignable to `FC<…>` where an `FC` is expected: the added member does not change what JSX accepts.
+- [x] `snapshot.draft` is `Draft<State>`: arrays and plain objects lose `readonly` recursively, an Effect data type keeps its type, `state` and `props` beside it stay read-only, and a wrong shape written into the draft is the error a wrong shape in a spread is. A draft satisfies `Next` bare and in a tuple.
+- [x] `Task.start` and `Next.lazy` accept a draft; `Task.start`'s key is still constrained to the task fields; the lazy thunk's parameter is the draft's type. `Exhaustive` reports no excess for a drafting handler.
+- [x] A command returned beside a draft still carries `R` to `component`.
+- [x] `render` and `subscriptions` snapshots have no `draft`.
+- [x] `reduce` accepts an optional `DrafterService`; `drafterLayer(…)` is `Layer.Layer<never>`.
 
 **How `A` reaches the leaf.** `A` appears only inside `Dispatcher<A>`, in a
 parameter position, so nothing in the argument can infer it — it is resolved from
@@ -501,7 +589,12 @@ real browser. The runnable version is `docs/examples/search-debounce`.
 
 ## Technical Requirements
 
-- Effect 4 beta, one pinned version.
+- Effect 4 beta, one pinned version. `mutative` as the one runtime
+  dependency, behind `Drafter`'s default.
+- The handler snapshot is one class, `FoldSnapshot`, built in `reduce`, with
+  `draft` as a prototype getter and the drafter in a private field. Own
+  keys stay `state`, `props`, `hooks`. `finish` reads the tuple shape
+  before it closes the draft: `Array.isArray` on a revoked proxy throws.
 - The fold is synchronous; only commands are Effects. A re-entrancy guard
   serialises folds — a command emitting on the forking stack would otherwise
   re-enter mid-write and have the outer fold write stale state on the way out.
@@ -636,38 +729,57 @@ tinybench varies 10 to 20 percent between runs and the compare column is a
 prompt to look, not a gate. Async benches include an `await` on the probe
 between iterations.
 
-| file                          | group            | bench                                                      | mean      |
-| ----------------------------- | ---------------- | ---------------------------------------------------------- | --------- |
-| `devtools.bench.test.ts`      | fold with a sink | dispatch: counting sink                                    | 0.23 µs   |
-| `devtools.bench.test.ts`      | fold with a sink | dispatch: console sink, diff off                           | 0.95 µs   |
-| `devtools.bench.test.ts`      | fold with a sink | dispatch: console sink, diff on                            | 1.03 µs   |
-| `devtools.bench.test.ts`      | fold with a sink | dispatch: no sink (control)                                | 0.21 µs   |
-| `lib.bench.test.ts`           | fold             | dispatch: no sink, no hook                                 | 0.22 µs   |
-| `lib.bench.test.ts`           | commands         | Command.effect: fork one leaf and settle                   | 21.02 µs  |
-| `lib.bench.test.ts`           | commands         | Command.batch: 1 leaves and settle                         | 20.88 µs  |
-| `lib.bench.test.ts`           | commands         | Command.batch: 10 leaves and settle                        | 84.19 µs  |
-| `lib.bench.test.ts`           | commands         | Command.batch: 100 leaves and settle                       | 731.88 µs |
-| `lib.bench.test.ts`           | commands         | Command.restart: 100 dispatches into one key, then cancel  | 1.4 ms    |
-| `lib.bench.test.ts`           | Feature.run      | 10k seeds, no commands                                     | 25.2 ms   |
-| `lib.bench.test.ts`           | Feature.run      | 10k seeds, each emits one action                           | 135.9 ms  |
-| `lib.bench.test.ts`           | props            | Schema.toEquivalence: 3 fields, equal by value             | 0.17 µs   |
-| `lib.bench.test.ts`           | props            | decodeUnknownSync: 3 fields                                | 0.67 µs   |
-| `lib.bench.test.ts`           | props            | Schema.toEquivalence: 30 fields, equal by value            | 1.78 µs   |
-| `lib.bench.test.ts`           | props            | decodeUnknownSync: 30 fields                               | 3.24 µs   |
-| `lib.bench.test.ts`           | props            | Schema.toEquivalence: 300 fields, equal by value           | 26.11 µs  |
-| `lib.bench.test.ts`           | props            | decodeUnknownSync: 300 fields                              | 53.07 µs  |
-| `lib.bench.test.ts`           | props            | store.sync: 30 fields, equal props                         | 1.93 µs   |
-| `lib.bench.test.ts`           | props            | store.sync: 30 fields, one field changed                   | 0.60 µs   |
-| `lib.bench.test.ts`           | mount cycle      | createFeatureStore + start + stop: no layer                | 20.37 µs  |
-| `lib.bench.test.ts`           | mount cycle      | createFeatureStore + start + stop: Layer.succeed           | 25.21 µs  |
-| `lib.bench.test.ts`           | mount cycle      | createFeatureStore + start + stop: async Layer.effect      | 28.52 µs  |
-| `subscriptions.bench.test.ts` | reconcile        | fold with 1 stable keys: hook evaluated, nothing changes   | 0.75 µs   |
-| `subscriptions.bench.test.ts` | reconcile        | fold with 10 stable keys: hook evaluated, nothing changes  | 2.40 µs   |
-| `subscriptions.bench.test.ts` | reconcile        | fold with 100 stable keys: hook evaluated, nothing changes | 18.51 µs  |
-| `subscriptions.bench.test.ts` | reconcile        | 10 keys, one rotates: stop one, start one, settle          | 16.81 µs  |
-| `subscriptions.bench.test.ts` | reconcile        | 100 keys, one rotates: stop one, start one, settle         | 43.05 µs  |
-| `task.bench.test.ts`          | Task.run         | mode latest: 50 issues and settle                          | 850.00 µs |
-| `task.bench.test.ts`          | Task.run         | mode every: 50 issues and settle                           | 581.19 µs |
+| file                     | group            | bench                                                     | mean      |
+| ------------------------ | ---------------- | --------------------------------------------------------- | --------- |
+| `devtools.bench.test.ts` | fold with a sink | dispatch: counting sink                                   | 0.23 µs   |
+| `devtools.bench.test.ts` | fold with a sink | dispatch: console sink, diff off                          | 0.95 µs   |
+| `devtools.bench.test.ts` | fold with a sink | dispatch: console sink, diff on                           | 1.03 µs   |
+| `devtools.bench.test.ts` | fold with a sink | dispatch: no sink (control)                               | 0.21 µs   |
+| `lib.bench.test.ts`      | fold             | dispatch: no sink, no hook                                | 0.22 µs   |
+| `lib.bench.test.ts`      | commands         | Command.effect: fork one leaf and settle                  | 21.02 µs  |
+| `lib.bench.test.ts`      | commands         | Command.batch: 1 leaves and settle                        | 20.88 µs  |
+| `lib.bench.test.ts`      | commands         | Command.batch: 10 leaves and settle                       | 84.19 µs  |
+| `lib.bench.test.ts`      | commands         | Command.batch: 100 leaves and settle                      | 731.88 µs |
+| `lib.bench.test.ts`      | commands         | Command.restart: 100 dispatches into one key, then cancel | 1.4 ms    |
+| `lib.bench.test.ts`      | Feature.run      | 10k seeds, no commands                                    | 25.2 ms   |
+| `lib.bench.test.ts`      | Feature.run      | 10k seeds, each emits one action                          | 135.9 ms  |
+| `lib.bench.test.ts`      | props            | Schema.toEquivalence: 3 fields, equal by value            | 0.17 µs   |
+| `lib.bench.test.ts`      | props            | decodeUnknownSync: 3 fields                               | 0.67 µs   |
+| `lib.bench.test.ts`      | props            | Schema.toEquivalence: 30 fields, equal by value           | 1.78 µs   |
+| `lib.bench.test.ts`      | props            | decodeUnknownSync: 30 fields                              | 3.24 µs   |
+| `lib.bench.test.ts`      | props            | Schema.toEquivalence: 300 fields, equal by value          | 26.11 µs  |
+| `lib.bench.test.ts`      | props            | decodeUnknownSync: 300 fields                             | 53.07 µs  |
+| `lib.bench.test.ts`      | props            | store.sync: 30 fields, equal props                        | 1.93 µs   |
+| `lib.bench.test.ts`      | props            | store.sync: 30 fields, one field changed                  | 0.60 µs   |
+
+The `draft` group was added 2026-09-20 on an Apple M5, Node v24.21.0,
+`effect@4.0.0-rc.116`, so its rows are on a different machine from the table
+above and only its intra-run ratios carry over. On that machine the fold
+control (`dispatch: no sink, no hook`) read 0.069 µs before the draft getter
+and 0.077 µs after: the prototype getter, untouched, is the difference. The
+state has 20 items.
+
+| file                | group | bench                         | mean    | against its spread twin |
+| ------------------- | ----- | ----------------------------- | ------- | ----------------------- |
+| `lib.bench.test.ts` | draft | dispatch: spread, top field   | 0.19 µs |                         |
+| `lib.bench.test.ts` | draft | dispatch: draft, top field    | 0.64 µs | 3.3x                    |
+| `lib.bench.test.ts` | draft | dispatch: spread, nested item | 0.26 µs |                         |
+| `lib.bench.test.ts` | draft | dispatch: draft, nested item  | 2.05 µs | 8x                      |
+
+A draft costs what the proxy costs: a few hundred nanoseconds at the top
+level, about two microseconds for one nested write, both under the price of
+forking one command leaf. A handler that never reads `draft` pays the getter
+lookup alone.
+| `lib.bench.test.ts` | mount cycle | createFeatureStore + start + stop: no layer | 20.37 µs |
+| `lib.bench.test.ts` | mount cycle | createFeatureStore + start + stop: Layer.succeed | 25.21 µs |
+| `lib.bench.test.ts` | mount cycle | createFeatureStore + start + stop: async Layer.effect | 28.52 µs |
+| `subscriptions.bench.test.ts` | reconcile | fold with 1 stable keys: hook evaluated, nothing changes | 0.75 µs |
+| `subscriptions.bench.test.ts` | reconcile | fold with 10 stable keys: hook evaluated, nothing changes | 2.40 µs |
+| `subscriptions.bench.test.ts` | reconcile | fold with 100 stable keys: hook evaluated, nothing changes | 18.51 µs |
+| `subscriptions.bench.test.ts` | reconcile | 10 keys, one rotates: stop one, start one, settle | 16.81 µs |
+| `subscriptions.bench.test.ts` | reconcile | 100 keys, one rotates: stop one, start one, settle | 43.05 µs |
+| `task.bench.test.ts` | Task.run | mode latest: 50 issues and settle | 850.00 µs |
+| `task.bench.test.ts` | Task.run | mode every: 50 issues and settle | 581.19 µs |
 
 What the numbers say:
 
@@ -781,6 +893,9 @@ defect is `it.fails` with a `HINT` above it naming the spec entry.
   sentinel criteria.
 - The console sink's elapsed-clock map stays under 512 entries across mounts
   that never unmount.
+- 10k drafting folds on one store, in eight rounds of push-then-trim, leave
+  the state empty, heap growth over the last five rounds under 2 MiB and no
+  draft retained: the open-draft `WeakSet` is emptied at every close.
 - 2000 mount/unmount cycles in Chromium under three names: the `useFeature`
   context registry does not grow with mounts, heap growth over the last five
   rounds under 2 MiB.
@@ -845,6 +960,30 @@ excess property at ["key"]` in dev and worked in production. Fixed:
   them — a devtools UI can draw that edge, the runtime cannot assert it. This is
   the residue of the old `cause: { _tag: "Output" }` variant, which was deleted
   rather than left as an unfillable optional field. See `devtools.specs.md`.
+- **A spread of a draft is unreadable after the fold.** The drafter revokes
+  every proxy at finish, and a copy made with `{ ...draft }` holds proxies
+  for its nested values. Reading one throws. `Task.start` branches on
+  `isLiveDraft` for exactly this reason; user code that copies a draft has
+  no such guard. The rule is: write into the draft and return it, or leave
+  it alone.
+- **A custom drafter is not seen by folds before the root context exists.**
+  The store resolves `Drafter` from `runtime.cachedContext`, so under an
+  async root layer the folds that happen before it resolves draft with the
+  default. The same blind window `devtools.specs.md` documents for the sink.
+  With the default drafter nothing is observable.
+- **A `ReadonlyArray` does not assign into a drafted array field.** A
+  drafted array is `Array<E>`; a `Schema.Array` payload decodes to
+  `ReadonlyArray<E>`; TypeScript refuses the assignment. The docs write
+  `draft.hits = [...hits]`, a shallow copy the fold freezes anyway.
+  `Task.resolved` and `Task.rejected` return their value at its `Draft` type
+  so the common `draft.field = Task.resolved(value)` needs no copy; a general
+  `asDraft` cast was considered and not added, since a copy needs no import
+  and reads as what it is. Revisit if the copy shows up in a hot handler.
+- **`Draft<T>` treats any object with a `pipe` method as atomic.** That is
+  how every Effect data type is kept immutable at the type level without
+  naming them, and it also freezes a user's own class that happens to have
+  a `pipe`. The drafter itself only drafts plain objects, arrays, maps and
+  sets, so the type and the runtime agree on those.
 
 ## Open work
 
@@ -1007,6 +1146,30 @@ descendant's layout effect for instance, whose command still runs ahead of
 criterion does not speak to it.
 
 ## Deferred decisions
+
+### A `mutate(handler)` wrapper for drafting — rejected
+
+The first shape for drafts: `Typed: mutate(({ query }, { state }) => { state.query = query; return search.run(query); })`,
+a wrapper that opens the draft, runs the handler and returns `Next`. Rejected
+on two counts, both verified with tsc against `define().create()`. Inference
+through `create`'s `U extends Reducer<…, any>` constraint infers the
+wrapper's `R` as `never`, so a service the returned command needs never
+reaches `component`; inferring the whole command type and extracting `R`
+with a conditional loses it the same way, for the reason the `ServiceOf`
+comment gives about the `Command` union. And a wrapper on the definition
+object (`Def.mutate(…)`) breaks the `define(…).create(…)` chain. The getter
+on the snapshot needs no generic: `draft` is typed off `Reducer` itself and
+`R` rides the ordinary `Next` return.
+
+### `Drafter` as a required service with `mutative` an optional peer — rejected
+
+The second shape: no default, a subpath `@wych/react/draft/mutative`, and
+`Draft<T>` branded so a returned draft carries `Drafter` into `R`, making a
+runtime without one a compile error at `component`. Sound, and rejected once
+drafting became the documented default style: every `createRuntime`, every
+`run` layer and every hand-driven `reduce` in the docs would carry the
+drafter, tutorial chapter one included. A `Context.Reference` with the
+Mutative default keeps every call site as it was; the override stays.
 
 ### One `dispatch`, routed by tag — no `Command.output`
 

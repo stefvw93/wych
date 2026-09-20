@@ -17,11 +17,16 @@ const initialState = Editor.initialState((props) => ({
 }));
 
 const reducer = Editor.reducer({
-  TextChanged: (payload, snapshot) => ({
-    text: payload.text,
-    dirty: payload.text !== snapshot.props.initialText,
-  }),
-  Reverted: (_payload, snapshot) => ({ text: snapshot.props.initialText, dirty: false }),
+  TextChanged: (payload, snapshot) => {
+    snapshot.draft.text = payload.text;
+    snapshot.draft.dirty = payload.text !== snapshot.props.initialText;
+    return snapshot.draft;
+  },
+  Reverted: (_payload, snapshot) => {
+    snapshot.draft.text = snapshot.props.initialText;
+    snapshot.draft.dirty = false;
+    return snapshot.draft;
+  },
 });
 
 const render = Editor.render(({ state, dispatch }) => (

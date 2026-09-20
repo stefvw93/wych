@@ -86,25 +86,31 @@ const Editor = define({
 const editor = Editor.create({
   initialState: (props) => ({ text: props.initialText, dirty: false, save: Task.idle }),
   reducer: {
-    TextChanged: ({ text }, { props }) => ({
-      text,
-      dirty: text !== props.initialText,
-      save: Task.idle,
-    }),
-    Reverted: (_payload, { props }) => ({
-      text: props.initialText,
-      dirty: false,
-      save: Task.idle,
-    }),
-    SaveClicked: (_payload, { state, props }) =>
+    TextChanged: ({ text }, { draft, props }) => {
+      draft.text = text;
+      draft.dirty = text !== props.initialText;
+      draft.save = Task.idle;
+      return draft;
+    },
+    Reverted: (_payload, { draft, props }) => {
+      draft.text = props.initialText;
+      draft.dirty = false;
+      draft.save = Task.idle;
+      return draft;
+    },
+    SaveClicked: (_payload, { draft, state, props }) =>
       Task.isPending(state.save)
-        ? state
-        : Task.start(state, "save", saveNote.run({ id: props.noteId, text: state.text })),
-    SaveResolved: ({ value }, { state, props }) => [
-      { ...state, dirty: false, save: Task.resolved(value) },
-      Command.output(Saved, { id: props.noteId, revision: value }),
-    ],
-    SaveRejected: ({ error }, { state }) => ({ ...state, save: Task.rejected(error) }),
+        ? draft
+        : Task.start(draft, "save", saveNote.run({ id: props.noteId, text: state.text })),
+    SaveResolved: ({ value }, { draft, props }) => {
+      draft.dirty = false;
+      draft.save = Task.resolved(value);
+      return [draft, Command.output(Saved, { id: props.noteId, revision: value })];
+    },
+    SaveRejected: ({ error }, { draft }) => {
+      draft.save = Task.rejected(error);
+      return draft;
+    },
   },
   render: ({ state, dispatch }) => (
     <form>
@@ -179,10 +185,19 @@ startup work goes.
 
 ```ts continue
 const listReducer = List.reducer({
-  Mounted: (_payload, { state }) => Task.start(state, "notes", loadNotes.run()),
-  NoteSaved: ({ id }, { state }) => ({ ...state, lastSaved: id }),
-  LoadResolved: ({ value }, { state }) => ({ ...state, notes: Task.resolved(value) }),
-  LoadRejected: ({ error }, { state }) => ({ ...state, notes: Task.rejected(error) }),
+  Mounted: (_payload, { draft }) => Task.start(draft, "notes", loadNotes.run()),
+  NoteSaved: ({ id }, { draft }) => {
+    draft.lastSaved = id;
+    return draft;
+  },
+  LoadResolved: ({ value }, { draft }) => {
+    draft.notes = Task.resolved(value);
+    return draft;
+  },
+  LoadRejected: ({ error }, { draft }) => {
+    draft.notes = Task.rejected(error);
+    return draft;
+  },
 });
 ```
 

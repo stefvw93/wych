@@ -726,6 +726,47 @@ describe("long sessions", () => {
     assertFlat(heap, refs);
   });
 
+  it("10k drafting folds on one store retain no draft and leave the heap flat", async () => {
+    const Push = Action("Push", { i: Schema.Number });
+    const Trim = Action("Trim", {});
+    const Props = Schema.Struct({});
+    const feature = define({
+      props: Props,
+      state: Schema.Struct({ items: Schema.Array(Schema.Number) }),
+      action: Action.of([Push, Trim]),
+    }).create({
+      initialState: () => ({ items: [] }),
+      reducer: {
+        Push: ({ i }, { draft }) => {
+          draft.items.push(i);
+          return draft;
+        },
+        Trim: (_a, { draft }) => {
+          draft.items.length = 0;
+          return draft;
+        },
+      },
+      render: () => null,
+    });
+    const runtime = silentRuntime();
+    const store = createFeatureStore({ feature, props: {}, ...storeArgs(runtime, Props) });
+    store.start();
+
+    const heap: Array<number> = [];
+    for (let r = 0; r < 8; r++) {
+      for (let i = 0; i < at(1_250); i++) store.dispatch(Push.make({ i }));
+      store.dispatch(Trim.make({}));
+      heap.push(await settleHeap());
+    }
+    store.stop();
+    await spin(store, (p) => !p.mounted);
+
+    expect(store.getSnapshot()).toEqual({ items: [] });
+    const tail = heap.slice(-5);
+    expect(tail[tail.length - 1]! - tail[0]!).toBeLessThan(2 * MiB);
+    expect(slope(tail)).toBeLessThan(MiB / 2);
+  });
+
   it("the console sink's elapsed clock stays bounded across mounts that never unmount", async () => {
     const { createConsoleDevtools } = await import("./devtools");
     const headlines: Array<string> = [];

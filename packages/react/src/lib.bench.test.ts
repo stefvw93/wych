@@ -206,6 +206,59 @@ describe("props", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Drafts: each draft bench against its spread twin, on a 20-item state.
+// ---------------------------------------------------------------------------
+
+describe("draft", () => {
+  const Item = Schema.Struct({ id: Schema.Number, qty: Schema.Number });
+  const Top = Action("Top", { n: Schema.Number });
+  const TopDraft = Action("TopDraft", { n: Schema.Number });
+  const Nested = Action("Nested", { i: Schema.Number });
+  const NestedDraft = Action("NestedDraft", { i: Schema.Number });
+  const Props = Schema.Struct({});
+  const feature = define({
+    props: Props,
+    state: Schema.Struct({ n: Schema.Number, items: Schema.Array(Item) }),
+    action: Action.of([Top, TopDraft, Nested, NestedDraft]),
+  }).create({
+    initialState: () => ({ n: 0, items: Array.from({ length: 20 }, (_, id) => ({ id, qty: 1 })) }),
+    reducer: {
+      Top: ({ n }, { state }) => ({ ...state, n }),
+      TopDraft: ({ n }, { draft }) => {
+        draft.n = n;
+        return draft;
+      },
+      Nested: ({ i }, { state }) => ({
+        ...state,
+        items: state.items.map((item) => (item.id === i ? { ...item, qty: item.qty + 1 } : item)),
+      }),
+      NestedDraft: ({ i }, { draft }) => {
+        draft.items[i]!.qty += 1;
+        return draft;
+      },
+    },
+    render: () => null,
+  });
+  const store = createFeatureStore({ feature, props: {}, ...storeArgs(runtime, Props) });
+  store.subscribe(() => {});
+  store.start();
+  let k = 0;
+
+  bench("dispatch: spread, top field", () => {
+    store.dispatch(Top.make({ n: k++ }));
+  });
+  bench("dispatch: draft, top field", () => {
+    store.dispatch(TopDraft.make({ n: k++ }));
+  });
+  bench("dispatch: spread, nested item", () => {
+    store.dispatch(Nested.make({ i: k++ % 20 }));
+  });
+  bench("dispatch: draft, nested item", () => {
+    store.dispatch(NestedDraft.make({ i: k++ % 20 }));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Mount cycle
 // ---------------------------------------------------------------------------
 

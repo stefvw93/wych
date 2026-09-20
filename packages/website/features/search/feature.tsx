@@ -94,15 +94,21 @@ export const docsSearch = DocsSearch.create({
       if (!props.open && previous.open) return [initial, search.cancel];
       return state;
     },
-    Typed: ({ query }, { state }) =>
-      query.trim() === ""
-        ? [{ ...state, query, results: Task.idle, selected: 0 }, search.cancel]
-        : Task.start({ ...state, query, selected: 0 }, "results", search.run(query)),
+    Typed: ({ query }, { draft }) => {
+      draft.query = query;
+      draft.selected = 0;
+      if (query.trim() === "") {
+        draft.results = Task.idle;
+        return [draft, search.cancel];
+      }
+      return Task.start(draft, "results", search.run(query));
+    },
     ...search.into("results"),
-    Moved: ({ delta }, { state }) => {
+    Moved: ({ delta }, { state, draft }) => {
       const count = Task.getOrElse(state.results, () => []).length;
       if (count === 0) return state;
-      return { ...state, selected: (state.selected + delta + count) % count };
+      draft.selected = (state.selected + delta + count) % count;
+      return draft;
     },
     Submitted: (_payload, { state }) => {
       const hit = Task.getOrElse(state.results, () => [])[state.selected];

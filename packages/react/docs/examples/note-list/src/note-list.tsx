@@ -26,10 +26,19 @@ const List = define({
 });
 
 const listReducer = List.reducer({
-  Mounted: (_payload, { state }) => Task.start(state, "notes", loadNotes.run()),
-  NoteSaved: ({ id }, { state }) => ({ ...state, lastSaved: id }),
-  LoadResolved: ({ value }, { state }) => ({ ...state, notes: Task.resolved(value) }),
-  LoadRejected: ({ error }, { state }) => ({ ...state, notes: Task.rejected(error) }),
+  Mounted: (_payload, { draft }) => Task.start(draft, "notes", loadNotes.run()),
+  NoteSaved: ({ id }, { draft }) => {
+    draft.lastSaved = id;
+    return draft;
+  },
+  LoadResolved: ({ value }, { draft }) => {
+    draft.notes = Task.resolved(value);
+    return draft;
+  },
+  LoadRejected: ({ error }, { draft }) => {
+    draft.notes = Task.rejected(error);
+    return draft;
+  },
 });
 
 const LastSaved = () => {

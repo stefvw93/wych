@@ -93,30 +93,46 @@ const byHandInitialState = ByHand.initialState((props) => ({
 }));
 
 const byHandReducer = ByHand.reducer({
-  TextChanged: ({ text }, { state, props }) => ({
-    ...state,
-    text,
-    dirty: text !== props.initialText,
-  }),
-  Reverted: (_payload, { state, props }) => ({ ...state, text: props.initialText, dirty: false }),
-  SaveClicked: (_payload, { state, props }) => [
-    { ...state, saving: true, error: "" },
-    Command.effect((dispatch) =>
-      Effect.gen(function* () {
-        const api = yield* NotesApi;
-        const revision = yield* api.save({ id: props.noteId, text: state.text });
-        yield* dispatch(Saved.make({ revision }));
-      }).pipe(
-        Effect.catchCause((cause) => {
-          const error = Cause.squash(cause);
-          const message = error instanceof Error ? error.message : String(error);
-          return dispatch(SaveFailed.make({ message }));
-        }),
+  TextChanged: ({ text }, { draft, props }) => {
+    draft.text = text;
+    draft.dirty = text !== props.initialText;
+    return draft;
+  },
+  Reverted: (_payload, { draft, props }) => {
+    draft.text = props.initialText;
+    draft.dirty = false;
+    return draft;
+  },
+  SaveClicked: (_payload, { draft, state, props }) => {
+    draft.saving = true;
+    draft.error = "";
+    return [
+      draft,
+      Command.effect((dispatch) =>
+        Effect.gen(function* () {
+          const api = yield* NotesApi;
+          const revision = yield* api.save({ id: props.noteId, text: state.text });
+          yield* dispatch(Saved.make({ revision }));
+        }).pipe(
+          Effect.catchCause((cause) => {
+            const error = Cause.squash(cause);
+            const message = error instanceof Error ? error.message : String(error);
+            return dispatch(SaveFailed.make({ message }));
+          }),
+        ),
       ),
-    ),
-  ],
-  Saved: (_payload, { state }) => ({ ...state, saving: false, dirty: false }),
-  SaveFailed: ({ message }, { state }) => ({ ...state, saving: false, error: message }),
+    ];
+  },
+  Saved: (_payload, { draft }) => {
+    draft.saving = false;
+    draft.dirty = false;
+    return draft;
+  },
+  SaveFailed: ({ message }, { draft }) => {
+    draft.saving = false;
+    draft.error = message;
+    return draft;
+  },
 });
 
 const byHandRender = ByHand.render(({ state, dispatch }) => (
@@ -288,31 +304,39 @@ wrote. The reducer now owes a handler for each.
 
 ```ts continue
 const reducer = Editor.reducer({
-  TextChanged: ({ text }, { props }) => ({
-    text,
-    dirty: text !== props.initialText,
-    save: Task.idle,
-  }),
-  Reverted: (_payload, { props }) => ({
-    text: props.initialText,
-    dirty: false,
-    save: Task.idle,
-  }),
-  SaveClicked: (_payload, { state, props }) =>
+  TextChanged: ({ text }, { draft, props }) => {
+    draft.text = text;
+    draft.dirty = text !== props.initialText;
+    draft.save = Task.idle;
+    return draft;
+  },
+  Reverted: (_payload, { draft, props }) => {
+    draft.text = props.initialText;
+    draft.dirty = false;
+    draft.save = Task.idle;
+    return draft;
+  },
+  SaveClicked: (_payload, { draft, state, props }) =>
     Task.isPending(state.save)
-      ? state
-      : Task.start(state, "save", saveNote.run({ id: props.noteId, text: state.text })),
-  SaveCancelled: (_payload, { state }) => [{ ...state, save: Task.idle }, saveNote.cancel],
-  SaveResolved: ({ value }, { state }) => ({
-    ...state,
-    dirty: false,
-    save: Task.resolved(value),
-  }),
-  SaveRejected: ({ error }, { state }) => ({ ...state, save: Task.rejected(error) }),
+      ? draft
+      : Task.start(draft, "save", saveNote.run({ id: props.noteId, text: state.text })),
+  SaveCancelled: (_payload, { draft }) => {
+    draft.save = Task.idle;
+    return [draft, saveNote.cancel];
+  },
+  SaveResolved: ({ value }, { draft }) => {
+    draft.dirty = false;
+    draft.save = Task.resolved(value);
+    return draft;
+  },
+  SaveRejected: ({ error }, { draft }) => {
+    draft.save = Task.rejected(error);
+    return draft;
+  },
 });
 ```
 
-`Task.start(state, key, command)` writes `Pending` into `key` and returns
+`Task.start(draft, key, command)` writes `Pending` into `key` and returns
 the command beside it, the same two lines `SaveClicked` wrote by hand. The
 guard is the one from step 4, reading the field instead of a boolean.
 `saveNote.cancel` writes nothing, which is why the same handler clears the
