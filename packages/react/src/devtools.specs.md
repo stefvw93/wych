@@ -400,7 +400,7 @@ Elapsed uses `performance.now()` in a `Map` keyed by `${name}#${instance}`.
 - **`group` is the default address, not a cancel-everything handle.** It is the issuing action's tag — the name the command's **unkeyed** leaves book under. `cancel(group)` reaches those and misses every leaf forked under `keyed(name)`; those names are in `command`, on each `Keyed` node. A `Batch` can book members under several names, so no single address covering the whole command exists in general — the old reading, that cancelling the group interrupts everything the command forked, is dead.
 - **A mount whose fiber died _used to_ emit no `Unmounted`.** Closed with `lib.specs.md` open work #1: the store now distinguishes `dead` from stopped, so `stop()` on a dead mount reaches the emission — the `Unmounted` transition, and the teardown `Command` event with `dropped: true`, there being no scope to run it in. A dead mount that re-arms on a dispatch emits a second `Mounted` transition under the same `instance`; the `Defect` event with `from: "Mounted"` immediately before it is what says the first mount died. The console logger's elapsed map is bounded independently either way.
 
-- **The blind window before the root context exists.** With a synchronous root layer, only folds _before_ `start()` are lost — a descendant's `useLayoutEffect` dispatch (the buffered path) and the first render's `sync`. With an **asynchronous** root layer, everything until the layer resolves is lost. Warming the context with a `runFork(Effect.void)` inside `createRuntime` would close the sync window, but it moves _when the root layer builds_, which is observable through any layer's acquire side effects — not a debugging tool's call to make.
+- **The blind window before the root context exists.** With a synchronous root layer, only folds _before_ `start()` are lost — a descendant's `useLayoutEffect` dispatch (the buffered path); the first commit's `sync` runs before `start()` too, but it only records and folds nothing. With an **asynchronous** root layer, everything until the layer resolves is lost. Warming the context with a `runFork(Effect.void)` inside `createRuntime` would close the sync window, but it moves _when the root layer builds_, which is observable through any layer's acquire side effects — not a debugging tool's call to make.
 - **The console logger prints a stack string, not clickable frames.** The price of an encodable `DefectSummary`.
 
 - **A subscription's lifetime shows as two events, never as a fiber.** `SubscriptionStarted` is emitted when the key is declared, before the fiber exists; a fiber that never got scheduled before its key was undeclared still shows a `Started` and a `Stopped`. The events describe the declared set, which is what the feature controls. Specified in `subscriptions.specs.md`.
@@ -429,8 +429,9 @@ owns when `start` runs and the effect scheduling is React's:
 - A real click reports its transition and the command it issued.
 - **An output reaches the log before the parent's `on<Tag>` prop is called**,
   across the actual React boundary rather than a stub `emit`.
-- A `PropsChanged` folded _during render_ is reported — the one emission site
-  that runs while React is rendering.
+- A `PropsChanged` folded from the layout effect is reported — the one
+  emission site that runs inside React's commit rather than from an event or
+  a passive effect.
 - A dying command reports one `Defect` and then the recovery fold.
 - Unmounting reports `Unmounted`.
 - Two mounts of one feature are distinguishable by `instance`, which is the

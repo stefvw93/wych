@@ -173,14 +173,16 @@ contract, stated once here and loudly in the docs: the runtime cannot see
 inside a closure, so the key must say what the closure captured. Rejected
 alternatives are under Deferred decisions.
 
-**Sync-driven folds during render run the diff.** `store.sync` folds
-`PropsChanged` in the render body and already offers that fold's command to
-the mount queue from there; the diff is the same kind of side effect, and the
-fork itself happens on the mount fiber, not in the render body. A render React
-discards can churn — stop and restart a key that flipped and flipped back —
-bounded by the keys involved. That churn is inherited from the deferred
-`store.sync` decision in `lib.specs.md`, which this makes more urgent, not
-something this pass fixes.
+**Sync-driven folds run the diff from the layout effect.** `store.sync` is
+called once per committed render, from a `useLayoutEffect` in `component`,
+never from the render body; it folds `PropsChanged` / `HookChanged`, offers
+their commands, and diffs once after both. The fork itself happens on the
+mount fiber. A render React discards never reaches `sync`, so a key the
+discarded render would have declared is never started and the committed key
+is never interrupted: a suspended transition into a new room starts that
+room's feed on the commit that shows it. The design is recorded in
+`lib.specs.md` under Deferred decisions, `store.sync` folding during render,
+executed.
 
 ## Quiescence — what `Feature.run` waits for
 
@@ -341,6 +343,7 @@ cases under Browser coverage are green under
 - [x] A subscription that dies reports one `Defect` (`from` = key, `handled` on the store's rule), folds `Error` when handled with `from` = key, then reports `SubscriptionStopped { reason: "Died" }`. (`createFeatureStore` + recorder)
 - [x] A died key still declared on the next fold is not restarted. (`createFeatureStore`)
 - [x] A died key that leaves the declared set and returns restarts. (`createFeatureStore`)
+- [x] A subscription that dies before the mount fiber's booking statement runs is still reported. `forkChild` schedules the body on the dispatcher, and the scheduler's op budget can yield the mount fiber between the fork and its booking; the body books its own fiber before `sub.effect` runs, so a death there finds the key booked. The mount fiber books it too, for a fiber stopped before its body ran. Holds for the store and for `run`, across a 500- and 1000-key declaration. (`subscriptions.stress.test.ts`)
 - [x] `Command.cancel(key)` for a running subscription's key interrupts nothing: the subscription keeps emitting. (`createFeatureStore`)
 - [x] A command group and a subscription key with the same name coexist: `cancel(name)` interrupts the command and leaves the subscription running. (`createFeatureStore`)
 
@@ -528,6 +531,12 @@ Three things the exercises hit that the next pass on this code will hit too:
 - **A key that is a lifecycle tag or an action tag** is legal and collides
   with nothing at runtime; only `Error.from` becomes ambiguous for it.
 
+- A key whose fiber died and is later undeclared reports a second
+  `SubscriptionStopped`, reason `Undeclared`, after the `Died` one. The
+  events describe the declared set, and the key did leave it; a reader
+  counting live keys as started minus stopped has to skip `Died`. Asserted in
+  `subscriptions.stress.test.ts`.
+
 ## Known limitations
 
 - **`run` does not await asynchronous subscription emissions.** A stub that
@@ -548,8 +557,6 @@ Three things the exercises hit that the next pass on this code will hit too:
 - **A subscription cannot be cancelled by a handler**, by design (see Deferred
   decisions), so a one-off "drop this feed now" without a state change has no
   spelling.
-- **Discarded-render churn** is bounded but real until the `store.sync` redesign
-  in `lib.specs.md` lands.
 
 ## Open work
 
@@ -649,13 +656,13 @@ only a mount can show is the effect scheduling React owns:
 - **StrictMode double-mount starts exactly one subscription per key** on the
   surviving mount, with one `SubscriptionStopped(Unmounted)` for the
   simulated unmount.
-- **A discarded render's subscription is stopped by the committed one** — a
-  props flip inside a transition that suspends and is abandoned, on the
-  pattern the latest-ref test already uses. The feed in this case does not
-  emit: an emission during a pending transition makes
-  `useSyncExternalStore` force a synchronous re-render on the sync lane,
-  which commits the render the case needs React to discard. See the
-  `store.sync` known limitation in `lib.specs.md`.
+- **A discarded render never declares its subscription** — a props flip
+  inside a transition that suspends and is abandoned, on the pattern the
+  latest-ref test already uses. The store never hears of the abandoned
+  props: no `PropsChanged`, no start of the new key, no stop of the old one,
+  and the way back folds nothing either. The feed in this case does not emit,
+  so the log holds only what the diff did; the emitting variant is the
+  stress case in `lib.stress.browser.test.tsx`.
 
 The docs pages that build the presence example are executed by
 `docs:check --run`; `docs/examples/presence-stream` is type-checked by

@@ -44,6 +44,27 @@ release. Add a tool name to select part of the graph. For example, run
   package-level config files (`vite.config.ts`); from inside a package only
   that package's own files. A pass in one place is not a pass in the other;
   validate from the root before calling a change green.
+- Performance and resilience suites are on demand, not in `vpr -r test`.
+  Run them after a change to `packages/react/src/lib.ts`, `devtools.ts` or
+  `utils/task.ts`, and before a release:
+  - `vp -C packages/react run bench`: tinybench through Vitest bench mode,
+    compared against a local `packages/react/bench/baseline.json`. The file
+    is gitignored: tinybench numbers only compare on the machine that wrote
+    them, so run `run bench:baseline` before a change and `run bench` after,
+    same machine, same session. The ratio column is a prompt to look, not a
+    gate. Cross-machine, only the intra-run ratios in the summary mean
+    anything.
+  - `vp -C packages/react run stress`: the `stress` (node) and
+    `stress-browser` (Chromium) projects: load, chaos, leak and property
+    tests. `stress:node` and `stress:browser` run one; `STRESS_SCALE=4`
+    scales the node counts for a headroom check.
+  - Criteria, baseline numbers and findings: `packages/react/src/lib.specs.md`
+    "Performance and resilience". A defect the suites find is pinned as
+    `it.fails` with a `HINT` comment naming its spec entry and gets a Known
+    limitations bullet; the fix is a separate change that flips the pin and
+    the entry together. Fixtures and probes are in
+    `packages/react/src/__fixtures__/stress.ts`; browser `console.info`
+    output shows only under `--reporter verbose`.
 - `vp run test:types` runs tstyche over `src/**/*.tst.ts`; task defined in
   `packages/react/vite.config.ts` under `run.tasks`, cached.
 - TypeScript: shared `compilerOptions` in root `tsconfig.base.json`; root

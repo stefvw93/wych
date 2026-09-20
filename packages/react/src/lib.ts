@@ -850,8 +850,9 @@ export interface LifecycleHandlers<Props, State, Action, H extends AnyHooks, R =
 
   /**
    * Fires when props change **by value** (`Schema.toEquivalence`), so an
-   * unchanged parent re-render folds nothing. Returning the same state
-   * reference is the no-op.
+   * unchanged parent re-render folds nothing. Raised after the render that
+   * carried the props commits, never for a render React abandons. Returning
+   * the same state reference is the no-op.
    */
   readonly PropsChanged?: LifecycleHandler<"PropsChanged", Props, State, Action, H, R>;
 
@@ -929,6 +930,37 @@ export type Reducer<
 } & LifecycleHandlers<Props, State, Emit<A, O>, H, R>;
 
 const internals: unique symbol = Symbol("@wych/internals");
+
+/**
+ * What a store exposes behind `internals`, for the stress and leak tests only.
+ * Not exported by name: a test reaches it through the symbol's description, as
+ * the internals test in `lib.test.ts` does, and the docs never list it.
+ */
+interface StoreInternals {
+  /** A mount is installed (live, or draining its teardown). */
+  readonly mounted: boolean;
+  readonly active: boolean;
+  readonly dead: boolean;
+  /** Work items the mount fiber has not taken yet. */
+  readonly queued: number;
+  /** Command fibers in flight, on the installed mount. */
+  readonly inFlight: number;
+  /** Groups with at least one fiber booked. */
+  readonly groups: number;
+  /** Command fibers booked across every group, exited or not. */
+  readonly fibers: number;
+  /** Booked command fibers that have not exited: interrupted ones stay booked until their watcher's cleanup runs. */
+  readonly live: number;
+  /** Subscription fibers booked, running, done or died. */
+  readonly subscriptions: number;
+  /** Keys the last diff declared. */
+  readonly declared: number;
+  /** Work offered before the first `start()`. */
+  readonly buffered: number;
+  /** Actions waiting to fold in the current drain. */
+  readonly pending: number;
+  readonly subscribers: number;
+}
 
 export interface FeatureInternals<Props, State, Action, H extends AnyHooks> {
   readonly initialState: (props: Props) => State;
@@ -1273,27 +1305,37 @@ export const define: <
               // `Error` before the fiber completes, or the drain loop reaches
               // quiescence between the two. A fiber interrupted before it
               // starts never runs the body, and has nothing to report. The
-              // body starts on the scheduler, never inside `forkChild`, so
-              // `fiber` is booked before the closure can read it; the guard
-              // keeps a fiber that died as its key was being stopped from
-              // reporting after its stop.
+              // guard keeps a fiber that died as its key was being stopped
+              // from reporting after its stop.
+              //
+              // The body books its own fiber as its first step, before
+              // `sub.effect` runs: `forkChild` schedules the body on the
+              // dispatcher, and when the op budget yields this fiber between
+              // the fork and the booking below, the body runs first — a death
+              // there would find the key unbooked. The booking below stays for
+              // a fiber stopped before its body ever ran. Both book the same
+              // fiber, in either order.
               const fork = (key: string, sub: Subscription<any, any>) =>
                 Effect.gen(function* () {
                   const fiber: Fiber.Fiber<void> = yield* Effect.forkChild(
-                    Effect.suspend(() =>
-                      sub.effect((msg) =>
-                        Queue.offer(queue, { msg, origin: "subscription" }).pipe(Effect.asVoid),
-                      ),
-                    ).pipe(
-                      Effect.asVoid,
-                      Effect.onExit((exit) =>
-                        running.get(key) !== fiber ||
-                        !Exit.isFailure(exit) ||
-                        Cause.hasInterruptsOnly(exit.cause)
-                          ? Effect.void
-                          : raise(Cause.squash(exit.cause), key),
-                      ),
-                    ),
+                    Effect.withFiber((current) => {
+                      const self = current as Fiber.Fiber<void>;
+                      running.set(key, self);
+                      return Effect.suspend(() =>
+                        sub.effect((msg) =>
+                          Queue.offer(queue, { msg, origin: "subscription" }).pipe(Effect.asVoid),
+                        ),
+                      ).pipe(
+                        Effect.asVoid,
+                        Effect.onExit((exit) =>
+                          running.get(key) !== self ||
+                          !Exit.isFailure(exit) ||
+                          Cause.hasInterruptsOnly(exit.cause)
+                            ? Effect.void
+                            : raise(Cause.squash(exit.cause), key),
+                        ),
+                      );
+                    }),
                   );
                   running.set(key, fiber);
                 });
@@ -1397,10 +1439,13 @@ export interface FeatureStore<Props, State, Action, H extends AnyHooks> {
   readonly dispatch: Dispatch<Action>;
 
   /**
-   * The snapshot's ambient half, and — because it is the only thing that sees
-   * both the old and new values — the place `PropsChanged` and `HookChanged`
-   * are detected and raised. Returns the post-fold state, so a caller driving
-   * the store by hand sees the change the sync just caused.
+   * The snapshot's ambient half, and, because it is the only thing that sees
+   * both the old and new values, the place `PropsChanged` and `HookChanged`
+   * are detected and raised. Called from a layout effect, once per committed
+   * render, never from the render body. Before the first `start` it only
+   * records, so `Mounted` is the first lifecycle action folded and sees the
+   * props and hooks in force at mount. Returns the post-fold state, so a
+   * caller driving the store by hand sees the change the sync just caused.
    */
   readonly sync: (props: Props, hooks: H) => State;
 
@@ -1600,6 +1645,12 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
   let props = args.props;
   let hooks: H | undefined;
   let folding = false;
+  /**
+   * Set while `sync` folds, so the drain's own subscription diff stands down
+   * and `sync` diffs once after both of its folds. Notification is not
+   * suppressed: a sync-driven fold that moved state has to reach
+   * `useSyncExternalStore`, which is what re-renders the committed tree.
+   */
   let syncing = false;
 
   const snapshot = (): Snapshot<Props, State, H> => ({
@@ -1734,7 +1785,7 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
       }
     } finally {
       folding = false;
-      if (moved && !syncing) for (const subscriber of subscribers) subscriber();
+      if (moved) for (const subscriber of subscribers) subscriber();
       // Once per drain, against the settled state, outside the `folding`
       // guard: the hook is pure and `reconcile` offers rather than folds. A
       // `sync` reconciles itself, once, after its own folds.
@@ -1878,23 +1929,46 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
      * fiber interrupted before it starts never runs the body, and an
      * interruption is exactly the case with nothing to report. `dispatch`
      * folds into the mount that forked it, as a command's does.
+     *
+     * The body books its own fiber as its first step, before `sub.effect`
+     * runs: `forkChild` schedules the body on the dispatcher, and when the op
+     * budget yields the mount fiber between the fork and the booking after it,
+     * the body runs first — a death there would find the key unbooked and go
+     * unreported. The booking after the fork stays for a fiber stopped before
+     * its body ever ran. Both book the same fiber, in either order.
      */
     const forkSubscription = (key: string, sub: Subscription<any, any>) =>
       Effect.gen(function* () {
         const cause: DevtoolsCause = { _tag: "Subscription", key };
         const fiber: Fiber.Fiber<void> = yield* Effect.forkChild(
-          Effect.suspend(() =>
-            sub.effect((action) => Effect.sync(() => fold(action, cause, cells))),
-          ).pipe(
-            Effect.asVoid,
-            Effect.onExit((exit) =>
-              Effect.sync(() => {
-                // A fiber that ended as its key was being stopped has been
-                // reported `Undeclared` or `Unmounted` already.
-                if (cells.subscriptions.get(key) !== fiber) return;
-                if (Exit.isFailure(exit)) {
-                  if (Cause.hasInterruptsOnly(exit.cause)) return;
-                  raiseDefect(Cause.squash(exit.cause), key, cause, cells);
+          Effect.withFiber((current) => {
+            const self = current as Fiber.Fiber<void>;
+            cells.subscriptions.set(key, self);
+            return Effect.suspend(() =>
+              sub.effect((action) => Effect.sync(() => fold(action, cause, cells))),
+            ).pipe(
+              Effect.asVoid,
+              Effect.onExit((exit) =>
+                Effect.sync(() => {
+                  // A fiber that ended as its key was being stopped has been
+                  // reported `Undeclared` or `Unmounted` already.
+                  if (cells.subscriptions.get(key) !== self) return;
+                  if (Exit.isFailure(exit)) {
+                    if (Cause.hasInterruptsOnly(exit.cause)) return;
+                    raiseDefect(Cause.squash(exit.cause), key, cause, cells);
+                    const target = devtools();
+                    if (target !== undefined) {
+                      report({
+                        _tag: "SubscriptionStopped",
+                        name,
+                        instance,
+                        cause,
+                        key,
+                        reason: "Died",
+                      });
+                    }
+                    return;
+                  }
                   const target = devtools();
                   if (target !== undefined) {
                     report({
@@ -1903,25 +1977,13 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
                       instance,
                       cause,
                       key,
-                      reason: "Died",
+                      reason: "Completed",
                     });
                   }
-                  return;
-                }
-                const target = devtools();
-                if (target !== undefined) {
-                  report({
-                    _tag: "SubscriptionStopped",
-                    name,
-                    instance,
-                    cause,
-                    key,
-                    reason: "Completed",
-                  });
-                }
-              }),
-            ),
-          ),
+                }),
+              ),
+            );
+          }),
         );
         cells.subscriptions.set(key, fiber);
       });
@@ -2027,7 +2089,38 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
     fold({ _tag: "Mounted" }, LIFECYCLE);
   };
 
-  return {
+  /**
+   * The closure's counters, read on demand. What the stress and leak tests in
+   * `*.stress.test.ts` assert against: a book that is empty after settle, a
+   * `pending` that drained, a mount that is gone after `stop`.
+   */
+  const probe = (): StoreInternals => {
+    let fibers = 0;
+    let live = 0;
+    if (mount !== undefined) {
+      for (const group of mount.book.groups.values()) {
+        fibers += group.size;
+        for (const fiber of group) if (fiber.pollUnsafe() === undefined) live += 1;
+      }
+    }
+    return {
+      mounted: mount !== undefined,
+      active,
+      dead,
+      queued: mount === undefined ? 0 : Queue.sizeUnsafe(mount.queue),
+      inFlight: mount?.book.inFlight ?? 0,
+      groups: mount?.book.groups.size ?? 0,
+      fibers,
+      live,
+      subscriptions: mount?.subscriptions.size ?? 0,
+      declared: declared.size,
+      buffered: buffered.length,
+      pending: pending.length,
+      subscribers: subscribers.size,
+    };
+  };
+
+  const store: FeatureStore<Props, State, Action, H> = {
     subscribe: (onStoreChange) => {
       subscribers.add(onStoreChange);
       return () => void subscribers.delete(onStoreChange);
@@ -2041,7 +2134,11 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
       const previousProps = props;
       const previousHooks = hooks;
 
-      if (previousHooks === undefined) {
+      // Before the first `start` there is nothing to raise against: the
+      // feature has folded no lifecycle action yet, so the latest props and
+      // hooks are simply what `Mounted` will see. The same holds for the
+      // first call after a hand-driven `start`, which seeds the hooks.
+      if (!everStarted || previousHooks === undefined) {
         props = nextProps;
         hooks = nextHooks;
         return state;
@@ -2146,13 +2243,21 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
       if (thrown !== undefined) raiseDefect(thrown.error, "Unmounted", LIFECYCLE);
     },
   };
+
+  return Object.assign(store, { [internals]: probe });
 };
 
 const splitOutputProps = (
   all: Record<string, unknown>,
   names: ReadonlySet<string>,
 ): { props: Record<string, unknown>; handlers: Record<string, (payload: unknown) => void> } => {
-  if (names.size === 0) return { props: all, handlers: {} };
+  // React's development build defines non-enumerable `key` (and, on 18, `ref`)
+  // warning getters on the props of a keyed element. The props decoder reads
+  // own property names and would report them as excess, so such an object is
+  // copied through `Object.keys`, which skips them, instead of passed through.
+  if (names.size === 0 && !Object.hasOwn(all, "key") && !Object.hasOwn(all, "ref")) {
+    return { props: all, handlers: {} };
+  }
   const props: Record<string, unknown> = {};
   const handlers: Record<string, (payload: unknown) => void> = {};
   for (const key of Object.keys(all)) {
@@ -2391,26 +2496,31 @@ export const createRuntime: <RootR, RootE>(
         }),
       );
 
-      const committed = store.getSnapshot();
-      const hooks = useFeatureHooks(props, committed);
-
-      // In the body, not an effect: `sync` compares props and hooks by value
-      // and folds `PropsChanged`/`HookChanged`, so a props-driven change
-      // paints on the render that carried the props. A discarded render
-      // repeats the call; the value comparison makes the repeat a no-op.
-      store.sync(props, hooks);
-
-      // After `sync`, deliberately: `useSyncExternalStore` re-reads
-      // `getSnapshot` when the render finishes and schedules another render if
-      // it moved — folding first means both reads see the same state.
-      // Defensive rather than a measured fix; see `lib.specs.md`. Hook order
-      // stays stable: called unconditionally, just later in the body.
       // The third argument is the server snapshot: without it React throws
       // `Missing getServerSnapshot` under `renderToString`. The same reader is
-      // correct on both sides — the server never folds (no effects run, so no
+      // correct on both sides: the server never folds (no effects run, so no
       // `start`), and hydration reads the same deterministic
       // `initialState(props)` the server rendered.
       const state = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+
+      // Against the state this render reads. A fold that moves state
+      // re-renders synchronously, so a hook derived from state re-evaluates
+      // against the new state before paint, and the layout effect below
+      // raises `HookChanged` if its value moved.
+      const hooks = useFeatureHooks(props, state);
+
+      // In a layout effect, never in the body: the render body touches
+      // nothing in the store, so a render React abandons (a suspended or
+      // interrupted transition) costs the store nothing and never starts
+      // work for props that did not commit. No dependency list: `sync`
+      // compares props and hooks by value and is the dedupe. Layout rather
+      // than passive: a fold that moves state makes `useSyncExternalStore`
+      // schedule a synchronous re-render, which React flushes at the end of
+      // this commit, so a props-driven change costs two renders and one
+      // paint. Measured in `lib.browser.test.tsx`.
+      useLayoutEffect(() => {
+        store.sync(props, hooks);
+      });
 
       // `Mounted` stays in an effect: it must not fire for a render React
       // throws away. `start`/`stop` rather than a single `dispose` lets the
@@ -2440,11 +2550,17 @@ export const createRuntime: <RootR, RootE>(
     return Object.assign(Mount, { useFeature });
   };
 
-  return {
-    Provider: ({ children }) => createElement(context.Provider, { value: runtime, children }),
+  return Object.assign(
+    {
+      Provider: ({ children }: { readonly children?: ReactNode }) =>
+        createElement(context.Provider, { value: runtime, children }),
 
-    useRuntime: () => runtime,
+      useRuntime: () => runtime,
 
-    component: component as never,
-  };
+      component: component as never,
+    },
+    // Test-only: the size of the module-level `useFeature` context registry,
+    // which the leak tests hold to one entry per distinct `name`.
+    { [internals]: { contexts: () => snapshotContexts.size } },
+  );
 };
