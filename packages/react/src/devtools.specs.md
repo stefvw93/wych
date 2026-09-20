@@ -94,7 +94,7 @@ export interface DevtoolsDefect extends DevtoolsEnvelope {
   readonly handled: boolean; // an Error handler took it, vs React's boundary
 }
 // Added by subscriptions.specs.md. `Started`/`Undeclared`/`Unmounted` are
-// emitted synchronously at the diff; `Completed`/`Died` from the fiber's watcher.
+// emitted synchronously at the diff; `Completed`/`Died` from the fiber's exit observer.
 export interface DevtoolsSubscriptionStarted extends DevtoolsEnvelope {
   readonly _tag: "SubscriptionStarted";
   readonly key: string;

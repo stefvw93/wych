@@ -549,12 +549,89 @@ const declaredKeys = (subscriptions: Subscriptions<any, any>): Array<string> =>
   Object.keys(subscriptions).filter((key) => subscriptions[key] !== undefined);
 
 /**
+ * One diff of the declared set: the keys `next` declares, against the keys
+ * `previous` declared. Stops before starts is the caller's job; a key in both
+ * is unchanged, whatever its fiber is doing.
+ */
+const diffDeclared = (
+  previous: ReadonlySet<string>,
+  next: Subscriptions<any, any>,
+): {
+  readonly wanted: ReadonlySet<string>;
+  readonly stopping: ReadonlyArray<string>;
+  readonly starting: ReadonlyArray<readonly [string, Subscription<any, any>]>;
+} => {
+  const keys = declaredKeys(next);
+  const wanted = new Set(keys);
+  const stopping: Array<string> = [];
+  for (const key of previous) if (!wanted.has(key)) stopping.push(key);
+  const starting: Array<readonly [string, Subscription<any, any>]> = [];
+  for (const key of keys) if (!previous.has(key)) starting.push([key, next[key]!]);
+  return { wanted, stopping, starting };
+};
+
+/**
  * The second book a mount (or a `run`) keeps beside its fiber book: one fiber
  * per declared key. A fiber that completed or died stays booked until its key
  * leaves the declared set, so a declared key that is done is unchanged, not
  * restarted. Never counted in `inFlight`.
+ *
+ * `fork` books the fiber and then attaches the exit observer, on
+ * `forkLeaf`'s terms: an observer attached after the fiber has already exited
+ * fires at attach, so a death between the fork and the booking is reported
+ * against a booked key. The observer reports only while the key is still
+ * booked to that fiber: a fiber that ended as its key was being stopped has
+ * been reported by the stop already.
+ *
+ * `stop` unbooks the named fibers first, then interrupts them, awaited, so a
+ * stopped subscription's finalizer has run and its last emission cannot land
+ * after its stop.
  */
-type SubscriptionBook = Map<string, Fiber.Fiber<void>>;
+const subscriptionBook = (deps: {
+  /** Where a subscription's emissions go, with the key they came from. */
+  readonly emit: (key: string, message: { readonly _tag: string }) => Effect.Effect<void>;
+  /** How a fiber still booked under `key` ended. Interruption included; callers filter. */
+  readonly onExit: (key: string, exit: Exit.Exit<void>) => void;
+}) => {
+  const book = new Map<string, Fiber.Fiber<void>>();
+
+  const fork = (key: string, sub: Subscription<any, any>) =>
+    Effect.map(
+      Effect.forkChild(
+        Effect.asVoid(Effect.suspend(() => sub.effect((message) => deps.emit(key, message)))),
+      ),
+      (fiber: Fiber.Fiber<void>) => {
+        book.set(key, fiber);
+        fiber.addObserver((exit) => {
+          if (book.get(key) === fiber) deps.onExit(key, exit);
+        });
+      },
+    );
+
+  const stop = (keys: Iterable<string>) =>
+    Effect.suspend(() => {
+      const fibers: Array<Fiber.Fiber<void>> = [];
+      for (const key of keys) {
+        const fiber = book.get(key);
+        if (fiber === undefined) continue;
+        book.delete(key);
+        fibers.push(fiber);
+      }
+      return Fiber.interruptAll(fibers);
+    });
+
+  return {
+    fork,
+    stop,
+    /** Every booked key, running, done or died. */
+    keys: () => [...book.keys()],
+    get size() {
+      return book.size;
+    },
+  } as const;
+};
+
+type SubscriptionBook = ReturnType<typeof subscriptionBook>;
 
 /**
  * Attribution for a command's fibers. `tag` is the issuing action's, filled by
@@ -568,17 +645,18 @@ type CommandContext = {
 };
 
 /**
- * Mutable bookkeeping for the fibers an interpreter has in flight, one flat
- * map from group name to fibers. Every mutation is synchronous and JS is
- * single-threaded, so plain fields suffice — fibers only interleave at yield
- * points.
+ * The fibers an interpreter has in flight, one flat map from group name to
+ * fibers. A group exists only while it has a fiber, so "in flight" is the
+ * book's size. Every mutation is synchronous and JS is single-threaded, so a
+ * plain map suffices — fibers only interleave at yield points.
  */
-type FiberBook = {
-  readonly groups: Map<Group, Set<Fiber.Fiber<void>>>;
-  inFlight: number;
-};
+type FiberBook = Map<Group, Set<Fiber.Fiber<void>>>;
 
-const fiberBook = (): FiberBook => ({ groups: new Map(), inFlight: 0 });
+const inFlight = (book: FiberBook): number => {
+  let count = 0;
+  for (const group of book.values()) count += group.size;
+  return count;
+};
 
 /**
  * The command interpreter, shared by `Feature.run` and `createFeatureStore`.
@@ -600,14 +678,15 @@ const commandInterpreter = (deps: {
    * Runs after a command's fiber settles, however it settled — `run` needs it
    * to wake a `Queue.take` that quiescence would otherwise never unblock.
    */
-  readonly settled: Effect.Effect<void>;
+  readonly settled: () => void;
   /**
    * How a command's fiber ended. `forkLeaf` forks and returns, so a dying
    * command dies on a fiber nobody awaits — without this hook every defect
    * from a command is discarded silently. Interruption is normal here
-   * (`Cancel`, unmount), so callers filter on it.
+   * (`Cancel`, unmount), so callers filter on it. Runs before the fiber is
+   * unbooked, so a fold it queues cannot be mistaken for quiescence.
    */
-  readonly onExit?: (exit: Exit.Exit<void>, ctx: CommandContext) => Effect.Effect<void>;
+  readonly onExit?: (exit: Exit.Exit<void>, ctx: CommandContext) => void;
   readonly book: FiberBook;
 }): {
   readonly interpret: (
@@ -618,43 +697,40 @@ const commandInterpreter = (deps: {
   const { book } = deps;
 
   // Every fiber at the one name a `Cancel` addresses.
-  const fibersAt = (target: Group): Array<Fiber.Fiber<void>> => [
-    ...(book.groups.get(target) ?? []),
-  ];
+  const fibersAt = (target: Group): Array<Fiber.Fiber<void>> => [...(book.get(target) ?? [])];
 
-  /** Fork one leaf, register it under `ctx`'s group, unregister however it ends. */
+  /**
+   * Fork one leaf, register it under `ctx`'s group, unregister however it
+   * ends.
+   *
+   * The exit is observed through `fiber.addObserver`, not from inside the
+   * leaf: a fiber interrupted before the scheduler has started it never runs
+   * its body, so an `Effect.ensuring` baked into the body would never run
+   * either. The observer fires synchronously inside that interrupt, at attach
+   * when the fiber has already exited, and once after a deferred interrupt
+   * (`lib.probe.test.ts`). Booked before the observer is attached, so an
+   * observer that fires at attach finds the booking it undoes.
+   */
   const forkLeaf = (ctx: CommandContext, run: Effect.Effect<void, never, any>) =>
-    Effect.gen(function* () {
-      book.inFlight += 1;
-
-      const fiber: Fiber.Fiber<void> = yield* Effect.forkChild(run);
+    Effect.map(Effect.forkChild(run), (fiber: Fiber.Fiber<void>) => {
       const name = ctx.key ?? ctx.tag;
-      const group = book.groups.get(name) ?? new Set<Fiber.Fiber<void>>();
-      book.groups.set(name, group);
+      const group = book.get(name) ?? new Set<Fiber.Fiber<void>>();
+      book.set(name, group);
       group.add(fiber);
 
       // No identity guard on the delete: a Set is deleted only when empty, by
-      // the cleanup that emptied it, and cleanups run exactly once — so a
-      // registered instance can never be a stale one.
-      const cleanup = Effect.sync(() => {
-        book.inFlight -= 1;
-        group.delete(fiber);
-        if (group.size === 0) book.groups.delete(name);
+      // the observer that emptied it, and observers run exactly once — so a
+      // registered instance can never be a stale one. `finally`: the
+      // bookkeeping has to survive an `onExit` that throws.
+      fiber.addObserver((exit) => {
+        try {
+          deps.onExit?.(exit, ctx);
+        } finally {
+          group.delete(fiber);
+          if (group.size === 0) book.delete(name);
+          deps.settled();
+        }
       });
-
-      // A fiber interrupted before the scheduler has started it never runs its
-      // own body — including an `Effect.ensuring` baked into that body —
-      // verified against the installed effect version. So cleanup cannot live
-      // in the leaf; a separate watcher on `Fiber.await` observes the Exit
-      // whether or not the fiber ever got to start. `ensuring`, not `andThen`:
-      // the bookkeeping has to survive an `onExit` that dies.
-      yield* Fiber.await(fiber).pipe(
-        Effect.flatMap((exit) =>
-          deps.onExit === undefined ? Effect.void : deps.onExit(exit, ctx),
-        ),
-        Effect.ensuring(Effect.andThen(cleanup, deps.settled)),
-        Effect.forkChild,
-      );
     });
 
   const interpret = (
@@ -947,9 +1023,9 @@ interface StoreInternals {
   readonly inFlight: number;
   /** Groups with at least one fiber booked. */
   readonly groups: number;
-  /** Command fibers booked across every group, exited or not. */
+  /** Command fibers booked across every group. A fiber is unbooked by its exit observer, synchronously. */
   readonly fibers: number;
-  /** Booked command fibers that have not exited: interrupted ones stay booked until their watcher's cleanup runs. */
+  /** Booked command fibers that have not exited. Equal to `fibers` unless an interrupt is deferred by an uninterruptible region. */
   readonly live: number;
   /** Subscription fibers booked, running, done or died. */
   readonly subscriptions: number;
@@ -1247,12 +1323,8 @@ export const define: <
               };
 
               const queue = yield* Queue.unbounded<Entry>();
-              const book = fiberBook();
-              // The second book. Never counted in `inFlight`, so a subscription
-              // that never completes holds nothing open — that is the whole
-              // point of the split.
-              const running: SubscriptionBook = new Map();
-              let declared: ReadonlyArray<string> = [];
+              const book: FiberBook = new Map();
+              let declared: ReadonlySet<string> = new Set();
               const emitted: { _tag: string }[] = [];
               const outputs: { _tag: string }[] = [];
               const defects: RunDefect[] = [];
@@ -1269,15 +1341,28 @@ export const define: <
               // The store's rule, minus the sink and the boundary: record the
               // death, and fold `Error` when the feature handles it. `"runtime"`
               // origin: the action is the runtime's own, so it is not `emitted`.
-              const raise = (error: unknown, from: string): Effect.Effect<void> => {
+              const raise = (error: unknown, from: string): void => {
                 const handled = from !== "Error" && handlesError;
                 defects.push({ from, error, handled });
-                if (!handled) return Effect.void;
-                return Queue.offer(queue, {
+                if (!handled) return;
+                Queue.offerUnsafe(queue, {
                   msg: { _tag: "Error", error, cause: Cause.die(error), from },
                   origin: "runtime",
-                }).pipe(Effect.asVoid);
+                });
               };
+
+              // The second book. Never counted in `inFlight`, so a subscription
+              // that never completes holds nothing open — that is the whole
+              // point of the split.
+              const running = subscriptionBook({
+                emit: (_key, msg) =>
+                  Queue.offer(queue, { msg, origin: "subscription" }).pipe(Effect.asVoid),
+                onExit: (key, exit) => {
+                  if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {
+                    raise(Cause.squash(exit.cause), key);
+                  }
+                },
+              });
 
               const { interpret } = commandInterpreter({
                 book,
@@ -1286,73 +1371,14 @@ export const define: <
                 // an interrupted/cancelled group) still has to wake the drain loop's
                 // `Queue.take` — otherwise quiescence is reached but nothing is left
                 // to unblock it. A no-op entry does that uniformly.
-                settled: Queue.offer(queue, {
-                  msg: { _tag: "__settled__" },
-                  origin: "settled",
-                }).pipe(Effect.asVoid),
-                // The fold is queued before `settled` and while the fiber is
-                // still booked, so the drain loop cannot reach quiescence
-                // between the death and its `Error` fold.
-                onExit: (exit, ctx) =>
-                  !Exit.isFailure(exit) || Cause.hasInterruptsOnly(exit.cause)
-                    ? Effect.void
-                    : raise(Cause.squash(exit.cause), ctx.tag),
-              });
-
-              // One fork per key. The exit is observed inside the fiber's own
-              // body (`onExit`), not by a watcher on `Fiber.await`: nothing
-              // counts a subscription as in flight, so a death has to queue its
-              // `Error` before the fiber completes, or the drain loop reaches
-              // quiescence between the two. A fiber interrupted before it
-              // starts never runs the body, and has nothing to report. The
-              // guard keeps a fiber that died as its key was being stopped
-              // from reporting after its stop.
-              //
-              // The body books its own fiber as its first step, before
-              // `sub.effect` runs: `forkChild` schedules the body on the
-              // dispatcher, and when the op budget yields this fiber between
-              // the fork and the booking below, the body runs first — a death
-              // there would find the key unbooked. The booking below stays for
-              // a fiber stopped before its body ever ran. Both book the same
-              // fiber, in either order.
-              const fork = (key: string, sub: Subscription<any, any>) =>
-                Effect.gen(function* () {
-                  const fiber: Fiber.Fiber<void> = yield* Effect.forkChild(
-                    Effect.withFiber((current) => {
-                      const self = current as Fiber.Fiber<void>;
-                      running.set(key, self);
-                      return Effect.suspend(() =>
-                        sub.effect((msg) =>
-                          Queue.offer(queue, { msg, origin: "subscription" }).pipe(Effect.asVoid),
-                        ),
-                      ).pipe(
-                        Effect.asVoid,
-                        Effect.onExit((exit) =>
-                          running.get(key) !== self ||
-                          !Exit.isFailure(exit) ||
-                          Cause.hasInterruptsOnly(exit.cause)
-                            ? Effect.void
-                            : raise(Cause.squash(exit.cause), key),
-                        ),
-                      );
-                    }),
-                  );
-                  running.set(key, fiber);
-                });
-
-              const stopAll = (keys: ReadonlyArray<string>) =>
-                Effect.gen(function* () {
-                  const fibers: Array<Fiber.Fiber<void>> = [];
-                  for (const key of keys) {
-                    const fiber = running.get(key);
-                    if (fiber === undefined) continue;
-                    running.delete(key);
-                    fibers.push(fiber);
+                settled: () =>
+                  Queue.offerUnsafe(queue, { msg: { _tag: "__settled__" }, origin: "settled" }),
+                onExit: (exit, ctx) => {
+                  if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {
+                    raise(Cause.squash(exit.cause), ctx.tag);
                   }
-                  // Awaited, so a stopped subscription's finalizer has run and
-                  // its last emission cannot land after its key is gone.
-                  yield* Fiber.interruptAll(fibers);
-                });
+                },
+              });
 
               // The diff, on the store's rules: keys only, stops before starts,
               // a key still in the book — running, done or died — is unchanged.
@@ -1362,21 +1388,18 @@ export const define: <
                   try {
                     next = subscriptions({ ...snapshot, state });
                   } catch (error) {
-                    return yield* raise(error, from);
+                    return raise(error, from);
                   }
-                  const keys = declaredKeys(next);
-                  const wanted = new Set(keys);
-                  yield* stopAll(declared.filter((key) => !wanted.has(key)));
-                  for (const key of keys) {
-                    if (!running.has(key)) yield* fork(key, next[key]!);
-                  }
-                  declared = keys;
+                  const { wanted, stopping, starting } = diffDeclared(declared, next);
+                  yield* running.stop(stopping);
+                  for (const [key, sub] of starting) yield* running.fork(key, sub);
+                  declared = wanted;
                 });
 
               // Drain until quiescent: nothing queued and nothing running. The
               // two reads are synchronous back to back, so no fiber can settle
               // or emit between them.
-              while (book.inFlight > 0 || Queue.sizeUnsafe(queue) > 0) {
+              while (inFlight(book) > 0 || Queue.sizeUnsafe(queue) > 0) {
                 const entry = yield* Queue.take(queue);
                 if (entry.origin === "settled") continue;
                 if (isOutput(entry.msg)) {
@@ -1394,8 +1417,8 @@ export const define: <
                 // `Unmounted` empties the declared set, as `stop()` does on the
                 // store; every other action re-evaluates the hook.
                 if (entry.msg._tag === "Unmounted") {
-                  yield* stopAll(declared);
-                  declared = [];
+                  yield* running.stop(declared);
+                  declared = new Set();
                 } else if (parts.subscriptions !== undefined) {
                   yield* reconcile(entry.msg._tag);
                 }
@@ -1411,8 +1434,8 @@ export const define: <
               // The report is the declared set at resolve; then nothing leaks
               // past the returned Effect — awaited, so a finalizer inside a
               // subscription has run by the time the caller reads the result.
-              const subscriptionKeys = declared;
-              yield* stopAll(declared);
+              const subscriptionKeys = [...declared];
+              yield* running.stop(declared);
 
               return { state, emitted, outputs, defects, subscriptions: subscriptionKeys };
             }).pipe(Effect.provide(options.layer)),
@@ -1540,34 +1563,32 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
   const name = args.name ?? "WychFeature";
   const instance = args.instance ?? String(++instanceCount);
 
-  let resolved = false;
-  let sink: DevtoolsSink | undefined;
-
-  const devtools = (): DevtoolsSink | undefined => {
-    if (!resolved) {
-      const context = runtime.cachedContext;
-      if (context === undefined) return undefined;
-      const installed = Context.getUnsafe(context, Devtools);
-      sink = installed === noopDevtools ? undefined : installed;
-      resolved = true;
-    }
-    return sink;
-  };
+  /**
+   * The installed sink: `undefined` until the runtime's context exists to
+   * read it from, `null` once read and found to be `noopDevtools`, or
+   * disabled after it threw.
+   */
+  let sink: DevtoolsSink | null | undefined;
 
   /**
-   * Hand one event to the sink, and disable the sink if it throws.
+   * Hand one event to the sink, and disable the sink if it throws. The event
+   * is built only once a sink is known to want it, so the no-sink path
+   * allocates nothing. Re-reads `sink` per event: a single fold reports
+   * twice, and a sink that threw on the first event must not be called for
+   * the second.
    */
-  const report = (event: DevtoolsEvent): void => {
-    // Re-read `sink` rather than trusting the caller's handle: a single fold
-    // reports twice, and a sink that threw on the first event must not be
-    // called for the second. Call sites still guard on `devtools()` before
-    // building an event, which keeps the no-sink path free of allocation.
-    const target = sink;
-    if (target === undefined) return;
+  const report = (build: () => DevtoolsEvent): void => {
+    if (sink === undefined) {
+      const context = runtime.cachedContext;
+      if (context === undefined) return;
+      const installed = Context.getUnsafe(context, Devtools);
+      sink = installed === noopDevtools ? null : installed;
+    }
+    if (sink === null) return;
     try {
-      target.onEvent(event);
+      sink.onEvent(build());
     } catch {
-      sink = undefined;
+      sink = null;
     }
   };
 
@@ -1633,14 +1654,15 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
     readonly target: Mount | undefined;
   }> = [];
 
-  let active = false;
-  let everStarted = false;
   /**
-   * Set when the mount fiber died on its own — a feature layer that failed to
-   * build — as opposed to being stopped. The one state in which new work may
-   * re-arm the store: see `offer`.
+   * Where the store is in its life. `idle` until the first `start`; `live`
+   * while a mount is armed; `stopped` after `stop`, or after the mount fiber
+   * ended; `dead` when the mount fiber died on its own — a feature layer that
+   * failed to build — as opposed to being stopped, the one state in which new
+   * work may re-arm the store (see `offer`). A `mount` is installed while
+   * `live`, and stays installed after `stop` until its teardown drains.
    */
-  let dead = false;
+  let phase: "idle" | "live" | "stopped" | "dead" = "idle";
   let state = initialState(args.props);
   let props = args.props;
   let hooks: H | undefined;
@@ -1674,11 +1696,11 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
       Queue.offerUnsafe(to.queue, work);
       return true;
     }
-    if (!everStarted) {
+    if (phase === "idle") {
       buffered.push(work);
       return true;
     }
-    if (dead && !active && demand) {
+    if (phase === "dead" && demand) {
       start();
       // A layer that fails synchronously has already released the mount
       // again by the time `start` returns; the work is dropped and the
@@ -1692,26 +1714,20 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
   };
 
   const emitOutput = (action: { readonly _tag: string }, cause: DevtoolsCause): void => {
-    const target = devtools();
-    if (target !== undefined) {
-      report({ _tag: "Output", name, instance, cause, output: action });
-    }
+    report(() => ({ _tag: "Output", name, instance, cause, output: action }));
 
     try {
       emit(action);
     } catch (error) {
-      const onThrow = devtools();
-      if (onThrow !== undefined) {
-        report({
-          _tag: "Defect",
-          name,
-          instance,
-          cause,
-          from: action._tag,
-          defect: summarizeDefect(error),
-          handled: false,
-        });
-      }
+      report(() => ({
+        _tag: "Defect",
+        name,
+        instance,
+        cause,
+        from: action._tag,
+        defect: summarizeDefect(error),
+        handled: false,
+      }));
       defect(error);
     }
   };
@@ -1734,34 +1750,28 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
 
     if (moved) state = nextState;
 
-    const target = devtools();
-
-    if (target !== undefined) {
-      report({
-        _tag: "Transition",
-        name,
-        instance,
-        cause,
-        action: reportableAction(action, opaqueFields),
-        previous,
-        next: nextState,
-      });
-    }
+    report(() => ({
+      _tag: "Transition",
+      name,
+      instance,
+      cause,
+      action: reportableAction(action, opaqueFields),
+      previous,
+      next: nextState,
+    }));
 
     if (command) {
       const ctx = { tag: action._tag };
       const accepted = offer({ _tag: "Run", command, ctx }, routeTo, cause._tag === "Dispatch");
-      if (target !== undefined) {
-        report({
-          _tag: "Command",
-          name,
-          instance,
-          cause,
-          group: ctx.tag,
-          command: summarizeCommand(command),
-          dropped: !accepted,
-        });
-      }
+      report(() => ({
+        _tag: "Command",
+        name,
+        instance,
+        cause,
+        group: ctx.tag,
+        command: summarizeCommand(command),
+        dropped: !accepted,
+      }));
     }
     return moved;
   };
@@ -1813,8 +1823,8 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
     // is. `start()` folds `Mounted` and reconciles from scratch against the
     // rebuilt layer, so nothing is diffed here. Lifecycle-, command- and
     // defect-caused folds never re-arm, for the reasons `offer` gives.
-    if (cells === undefined || !active) {
-      if (dead && !active && cause._tag === "Dispatch" && declares(from, cause)) start();
+    if (cells === undefined || phase !== "live") {
+      if (phase === "dead" && cause._tag === "Dispatch" && declares(from, cause)) start();
       return;
     }
 
@@ -1826,24 +1836,22 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
       return;
     }
 
-    const keys = declaredKeys(next);
-    const wanted = new Set(keys);
-    const stopping: Array<string> = [];
-    for (const key of declared) if (!wanted.has(key)) stopping.push(key);
-    const starting: Array<readonly [string, Subscription<any, any>]> = [];
-    for (const key of keys) if (!declared.has(key)) starting.push([key, next[key]!]);
-
+    const { wanted, stopping, starting } = diffDeclared(declared, next);
     declared = wanted;
     if (stopping.length === 0 && starting.length === 0) return;
 
-    const target = devtools();
-    if (target !== undefined) {
-      for (const key of stopping) {
-        report({ _tag: "SubscriptionStopped", name, instance, cause, key, reason: "Undeclared" });
-      }
-      for (const [key] of starting) {
-        report({ _tag: "SubscriptionStarted", name, instance, cause, key });
-      }
+    for (const key of stopping) {
+      report(() => ({
+        _tag: "SubscriptionStopped",
+        name,
+        instance,
+        cause,
+        key,
+        reason: "Undeclared",
+      }));
+    }
+    for (const [key] of starting) {
+      report(() => ({ _tag: "SubscriptionStarted", name, instance, cause, key }));
     }
 
     Queue.offerUnsafe(cells.queue, { _tag: "Subscriptions", stop: stopping, start: starting });
@@ -1861,19 +1869,16 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
 
   function raiseDefect(error: unknown, from: string, cause: DevtoolsCause, target?: Mount): void {
     const handled = from !== "Error" && handles("Error");
-    const sink = devtools();
 
-    if (sink !== undefined) {
-      report({
-        _tag: "Defect",
-        name,
-        instance,
-        cause,
-        from,
-        defect: summarizeDefect(error),
-        handled,
-      });
-    }
+    report(() => ({
+      _tag: "Defect",
+      name,
+      instance,
+      cause,
+      from,
+      defect: summarizeDefect(error),
+      handled,
+    }));
 
     if (!handled) {
       defect(error);
@@ -1891,102 +1896,19 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
     const release = (): void => {
       if (mount !== cells) return;
       mount = undefined;
-      active = false;
+      phase = "stopped";
     };
 
     const { interpret } = commandInterpreter({
       book: cells.book,
       emit: (message, ctx) => Effect.sync(() => fold(message, commandCause(ctx), cells)),
-      settled: Effect.sync(() => Queue.offerUnsafe(cells.queue, { _tag: "Settled" })),
-      onExit: (exit, ctx) =>
-        Effect.sync(() => {
-          if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {
-            raiseDefect(Cause.squash(exit.cause), ctx.tag, commandCause(ctx), cells);
-          }
-        }),
-    });
-
-    /**
-     * Interrupt the named subscriptions, awaited — so a stopped subscription's
-     * finalizer has run and its last `dispatch` cannot land after its
-     * `SubscriptionStopped` — and unbook them.
-     */
-    const stopSubscriptions = (keys: Iterable<string>) =>
-      Effect.suspend(() => {
-        const fibers: Array<Fiber.Fiber<void>> = [];
-        for (const key of keys) {
-          const fiber = cells.subscriptions.get(key);
-          if (fiber === undefined) continue;
-          cells.subscriptions.delete(key);
-          fibers.push(fiber);
+      settled: () => Queue.offerUnsafe(cells.queue, { _tag: "Settled" }),
+      onExit: (exit, ctx) => {
+        if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {
+          raiseDefect(Cause.squash(exit.cause), ctx.tag, commandCause(ctx), cells);
         }
-        return Fiber.interruptAll(fibers);
-      });
-
-    /**
-     * `forkLeaf` minus the `inFlight` increment and the group booking. The
-     * exit is observed inside the body (`onExit`) rather than by a watcher: a
-     * fiber interrupted before it starts never runs the body, and an
-     * interruption is exactly the case with nothing to report. `dispatch`
-     * folds into the mount that forked it, as a command's does.
-     *
-     * The body books its own fiber as its first step, before `sub.effect`
-     * runs: `forkChild` schedules the body on the dispatcher, and when the op
-     * budget yields the mount fiber between the fork and the booking after it,
-     * the body runs first — a death there would find the key unbooked and go
-     * unreported. The booking after the fork stays for a fiber stopped before
-     * its body ever ran. Both book the same fiber, in either order.
-     */
-    const forkSubscription = (key: string, sub: Subscription<any, any>) =>
-      Effect.gen(function* () {
-        const cause: DevtoolsCause = { _tag: "Subscription", key };
-        const fiber: Fiber.Fiber<void> = yield* Effect.forkChild(
-          Effect.withFiber((current) => {
-            const self = current as Fiber.Fiber<void>;
-            cells.subscriptions.set(key, self);
-            return Effect.suspend(() =>
-              sub.effect((action) => Effect.sync(() => fold(action, cause, cells))),
-            ).pipe(
-              Effect.asVoid,
-              Effect.onExit((exit) =>
-                Effect.sync(() => {
-                  // A fiber that ended as its key was being stopped has been
-                  // reported `Undeclared` or `Unmounted` already.
-                  if (cells.subscriptions.get(key) !== self) return;
-                  if (Exit.isFailure(exit)) {
-                    if (Cause.hasInterruptsOnly(exit.cause)) return;
-                    raiseDefect(Cause.squash(exit.cause), key, cause, cells);
-                    const target = devtools();
-                    if (target !== undefined) {
-                      report({
-                        _tag: "SubscriptionStopped",
-                        name,
-                        instance,
-                        cause,
-                        key,
-                        reason: "Died",
-                      });
-                    }
-                    return;
-                  }
-                  const target = devtools();
-                  if (target !== undefined) {
-                    report({
-                      _tag: "SubscriptionStopped",
-                      name,
-                      instance,
-                      cause,
-                      key,
-                      reason: "Completed",
-                    });
-                  }
-                }),
-              ),
-            );
-          }),
-        );
-        cells.subscriptions.set(key, fiber);
-      });
+      },
+    });
 
     // Stop the subscriptions, run the `Unmounted` command with services still
     // alive, then drain to quiescence: in-flight commands finish, and what
@@ -1994,13 +1916,13 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
     // item met in the drain is dropped.
     const teardown = (command: Command<any, any> | undefined) =>
       Effect.gen(function* () {
-        yield* stopSubscriptions([...cells.subscriptions.keys()]);
+        yield* cells.subscriptions.stop(cells.subscriptions.keys());
 
         if (command !== undefined) {
           yield* interpret(command, { tag: "Unmounted" });
         }
 
-        while (cells.book.inFlight > 0 || Queue.sizeUnsafe(cells.queue) > 0) {
+        while (inFlight(cells.book) > 0 || Queue.sizeUnsafe(cells.queue) > 0) {
           const work = yield* Queue.take(cells.queue);
           if (work._tag === "Run") yield* interpret(work.command, work.ctx);
         }
@@ -2011,8 +1933,8 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
         const work = yield* Queue.take(cells.queue);
 
         if (work._tag === "Subscriptions") {
-          yield* stopSubscriptions(work.stop);
-          for (const [key, sub] of work.start) yield* forkSubscription(key, sub);
+          yield* cells.subscriptions.stop(work.stop);
+          for (const [key, sub] of work.start) yield* cells.subscriptions.fork(key, sub);
           continue;
         }
 
@@ -2052,11 +1974,16 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
       Effect.catchCause((cause) =>
         Effect.sync(() => {
           if (Cause.hasInterruptsOnly(cause)) return;
-          release();
-          dead = true;
-          // The subscriptions were children of the scope that just closed; a
-          // re-arm through `start()` evaluates from scratch.
-          declared = new Set();
+          // Only for the installed mount: a layer that fails after a remount
+          // has already replaced its mount must not mark the live one dead or
+          // forget its declared set. The defect is still reported.
+          if (mount === cells) {
+            mount = undefined;
+            phase = "dead";
+            // The subscriptions were children of the scope that just closed;
+            // a re-arm through `start()` evaluates from scratch.
+            declared = new Set();
+          }
           raiseDefect(Cause.squash(cause), "Mounted", LIFECYCLE);
         }),
       ),
@@ -2065,18 +1992,31 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
   };
 
   const start = (): void => {
-    if (active) return;
-    active = true;
-    everStarted = true;
-    dead = false;
+    if (phase === "live") return;
+    phase = "live";
 
     // `Queue.unbounded` captures the current fiber's dispatcher, so there is
     // no synchronous constructor to reach for; `runSync` of a sync effect is
     // exactly that constructor.
+    // `dispatch` from a subscription folds into the mount that forked it, as
+    // a command's does; the closures below run only once `cells` exists.
     const cells: Mount = {
       queue: Effect.runSync(Queue.unbounded<Work>()),
-      book: fiberBook(),
-      subscriptions: new Map(),
+      book: new Map(),
+      subscriptions: subscriptionBook({
+        emit: (key, action) =>
+          Effect.sync(() => fold(action, { _tag: "Subscription", key }, cells)),
+        onExit: (key, exit) => {
+          const cause: DevtoolsCause = { _tag: "Subscription", key };
+          let reason: "Died" | "Completed" = "Completed";
+          if (Exit.isFailure(exit)) {
+            if (Cause.hasInterruptsOnly(exit.cause)) return;
+            raiseDefect(Cause.squash(exit.cause), key, cause, cells);
+            reason = "Died";
+          }
+          report(() => ({ _tag: "SubscriptionStopped", name, instance, cause, key, reason }));
+        },
+      }),
     };
 
     mount = cells;
@@ -2095,21 +2035,20 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
    * `pending` that drained, a mount that is gone after `stop`.
    */
   const probe = (): StoreInternals => {
-    let fibers = 0;
     let live = 0;
     if (mount !== undefined) {
-      for (const group of mount.book.groups.values()) {
-        fibers += group.size;
+      for (const group of mount.book.values()) {
         for (const fiber of group) if (fiber.pollUnsafe() === undefined) live += 1;
       }
     }
+    const fibers = mount === undefined ? 0 : inFlight(mount.book);
     return {
       mounted: mount !== undefined,
-      active,
-      dead,
+      active: phase === "live",
+      dead: phase === "dead",
       queued: mount === undefined ? 0 : Queue.sizeUnsafe(mount.queue),
-      inFlight: mount?.book.inFlight ?? 0,
-      groups: mount?.book.groups.size ?? 0,
+      inFlight: fibers,
+      groups: mount?.book.size ?? 0,
       fibers,
       live,
       subscriptions: mount?.subscriptions.size ?? 0,
@@ -2138,7 +2077,7 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
       // feature has folded no lifecycle action yet, so the latest props and
       // hooks are simply what `Mounted` will see. The same holds for the
       // first call after a hand-driven `start`, which seeds the hooks.
-      if (!everStarted || previousHooks === undefined) {
+      if (phase === "idle" || previousHooks === undefined) {
         props = nextProps;
         hooks = nextHooks;
         return state;
@@ -2172,12 +2111,10 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
     stop: () => {
       // A dead mount has no fiber to tear down, but the component is going
       // away all the same: `Unmounted` still folds and is still reported, and
-      // `dead` clears so a later dispatch drops instead of re-arming a
-      // component React has already let go of.
-      const wasDead = dead;
-      dead = false;
-      if (!active && !wasDead) return;
-      active = false;
+      // the phase leaves `dead` so a later dispatch drops instead of re-arming
+      // a component React has already let go of.
+      if (phase !== "live" && phase !== "dead") return;
+      phase = "stopped";
 
       const cells = mount;
 
@@ -2185,22 +2122,17 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
       // `Unmounted` transition: the console logger evicts the mount's elapsed
       // clock on that transition, and a later event would re-insert it. The
       // fibers themselves go on the mount fiber, first thing in the teardown.
-      if (declared.size > 0) {
-        const target = devtools();
-        if (target !== undefined) {
-          for (const key of declared) {
-            report({
-              _tag: "SubscriptionStopped",
-              name,
-              instance,
-              cause: LIFECYCLE,
-              key,
-              reason: "Unmounted",
-            });
-          }
-        }
-        declared = new Set();
+      for (const key of declared) {
+        report(() => ({
+          _tag: "SubscriptionStopped",
+          name,
+          instance,
+          cause: LIFECYCLE,
+          key,
+          reason: "Unmounted",
+        }));
       }
+      declared = new Set();
 
       let teardown: Command<any, any> | undefined;
       let thrown: { readonly error: unknown } | undefined;
@@ -2215,29 +2147,26 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
         Queue.offerUnsafe(cells.queue, { _tag: "Teardown", command: teardown });
       }
 
-      const target = devtools();
-
-      if (target !== undefined) {
-        report({
-          _tag: "Transition",
+      report(() => ({
+        _tag: "Transition",
+        name,
+        instance,
+        cause: LIFECYCLE,
+        action: { _tag: "Unmounted" },
+        previous: state,
+        next: state,
+      }));
+      if (teardown !== undefined) {
+        const command = teardown;
+        report(() => ({
+          _tag: "Command",
           name,
           instance,
           cause: LIFECYCLE,
-          action: { _tag: "Unmounted" },
-          previous: state,
-          next: state,
-        });
-        if (teardown !== undefined) {
-          report({
-            _tag: "Command",
-            name,
-            instance,
-            cause: LIFECYCLE,
-            group: "Unmounted",
-            command: summarizeCommand(teardown),
-            dropped: cells === undefined,
-          });
-        }
+          group: "Unmounted",
+          command: summarizeCommand(command),
+          dropped: cells === undefined,
+        }));
       }
 
       if (thrown !== undefined) raiseDefect(thrown.error, "Unmounted", LIFECYCLE);

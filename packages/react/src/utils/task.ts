@@ -5,6 +5,11 @@ import { Action, Command, type LazyCommand, type Message } from "../lib";
 // Layer 1 — the vocabulary
 // ---------------------------------------------------------------------------
 
+type Idle = { readonly _tag: "Idle" };
+type Pending = { readonly _tag: "Pending" };
+type Resolved<Success> = { readonly _tag: "Resolved"; readonly value: Success };
+type Rejected<Failure> = { readonly _tag: "Rejected"; readonly error: Failure };
+
 /**
  * One async operation's whole observable state, as four cases rather than the
  * `isPending: boolean` + `data?: T` pair it replaces — which can represent
@@ -19,11 +24,7 @@ import { Action, Command, type LazyCommand, type Message } from "../lib";
  * and its match are usable against a field you wrote by hand, filled from work
  * that never went through `Task` at all.
  */
-export type TaskValue<Success, Failure> =
-  | { readonly _tag: "Idle" }
-  | { readonly _tag: "Pending" }
-  | { readonly _tag: "Resolved"; readonly value: Success }
-  | { readonly _tag: "Rejected"; readonly error: Failure };
+export type TaskValue<Success, Failure> = Idle | Pending | Resolved<Success> | Rejected<Failure>;
 
 /**
  * The schema counterpart, for the field in a feature's `State`.
@@ -45,7 +46,10 @@ export type TaskSchema<
   readonly Rejected: Schema.TaggedStruct<"Rejected", { readonly error: Failure }>;
 }>;
 
-const buildSchema = (success: Schema.Top, failure: Schema.Top = Schema.String) =>
+const buildSchema = <Success extends Schema.Top, Failure extends Schema.Top = Schema.String>(
+  success: Success,
+  failure: Failure = Schema.String as unknown as Failure,
+): TaskSchema<Success, Failure> =>
   Schema.TaggedUnion({
     Idle: {},
     Pending: {},
@@ -53,8 +57,8 @@ const buildSchema = (success: Schema.Top, failure: Schema.Top = Schema.String) =
     Rejected: { error: failure },
   });
 
-const idle: { readonly _tag: "Idle" } = Object.freeze({ _tag: "Idle" as const });
-const pendingValue: { readonly _tag: "Pending" } = Object.freeze({ _tag: "Pending" as const });
+const idle: Idle = Object.freeze({ _tag: "Idle" as const });
+const pendingValue: Pending = Object.freeze({ _tag: "Pending" as const });
 
 /**
  * The fields of a state that hold an `TaskValue` — the only ones `Task.start`
@@ -70,23 +74,6 @@ type TaskKeys<State> = {
   [Key in keyof State]-?: State[Key] extends TaskValue<any, any> ? Key : never;
 }[keyof State];
 
-const start = <State, Key extends TaskKeys<State>, Action, R>(
-  state: State,
-  key: Key,
-  command: Command<Action, R> | LazyCommand<State, Action, R>,
-): readonly [State, Command<Action, R> | LazyCommand<State, Action, R>] => [
-  { ...state, [key]: pendingValue },
-  command,
-];
-
-const resolved = <Success>(
-  value: Success,
-): { readonly _tag: "Resolved"; readonly value: Success } => ({ _tag: "Resolved", value });
-
-const rejected = <Failure>(
-  error: Failure,
-): { readonly _tag: "Rejected"; readonly error: Failure } => ({ _tag: "Rejected", error });
-
 // ---------------------------------------------------------------------------
 // Matching
 // ---------------------------------------------------------------------------
@@ -100,10 +87,10 @@ const rejected = <Failure>(
  * forgetting one is a compile error, not a blank screen.
  */
 export type TaskCases<Success, Failure, Out> = {
-  readonly Idle: (value: { readonly _tag: "Idle" }) => Out;
-  readonly Pending: (value: { readonly _tag: "Pending" }) => Out;
-  readonly Resolved: (value: { readonly _tag: "Resolved"; readonly value: Success }) => Out;
-  readonly Rejected: (value: { readonly _tag: "Rejected"; readonly error: Failure }) => Out;
+  readonly Idle: (value: Idle) => Out;
+  readonly Pending: (value: Pending) => Out;
+  readonly Resolved: (value: Resolved<Success>) => Out;
+  readonly Rejected: (value: Rejected<Failure>) => Out;
 };
 
 /**
@@ -117,40 +104,6 @@ export type TaskCases<Success, Failure, Out> = {
 export type TaskMatched<Cases> = {
   [K in keyof Cases]: Cases[K] extends (...args: never) => infer Out ? Out : never;
 }[keyof Cases];
-
-const matchValue = <Success, Failure, Cases extends TaskCases<Success, Failure, unknown>>(
-  value: TaskValue<Success, Failure>,
-  cases: Cases,
-): TaskMatched<Cases> =>
-  (cases as Record<string, (value: unknown) => TaskMatched<Cases>>)[value._tag]!(value);
-
-type Idle = { readonly _tag: "Idle" };
-type Pending = { readonly _tag: "Pending" };
-type Resolved<Success> = { readonly _tag: "Resolved"; readonly value: Success };
-type Rejected<Failure> = { readonly _tag: "Rejected"; readonly error: Failure };
-
-const isIdle = (task: TaskValue<unknown, unknown>): task is Idle => task._tag === "Idle";
-const isPending = (task: TaskValue<unknown, unknown>): task is Pending => task._tag === "Pending";
-const isResolved = <Success>(task: TaskValue<Success, unknown>): task is Resolved<Success> =>
-  task._tag === "Resolved";
-const isRejected = <Failure>(task: TaskValue<unknown, Failure>): task is Rejected<Failure> =>
-  task._tag === "Rejected";
-
-/**
- * The partial reads, for everywhere that is not a render: a reducer deriving
- * from the last result, a guard, a default. `match` is exhaustive by design
- * and four cases are noise when three of them say "nothing".
- */
-const value = <Success>(task: TaskValue<Success, unknown>): Option.Option<Success> =>
-  task._tag === "Resolved" ? Option.some(task.value) : Option.none();
-
-const error = <Failure>(task: TaskValue<unknown, Failure>): Option.Option<Failure> =>
-  task._tag === "Rejected" ? Option.some(task.error) : Option.none();
-
-const getOrElse = <Success, Fallback>(
-  task: TaskValue<Success, unknown>,
-  orElse: () => Fallback,
-): Success | Fallback => (task._tag === "Resolved" ? task.value : orElse());
 
 // ---------------------------------------------------------------------------
 // Layer 2 — the operation's vocabulary
@@ -338,7 +291,9 @@ export interface TaskOperation<
  * `onError` is mandatory in both forms. The `Schema.String` default exists to
  * spare you a schema, not to spare you the decision — `Task.errorMessage` is the
  * mapping that pairs with it, spelled out at the call site so a defect quietly
- * becoming `"[object Object]"` is something you chose.
+ * becoming `"[object Object]"` is something you chose. `Failure` defaults to
+ * `Schema.String` on the type side the same way, so `failure` is optional and
+ * `onError` is typed by it either way.
  *
  * `run` is optional, and declaring it is what binds the work to the operation:
  * the effect is written once, next to the schemas that describe what it yields,
@@ -346,60 +301,40 @@ export interface TaskOperation<
  * the operation's `run` takes the effect, for work that genuinely differs per
  * call site.
  *
- * A `run` that takes no input gets its own overloads, listed first. Inferred
+ * A `run` that takes no input gets its own overload, listed first. Inferred
  * through the generic form, a zero-parameter function gives `Input` no
  * candidate, so it would fall back to `never` and the operation would read as
- * unbound: typed to take an effect the runtime then ignores. The overloads pin
+ * unbound: typed to take an effect the runtime then ignores. The overload pins
  * `Input` to `void`, which TypeScript lets a caller omit: `op.run()`.
  */
 export interface TaskConstructor<Ch extends "internal" | "outbound"> {
-  <const Name extends Capitalize<string>, Success extends Schema.Top, R = never>(
-    name: Name,
-    schemas: {
-      readonly success: Success;
-      readonly onError: TaskOnError<string>;
-      readonly mode?: TaskMode;
-      readonly run: () => Effect.Effect<Success["Type"], unknown, R>;
-    },
-  ): TaskOperation<Name, Success, Schema.String, void, R, Ch>;
-
   <
     const Name extends Capitalize<string>,
     Success extends Schema.Top,
-    Failure extends Schema.Top,
+    Failure extends Schema.Top = Schema.String,
     R = never,
   >(
     name: Name,
     schemas: {
       readonly success: Success;
-      readonly failure: Failure;
+      readonly failure?: Failure;
       readonly onError: TaskOnError<Failure["Type"]>;
       readonly mode?: TaskMode;
       readonly run: () => Effect.Effect<Success["Type"], unknown, R>;
     },
   ): TaskOperation<Name, Success, Failure, void, R, Ch>;
 
-  <const Name extends Capitalize<string>, Success extends Schema.Top, Input = never, R = never>(
-    name: Name,
-    schemas: {
-      readonly success: Success;
-      readonly onError: TaskOnError<string>;
-      readonly mode?: TaskMode;
-      readonly run?: (input: Input) => Effect.Effect<Success["Type"], unknown, R>;
-    },
-  ): TaskOperation<Name, Success, Schema.String, Input, R, Ch>;
-
   <
     const Name extends Capitalize<string>,
     Success extends Schema.Top,
-    Failure extends Schema.Top,
+    Failure extends Schema.Top = Schema.String,
     Input = never,
     R = never,
   >(
     name: Name,
     schemas: {
       readonly success: Success;
-      readonly failure: Failure;
+      readonly failure?: Failure;
       readonly onError: TaskOnError<Failure["Type"]>;
       readonly mode?: TaskMode;
       readonly run?: (input: Input) => Effect.Effect<Success["Type"], unknown, R>;
@@ -422,19 +357,16 @@ export interface TaskConstructors extends TaskConstructor<"internal"> {
    * the point: the field is declarable before the operation exists, and an
    * operation is declarable for a feature that stores nothing.
    */
-  readonly schema: {
-    <Success extends Schema.Top>(success: Success): TaskSchema<Success, Schema.String>;
-    <Success extends Schema.Top, Failure extends Schema.Top>(
-      success: Success,
-      failure: Failure,
-    ): TaskSchema<Success, Failure>;
-  };
+  readonly schema: <Success extends Schema.Top, Failure extends Schema.Top = Schema.String>(
+    success: Success,
+    failure?: Failure,
+  ) => TaskSchema<Success, Failure>;
 
   /** The initial value for a field, for `FeatureDefinition.initialState`. */
-  readonly idle: { readonly _tag: "Idle" };
+  readonly idle: Idle;
 
   /** Written on the fold that issues the command, not dispatched a tick later. */
-  readonly pending: { readonly _tag: "Pending" };
+  readonly pending: Pending;
 
   /**
    * `Pending` and the command, as the one return the handler owes:
@@ -465,16 +397,10 @@ export interface TaskConstructors extends TaskConstructor<"internal"> {
   ) => readonly [State, Command<Action, R> | LazyCommand<State, Action, R>];
 
   /** For the `Resolved` handler: `{ ...state, search: Task.resolved(action.value) }`. */
-  readonly resolved: <Success>(value: Success) => {
-    readonly _tag: "Resolved";
-    readonly value: Success;
-  };
+  readonly resolved: <Success>(value: Success) => Resolved<Success>;
 
   /** For the `Rejected` handler: `{ ...state, search: Task.rejected(action.error) }`. */
-  readonly rejected: <Failure>(error: Failure) => {
-    readonly _tag: "Rejected";
-    readonly error: Failure;
-  };
+  readonly rejected: <Failure>(error: Failure) => Rejected<Failure>;
 
   /** `Cause` → its message, or its name when the message is empty. Pairs with the default `Schema.String` failure. */
   readonly errorMessage: TaskOnError<string>;
@@ -504,7 +430,7 @@ export interface TaskConstructors extends TaskConstructor<"internal"> {
   readonly isRejected: <Failure>(task: TaskValue<unknown, Failure>) => task is Rejected<Failure>;
 }
 
-const make = (ch: "internal" | "outbound") =>
+const make = <Ch extends "internal" | "outbound">(ch: Ch) =>
   function async(
     name: string,
     schemas: {
@@ -566,7 +492,32 @@ const make = (ch: "internal" | "outbound") =>
       run: (input: unknown) => scheduled(effectOf(input)),
       cancel: Command.cancel(group),
     };
-  };
+  } as unknown as TaskConstructor<Ch>;
+
+/**
+ * The value half, typed by the interface: each implementation is a one-liner
+ * whose signature `TaskConstructors` states once.
+ */
+const helpers: Omit<TaskConstructors, "output"> = {
+  schema: buildSchema,
+  idle,
+  pending: pendingValue,
+  start: (state, key, command) => [{ ...state, [key]: pendingValue }, command],
+  resolved: (value) => ({ _tag: "Resolved", value }),
+  rejected: (error) => ({ _tag: "Rejected", error }),
+  errorMessage,
+  // The cast is the one place the four-way dispatch is not proven to
+  // TypeScript: `cases` is exhaustive by its type, so the lookup cannot miss.
+  match: (value, cases) =>
+    (cases as unknown as Record<string, (value: unknown) => never>)[value._tag]!(value),
+  value: (task) => (task._tag === "Resolved" ? Option.some(task.value) : Option.none()),
+  error: (task) => (task._tag === "Rejected" ? Option.some(task.error) : Option.none()),
+  getOrElse: (task, orElse) => (task._tag === "Resolved" ? task.value : orElse()),
+  isIdle: (task): task is Idle => task._tag === "Idle",
+  isPending: (task): task is Pending => task._tag === "Pending",
+  isResolved: (task): task is Resolved<any> => task._tag === "Resolved",
+  isRejected: (task): task is Rejected<any> => task._tag === "Rejected",
+};
 
 /**
  * The generic form of "kick off some work, then fold what it produced" — the
@@ -623,19 +574,5 @@ const make = (ch: "internal" | "outbound") =>
  */
 export const Task: TaskConstructors = Object.assign(make("internal"), {
   output: make("outbound"),
-  schema: buildSchema,
-  idle,
-  pending: pendingValue,
-  start,
-  resolved,
-  rejected,
-  errorMessage,
-  match: matchValue,
-  value,
-  error,
-  getOrElse,
-  isIdle,
-  isPending,
-  isResolved,
-  isRejected,
-}) as never;
+  ...helpers,
+});

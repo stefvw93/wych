@@ -10,15 +10,10 @@
  */
 
 import { Effect, Layer, Schema } from "effect";
-import { Component, StrictMode, useLayoutEffect, useState } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { act } from "react";
-import { afterEach, expect, test, vi } from "vite-plus/test";
+import { act, StrictMode, useLayoutEffect, useState } from "react";
+import { expect, test, vi } from "vite-plus/test";
+import { click, container, ErrorBoundary, mount, text } from "./__fixtures__/dom";
 import { Action, Children, Command, createRuntime, define } from "./lib";
-
-// `act` needs this flag to actually batch; without it React warns and the
-// "one render, not two" assertion below would pass for the wrong reason.
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const { component } = createRuntime(Layer.empty);
 
@@ -64,56 +59,6 @@ const counter = Counter.create({
 });
 
 const CounterView = component(counter, { name: "Counter" });
-
-// ---------------------------------------------------------------------------
-// Harness
-// ---------------------------------------------------------------------------
-
-/** Minimal boundary, so a thrown defect is observable instead of unmounting the tree. */
-class ErrorBoundary extends Component<
-  { readonly children?: React.ReactNode; readonly onError: (error: unknown) => void },
-  { readonly failed: boolean }
-> {
-  override state = { failed: false };
-
-  static getDerivedStateFromError() {
-    return { failed: true };
-  }
-
-  override componentDidCatch(error: unknown) {
-    this.props.onError(error);
-  }
-
-  override render() {
-    return this.state.failed ? null : this.props.children;
-  }
-}
-
-let root: Root | undefined;
-let container: HTMLDivElement | undefined;
-
-const mount = async (element: React.ReactNode) => {
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-  await act(async () => root!.render(element));
-  return container;
-};
-
-afterEach(async () => {
-  if (root) await act(async () => root!.unmount());
-  container?.remove();
-  root = undefined;
-  container = undefined;
-});
-
-const text = (testId: string) =>
-  container?.querySelector(`[data-testid="${testId}"]`)?.textContent ?? "";
-
-const click = async (testId: string) => {
-  const element = container?.querySelector<HTMLButtonElement>(`[data-testid="${testId}"]`);
-  await act(async () => element?.click());
-};
 
 // ---------------------------------------------------------------------------
 
@@ -547,7 +492,7 @@ test("an output dispatched straight from render leaves through its prop", async 
 
   const got: Array<unknown> = [];
   await mount(<EchoView onSent={(payload: { q: string }) => void got.push(payload)} />);
-  await vi.waitFor(() => expect(container?.querySelector('[data-testid="send"]')).not.toBeNull());
+  await vi.waitFor(() => expect(container().querySelector('[data-testid="send"]')).not.toBeNull());
 
   await click("send");
 
@@ -618,7 +563,7 @@ test("a props change costs two renders and one frame, measured", async () => {
   await mount(<Parent />);
   await vi.waitFor(() => expect(text("mirrored")).toBe("1:1"));
 
-  const target = container!.querySelector('[data-testid="mirrored"]')!;
+  const target = container().querySelector('[data-testid="mirrored"]')!;
   const passed: Array<string> = [];
   const observer = new MutationObserver((records) => {
     for (const record of records) {
@@ -643,7 +588,7 @@ test("a props change costs two renders and one frame, measured", async () => {
     const frame = new Promise<string>((resolve) => {
       requestAnimationFrame(() => resolve(text("mirrored")));
     });
-    container!.querySelector<HTMLButtonElement>('[data-testid="bump-step"]')!.click();
+    container().querySelector<HTMLButtonElement>('[data-testid="bump-step"]')!.click();
     expect(await frame).toBe("2:2");
   } finally {
     flags.IS_REACT_ACT_ENVIRONMENT = true;
@@ -848,7 +793,7 @@ test("two mounts of one component each hand their fragments their own snapshot",
   );
 
   const within = (scope: string, testId: string) =>
-    container?.querySelector(`[data-testid="${scope}"] [data-testid="${testId}"]`);
+    container().querySelector(`[data-testid="${scope}"] [data-testid="${testId}"]`);
 
   await vi.waitFor(() => {
     expect(within("a", "inner-step")?.textContent).toBe("1");

@@ -20,12 +20,10 @@
 import { RefreshRuntime } from "./__fixtures__/react-refresh";
 
 import { Layer, Schema } from "effect";
-import { act, Component, type ReactNode } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import { act, type ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vite-plus/test";
+import { click, ErrorBoundary, mount as render, text } from "./__fixtures__/dom";
 import { Action, createRuntime, define } from "./lib";
-
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const { component } = createRuntime(Layer.empty);
 
@@ -48,55 +46,17 @@ const reducer = {
 // Harness
 // ---------------------------------------------------------------------------
 
-class ErrorBoundary extends Component<
-  { readonly children?: ReactNode; readonly onError: (error: unknown) => void },
-  { readonly failed: boolean }
-> {
-  override state = { failed: false };
-
-  static getDerivedStateFromError() {
-    return { failed: true };
-  }
-
-  override componentDidCatch(error: unknown) {
-    this.props.onError(error);
-  }
-
-  override render() {
-    return this.state.failed ? null : this.props.children;
-  }
-}
-
-let root: Root | undefined;
-let container: HTMLDivElement | undefined;
 let errors: Array<unknown> = [];
 
 const mount = async (element: ReactNode) => {
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-  await act(async () =>
-    root!.render(
-      <ErrorBoundary onError={(error) => void errors.push(error)}>{element}</ErrorBoundary>,
-    ),
+  await render(
+    <ErrorBoundary onError={(error) => void errors.push(error)}>{element}</ErrorBoundary>,
   );
 };
 
-afterEach(async () => {
-  if (root) await act(async () => root!.unmount());
-  container?.remove();
-  root = undefined;
-  container = undefined;
+afterEach(() => {
   errors = [];
 });
-
-const text = (testId: string) =>
-  container?.querySelector(`[data-testid="${testId}"]`)?.textContent ?? "";
-
-const click = async (testId: string) => {
-  const element = container?.querySelector<HTMLButtonElement>(`[data-testid="${testId}"]`);
-  await act(async () => element?.click());
-};
 
 /** What Vite does once the saved module has re-run: one refresh pass over every root. */
 const refresh = async () => {

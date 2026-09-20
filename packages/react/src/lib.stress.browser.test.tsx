@@ -7,34 +7,18 @@
  * `lib.specs.md` "Performance and resilience" with a machine caveat.
  */
 import { Effect, Schema } from "effect";
-import { act, Component, Profiler, StrictMode, Suspense, useState, useTransition } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import { Component, Profiler, StrictMode, Suspense, useState, useTransition } from "react";
 import { afterEach, expect, test, vi } from "vite-plus/test";
-import { createRecorder, devtoolsLayer, type DevtoolsEvent } from "./devtools";
+import { query } from "./__fixtures__/devtools";
+import { click, container, mount, unmount } from "./__fixtures__/dom";
+import { contexts, MiB } from "./__fixtures__/probe";
+import { createRecorder, devtoolsLayer } from "./devtools";
 import { Action, createRuntime, define, Subscription } from "./lib";
-
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
-const MiB = 1024 * 1024;
 
 const recorder = createRecorder();
 const runtime = createRuntime(devtoolsLayer(recorder.sink));
 const { component } = runtime;
-
-const tagged = <Tag extends DevtoolsEvent["_tag"]>(tag: Tag) =>
-  recorder.events.filter((event): event is Extract<DevtoolsEvent, { _tag: Tag }> => {
-    return event._tag === tag;
-  });
-const transitions = (actionTag: string) =>
-  tagged("Transition").filter((event) => event.action._tag === actionTag);
-
-/** The `useFeature` context registry size, off the runtime's internals slot. */
-const contexts = (): number => {
-  const slot = Object.getOwnPropertySymbols(runtime).find(
-    (symbol) => symbol.description === "@wych/internals",
-  )!;
-  return (runtime as unknown as Record<symbol, { contexts: () => number }>)[slot]!.contexts();
-};
+const { tagged, transitions } = query(recorder);
 
 /** Chromium with `--enable-precise-memory-info`; absent elsewhere. */
 const heapUsed = (): number | undefined =>
@@ -102,33 +86,12 @@ const LoudPresence = component(presence(true), { name: "StressLoudPresence" });
 // Harness
 // ---------------------------------------------------------------------------
 
-let root: Root | undefined;
-let container: HTMLDivElement | undefined;
-
-const mount = async (element: React.ReactNode) => {
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-  await act(async () => root!.render(element));
-  return container;
-};
-
-const unmount = async () => {
-  if (root) await act(async () => root!.unmount());
-  container?.remove();
-  root = undefined;
-  container = undefined;
-};
-
+// Unmount first, so the `Unmounted` events land before the clear: vitest runs
+// after hooks in reverse order, and the fixture registered its own first.
 afterEach(async () => {
   await unmount();
   recorder.clear();
 });
-
-const click = async (testId: string) => {
-  const element = container?.querySelector<HTMLButtonElement>(`[data-testid="${testId}"]`);
-  await act(async () => element?.click());
-};
 
 type Commit = { readonly phase: string; readonly actualDuration: number };
 
@@ -178,7 +141,7 @@ test("a feature rendered with a key passes props validation", async () => {
     </Boundary>,
   );
   expect(thrown).toBeUndefined();
-  expect(container!.querySelectorAll("button")).toHaveLength(3);
+  expect(container().querySelectorAll("button")).toHaveLength(3);
 });
 
 // ---------------------------------------------------------------------------
@@ -196,16 +159,16 @@ test("250 sibling features mount in one commit, paint, and unmount clean", async
 
   // One commit for the tree; `useSyncExternalStore` may schedule one catch-up.
   expect(commits.length).toBeLessThanOrEqual(2);
-  expect(container!.querySelectorAll("button")).toHaveLength(n);
-  expect(container!.querySelector('[data-testid="c249"]')!.textContent).toBe("0");
+  expect(container().querySelectorAll("button")).toHaveLength(n);
+  expect(container().querySelector('[data-testid="c249"]')!.textContent).toBe("0");
   await vi.waitFor(() => expect(transitions("Mounted")).toHaveLength(n));
 
   // A dispatch in one child is one commit, and repaints only that child.
   commits.length = 0;
   await click("c7");
   expect(commits.length).toBeLessThanOrEqual(2);
-  expect(container!.querySelector('[data-testid="c7"]')!.textContent).toBe("1");
-  expect(container!.querySelector('[data-testid="c8"]')!.textContent).toBe("0");
+  expect(container().querySelector('[data-testid="c7"]')!.textContent).toBe("1");
+  expect(container().querySelector('[data-testid="c8"]')!.textContent).toBe("0");
 
   console.info(
     `[stress] 250 siblings: mount ${wall.toFixed(1)}ms wall, ${sum(commits).toFixed(1)}ms in the dispatch commit`,
@@ -225,7 +188,7 @@ test("1000 sibling features: a probe, reported not gated", async () => {
   await mount(profiled(grid, commits));
   const wall = performance.now() - started;
 
-  expect(container!.querySelectorAll("button")).toHaveLength(n);
+  expect(container().querySelectorAll("button")).toHaveLength(n);
   await vi.waitFor(() => expect(transitions("Mounted")).toHaveLength(n));
   console.info(
     `[stress] 1000 siblings: mount ${wall.toFixed(1)}ms wall, ${sum(commits).toFixed(1)}ms render across ${commits.length} commit(s)`,
@@ -261,7 +224,7 @@ test("2000 mount/unmount cycles under three names keep three contexts and a flat
   const cycles = 2000;
   const rounds = 8;
   const perRound = cycles / rounds;
-  const before = contexts();
+  const before = contexts(runtime);
   let mounted = 0;
   let unmounted = 0;
   const heap: Array<number> = [];
@@ -295,7 +258,7 @@ test("2000 mount/unmount cycles under three names keep three contexts and a flat
   expect(mounted).toBe(3 * cycles);
   expect(unmounted).toBe(3 * cycles);
   // `component()` made the contexts, before the loop; mounting makes none.
-  expect(contexts()).toBe(before);
+  expect(contexts(runtime)).toBe(before);
 
   if (heap.length === rounds) {
     const tail = heap.slice(-5);
@@ -364,7 +327,7 @@ test("50 abandoned transitions held 50ms with an emitting subscription never sta
     await new Promise((resolve) => setTimeout(resolve, 50));
     await click("to-a");
     await vi.waitFor(() =>
-      expect(container!.querySelector('[data-testid="room"]')!.textContent).toBe("a"),
+      expect(container().querySelector('[data-testid="room"]')!.textContent).toBe("a"),
     );
     fewestTicks = Math.min(fewestTicks, ticks() - before);
   }
@@ -372,7 +335,7 @@ test("50 abandoned transitions held 50ms with an emitting subscription never sta
   console.info(
     `[stress] abandoned transitions: room:b starts ${startsOfB()}, fewest ticks through a hold ${fewestTicks}`,
   );
-  expect(container!.querySelector('[data-testid="room"]')!.textContent).toBe("a");
+  expect(container().querySelector('[data-testid="room"]')!.textContent).toBe("a");
   expect(tagged("Defect")).toHaveLength(0);
   // The discarded key never starts, the committed key is never interrupted,
   // and its feed kept emitting through every hold.

@@ -105,7 +105,7 @@ that describe what it yields, and the operation's `run` takes the input. Omit
 it and the operation's `run` takes the effect, for work that genuinely differs
 per call site; its `R` then flows to `ServicesOf` from the call. A bound
 `run` that takes no input pins `Input` to `void` through its own constructor
-overloads, so the call is `op.run()`; inferred through the generic form a
+overload, so the call is `op.run()`; inferred through the generic form a
 zero-parameter function would give `Input` no candidate, collapse to `never`,
 and read as unbound.
 

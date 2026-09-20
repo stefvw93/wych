@@ -12,16 +12,16 @@
  */
 
 import { Effect, Schema } from "effect";
-import { act, StrictMode, useState } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import { StrictMode, useState, type ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vite-plus/test";
-import { createRecorder, devtoolsLayer, type DevtoolsEvent } from "./devtools";
+import { query } from "./__fixtures__/devtools";
+import { click, mount as render, text, unmount } from "./__fixtures__/dom";
+import { createRecorder, devtoolsLayer } from "./devtools";
 import { Action, Command, createRuntime, define } from "./lib";
-
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const recorder = createRecorder();
 const { component } = createRuntime(devtoolsLayer(recorder.sink));
+const { tagged } = query(recorder);
 
 // ---------------------------------------------------------------------------
 // A feature that does one of each: folds on props, runs a command, emits an
@@ -71,40 +71,17 @@ const CounterView = component(counter, { name: "counter" });
 // Harness
 // ---------------------------------------------------------------------------
 
-let root: Root | undefined;
-let container: HTMLDivElement | undefined;
-
-const mount = async (element: React.ReactNode) => {
+const mount = (element: ReactNode) => {
   recorder.clear();
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-  await act(async () => root!.render(element));
-  return container;
+  return render(element);
 };
 
+// Unmount first, so the `Unmounted` events land before the clear: vitest runs
+// after hooks in reverse order, and the fixture registered its own first.
 afterEach(async () => {
-  if (root) await act(async () => root!.unmount());
-  container?.remove();
-  root = undefined;
-  container = undefined;
+  await unmount();
   recorder.clear();
 });
-
-const text = (testId: string) =>
-  container?.querySelector(`[data-testid="${testId}"]`)?.textContent ?? "";
-
-const click = async (testId: string) => {
-  const element = container?.querySelector<HTMLButtonElement>(`[data-testid="${testId}"]`);
-  await act(async () => element?.click());
-};
-
-const tagged = <T extends DevtoolsEvent["_tag"]>(
-  tag: T,
-): ReadonlyArray<Extract<DevtoolsEvent, { readonly _tag: T }>> =>
-  recorder.events.filter(
-    (event): event is Extract<DevtoolsEvent, { readonly _tag: T }> => event._tag === tag,
-  );
 
 // ---------------------------------------------------------------------------
 
@@ -242,8 +219,7 @@ test("unmounting reports `Unmounted` and stops reporting", async () => {
   await vi.waitFor(() => expect(text("count")).toBe("1"));
   recorder.clear();
 
-  await act(async () => root!.unmount());
-  root = undefined;
+  await unmount();
 
   const unmounted = tagged("Transition").filter((event) => event.action._tag === "Unmounted");
   expect(unmounted).toHaveLength(1);

@@ -605,7 +605,9 @@ Two on-demand Vitest projects, outside `vpr -r test`. The `bench` project
 (`src/**/*.bench.test.ts`) runs tinybench through Vitest bench mode; the `stress`
 and `stress-browser` projects (`src/**/*.stress.test.ts`,
 `src/**/*.stress.browser.test.tsx`) hold the load, chaos, leak and property
-tests. Fixtures and probes are in `src/__fixtures__/stress.ts`.
+tests. Fixtures are in `src/__fixtures__/`: `probe.ts` (the internals
+probes, browser-safe), `devtools.ts` (recorder queries), `dom.tsx` (the
+browser harness) and `stress.ts` (node-only helpers, re-exporting `probe.ts`).
 
 ### How to run
 
@@ -671,10 +673,13 @@ What the numbers say:
 
 - A fold is 0.2 µs. A live recorder sink adds nothing measurable; the console
   logger costs 0.7 µs per event on a silent console, with or without `diff`.
-- A command leaf costs about 20 µs to fork and settle: two fibers (the leaf and
-  its `Fiber.await` watcher) plus a `Settled` queue item. A batch scales
-  linearly at 7 µs per extra leaf. `restart` is 14 µs per dispatch, the
-  awaited interrupt included.
+- A command leaf costs about 20 µs to fork and settle: one fiber, an exit
+  observer attached with `fiber.addObserver`, and a `Settled` queue item. A
+  batch scales linearly at 7 µs per extra leaf. `restart` is 14 µs per
+  dispatch, the awaited interrupt included. (Measured with the earlier
+  `Fiber.await` watcher fiber per leaf; the observer form measured 1.04x on
+  one leaf, 1.8x on a batch of 100 and 1.56x on 100 restarts against a
+  same-session baseline, 2026-09-20.)
 - `Feature.run` pays 2.5 µs per seeded action for its `Effect.yieldNow`, and
   13 µs per action that emits once.
 - Props validation and equivalence are linear in field count, about 0.1 µs per
@@ -734,9 +739,10 @@ defect is `it.fails` with a `HINT` above it naming the spec entry.
 **Deep async churn**
 
 - 10k `restart` dispatches into one key: at most one live fiber at any
-  sample, book empty after `cancel`, no defect. Interrupted fibers stay
-  booked until their watcher's cleanup runs, so the book can hold many exited
-  fibers mid-batch; `live` is the number that matters.
+  sample, book empty after `cancel`, no defect. A fiber is unbooked by its
+  exit observer, synchronously, so `fibers` and `live` agree unless an
+  interrupt is deferred by an uninterruptible region; `live` is the number
+  that matters.
 - 1k restarts whose cancelled leaf has a 1 ms finalizer finish under 3 ms per
   cycle: the `Cancel` awaits each finalizer on the mount loop.
 - `stop()` with 100 commands in flight drains them, runs the `Unmounted`
@@ -804,9 +810,11 @@ excess property at ["key"]` in dev and worked in production. Fixed:
   the design is under Deferred decisions, `store.sync` folding during
   render, executed.
 - **A subscription that died before its key was booked was never reported**,
-  in the store and in `run`. Fixed: the forked body books its own fiber before
-  `sub.effect` runs. Asserted by `subscriptions.stress.test.ts`; criterion in
-  `subscriptions.specs.md` under Failure.
+  in the store and in `run`. Fixed first by having the forked body book its
+  own fiber; now the book books the fiber and then attaches an exit observer,
+  and an observer attached after the exit fires at attach
+  (`lib.probe.test.ts`). Asserted by `subscriptions.stress.test.ts`;
+  criterion in `subscriptions.specs.md` under Failure.
 - A subscription that died and is later undeclared reports a second
   `SubscriptionStopped`, reason `Undeclared`. Kept: the events describe the
   declared set. Noted in `subscriptions.specs.md` Expected Behavior.

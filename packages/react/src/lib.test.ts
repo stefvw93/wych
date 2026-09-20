@@ -30,6 +30,7 @@ import {
   type DevtoolsSink,
 } from "./devtools";
 import { createElement, type ReactNode } from "react";
+import { probe } from "./__fixtures__/stress";
 import { Action, Children, Command, createFeatureStore, define, Next, Subscription } from "./lib";
 
 // ---------------------------------------------------------------------------
@@ -2121,6 +2122,45 @@ describe("createFeatureStore — review iteration 2 regressions", () => {
 
     // Second mount fails the same way rather than silently doing nothing.
     expect(defects).toHaveLength(2);
+  });
+
+  it("a stale mount's layer failure after a remount does not mark the live mount dead", async () => {
+    // The first layer fails only after the component has remounted on top
+    // of it (StrictMode's stop/start while the layer is still building). The
+    // mount it belonged to is gone, so the failure is reported and nothing
+    // else: the live mount stays live and keeps its declared set.
+    let builds = 0;
+    const flaky = Layer.effectDiscard(
+      Effect.suspend(() => {
+        builds += 1;
+        return builds === 1
+          ? Effect.sleep("20 millis").pipe(Effect.andThen(Effect.fail("nope")))
+          : Effect.void;
+      }),
+    );
+    const ran: Array<string> = [];
+    const { store, defects } = make(
+      {
+        Step: (_a: unknown, s: any) => [
+          s.state,
+          Command.effect(() => Effect.sync(() => void ran.push("step"))),
+        ],
+      },
+      flaky as unknown as Layer.Layer<any, any, any>,
+    );
+
+    store.start();
+    store.stop();
+    store.start();
+    await Effect.runPromise(Effect.sleep("50 millis"));
+
+    expect(defects).toHaveLength(1);
+    expect(probe(store)).toMatchObject({ mounted: true, active: true, dead: false });
+
+    store.dispatch({ _tag: "Step" } as never);
+    await Effect.runPromise(Effect.sleep("20 millis"));
+    expect(ran).toEqual(["step"]);
+    store.stop();
   });
 
   it("completes a multi-hop teardown chain", async () => {

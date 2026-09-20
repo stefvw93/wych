@@ -10,16 +10,16 @@
  */
 
 import { Effect, Schema } from "effect";
-import { act, StrictMode, Suspense, useState, useTransition } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import { StrictMode, Suspense, useState, useTransition, type ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vite-plus/test";
+import { query } from "./__fixtures__/devtools";
+import { click, container, flush, mount as render, text, unmount } from "./__fixtures__/dom";
 import { createRecorder, devtoolsLayer, type DevtoolsEvent } from "./devtools";
 import { Action, Command, createRuntime, define, Subscription } from "./lib";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const recorder = createRecorder();
 const { component } = createRuntime(devtoolsLayer(recorder.sink));
+const { tagged, transitions } = query(recorder);
 
 // ---------------------------------------------------------------------------
 // A presence feed keyed on the room prop. The subscription logs when its body
@@ -86,51 +86,18 @@ const QuietPresenceView = make("QuietPresence", false);
 // Harness
 // ---------------------------------------------------------------------------
 
-let root: Root | undefined;
-let container: HTMLDivElement | undefined;
-
-const mount = async (element: React.ReactNode) => {
+const mount = (element: ReactNode) => {
   recorder.clear();
   log = [];
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-  await act(async () => root!.render(element));
-  return container;
+  return render(element);
 };
 
+// Unmount first, so the `Unmounted` events land before the clear: vitest runs
+// after hooks in reverse order, and the fixture registered its own first.
 afterEach(async () => {
-  if (root) await act(async () => root!.unmount());
-  container?.remove();
-  root = undefined;
-  container = undefined;
+  await unmount();
   recorder.clear();
 });
-
-const text = (testId: string) =>
-  container?.querySelector(`[data-testid="${testId}"]`)?.textContent ?? "";
-
-const click = async (testId: string) => {
-  const element = container?.querySelector<HTMLButtonElement>(`[data-testid="${testId}"]`);
-  await act(async () => element?.click());
-};
-
-/**
- * Let the subscription fibers a mount or a click started run, inside `act`:
- * a fork lands on the scheduler after the `act` that caused it resolves, so
- * the `Tick` it dispatches would otherwise update React outside `act`.
- */
-const flush = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 30)));
-
-const tagged = <T extends DevtoolsEvent["_tag"]>(
-  tag: T,
-): ReadonlyArray<Extract<DevtoolsEvent, { readonly _tag: T }>> =>
-  recorder.events.filter(
-    (event): event is Extract<DevtoolsEvent, { readonly _tag: T }> => event._tag === tag,
-  );
-
-const transitions = (actionTag: string) =>
-  tagged("Transition").filter((event) => event.action._tag === actionTag);
 
 /** Position of the first event matching `pick` in the recorder, or -1. */
 const indexOf = (pick: (event: DevtoolsEvent) => boolean): number =>
@@ -193,8 +160,7 @@ test("unmount stops the subscription and lets a pending command finish", async (
   expect(text("seen")).toBe("a");
 
   await click("go");
-  await act(async () => root!.unmount());
-  root = undefined;
+  await unmount();
 
   // The subscription is gone before the `Unmounted` transition is reported;
   // the command it left behind still finishes, and what it emits folds into
@@ -281,7 +247,7 @@ test("a discarded render never declares its subscription", async () => {
   // and the store never heard of `b`.
   expect(live()).toEqual(["room:a"]);
   expect(text("room")).toBe("a");
-  expect(container?.querySelector('[data-testid="fallback"]')).toBeNull();
+  expect(container().querySelector('[data-testid="fallback"]')).toBeNull();
   expect(transitions("PropsChanged")).toHaveLength(0);
 
   await click("to-a");

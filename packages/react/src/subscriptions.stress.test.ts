@@ -7,6 +7,7 @@
 import { Effect, Layer, ManagedRuntime, Schema, Stream } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 import {
+  MiB,
   alive,
   at,
   Declare,
@@ -27,8 +28,6 @@ import {
 } from "./__fixtures__/stress";
 import { devtoolsLayer, type DevtoolsEvent, type DevtoolsSink } from "./devtools";
 import { Action, createFeatureStore, define, Subscription } from "./lib";
-
-const MiB = 1024 * 1024;
 
 /** A listener that only holds. */
 const holding = presence(() => Effect.never);

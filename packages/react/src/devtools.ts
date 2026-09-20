@@ -259,27 +259,25 @@ export const summarizeDefect = (error: unknown): DefectSummary => {
   }
 };
 
-/** One property read, defused. Absent and unreadable collapse to the same thing. */
-const field = (source: object, key: "message" | "name" | "stack"): unknown => {
+/** `thunk()`, or `fallback` when it throws. The one shape every defused read has. */
+const defused = <T>(thunk: () => T, fallback: T): T => {
   try {
-    return (source as Record<string, unknown>)[key];
+    return thunk();
   } catch {
-    return undefined;
+    return fallback;
   }
 };
+
+/** One property read, defused. Absent and unreadable collapse to the same thing. */
+const field = (source: object, key: "message" | "name" | "stack"): unknown =>
+  defused(() => (source as Record<string, unknown>)[key], undefined);
 
 /**
  * `String(value)`, defused: a user-written `toString` or `Symbol.toPrimitive`
  * can throw for any reason at all. (`String()` handles symbols itself — only
  * implicit conversion throws on them.)
  */
-const stringify = (value: unknown): string => {
-  try {
-    return String(value);
-  } catch {
-    return "<unprintable>";
-  }
-};
+const stringify = (value: unknown): string => defused(() => String(value), "<unprintable>");
 
 // ---------------------------------------------------------------------------
 // The sink service
@@ -491,23 +489,52 @@ export const createConsoleDevtools = (options: ConsoleDevtoolsOptions = {}): Dev
 
   // The defused report for the sink's own failures. If the console itself is
   // broken too, there is nothing left to report with.
-  const reportError = (label: string, error: unknown): void => {
-    try {
-      output.error(`%c${label}`, palette.defect, error);
-    } catch {
-      // Nothing left to report it with.
+  const reportError = (label: string, error: unknown): void =>
+    defused(() => output.error(`%c${label}`, palette.defect, error), undefined);
+
+  /** `  @ 12:34:56.789  (+412ms)`, and the clock advanced; `""` with timestamps off. */
+  const stamp = (key: string): string => {
+    if (!timestamps) return "";
+    const now = performance.now();
+    const previous = lastSeen.get(key);
+    lastSeen.set(key, now);
+    return `  @ ${clock()}${previous === undefined ? "" : `  (+${Math.round(now - previous)}ms)`}`;
+  };
+
+  const print = (event: DevtoolsEvent, key: string): void => {
+    if (event._tag === "SubscriptionStarted" || event._tag === "SubscriptionStopped") {
+      output.log(`%c${headline(event)}`, palette.subscription);
+      return;
     }
+
+    // Called through `output` so unbound console methods keep their receiver.
+    const line = `%c${headline(event)}${stamp(key)}`;
+    if (collapsed) output.groupCollapsed(line, palette.header);
+    else output.group(line, palette.header);
+
+    // `finally` keeps the group balanced; the `catch` keeps the sink alive.
+    // Printing reads user state, so a throw here is a property of one value,
+    // not of the sink — escaping would reach the store's disable-on-throw
+    // rule and take devtools dark for the page. Reported through `error`
+    // rather than swallowed, so a genuine logger bug stays visible.
+    try {
+      body(event, { output, palette, diff });
+    } catch (error) {
+      reportError("devtools could not print this event", error);
+    } finally {
+      output.groupEnd();
+    }
+
+    // Bounded: a mount whose fiber died never folds `Unmounted`, so a page
+    // churning through such mounts would grow this map without limit.
+    // Clearing wholesale only costs the next event per mount its elapsed
+    // figure.
+    if (lastSeen.size > 512) lastSeen.clear();
   };
 
   return {
     onEvent: (event) => {
       const key = `${event.name}#${event.instance}`;
-      // Both terminal events a `stop()` emits: the `Unmounted` transition and
-      // the teardown command that follows it. The command must evict too, or
-      // it re-inserts the entry the transition just removed.
-      const unmounting =
-        (event._tag === "Transition" && event.action._tag === "Unmounted") ||
-        (event._tag === "Command" && event.group === "Unmounted");
 
       // The predicate is user code reading user state, so a throw is a
       // property of one value, not of the sink. Escaping would reach the
@@ -520,57 +547,28 @@ export const createConsoleDevtools = (options: ConsoleDevtoolsOptions = {}): Dev
         reportError("devtools predicate threw", error);
       }
 
-      if (!keep) {
-        // Still forget the mount. A custom predicate that filtered `Unmounted`
-        // would otherwise leak one map entry per mount for the life of the
-        // page — a leak in the tool installed to find leaks.
-        if (unmounting) lastSeen.delete(key);
-        return;
+      if (keep) print(event, key);
+
+      // Forget the mount on both terminal events a `stop()` emits: the
+      // `Unmounted` transition and the teardown command that follows it. The
+      // command must evict too, or it re-inserts the entry the transition just
+      // removed. After the print, so the transition still shows its elapsed
+      // figure; whether or not the predicate kept the event, or a custom
+      // predicate that filtered `Unmounted` would leak one entry per mount for
+      // the life of the page — a leak in the tool installed to find leaks.
+      if (
+        (event._tag === "Transition" && event.action._tag === "Unmounted") ||
+        (event._tag === "Command" && event.group === "Unmounted")
+      ) {
+        lastSeen.delete(key);
       }
-
-      if (event._tag === "SubscriptionStarted" || event._tag === "SubscriptionStopped") {
-        output.log(`%c${headline(event)}`, palette.subscription);
-        return;
-      }
-
-      const now = timestamps ? performance.now() : undefined;
-      const previous = now === undefined ? undefined : lastSeen.get(key);
-      if (now !== undefined) lastSeen.set(key, now);
-
-      const stamp =
-        now === undefined
-          ? ""
-          : `  @ ${clock()}${previous === undefined ? "" : `  (+${Math.round(now - previous)}ms)`}`;
-
-      // Called through `output` so unbound console methods keep their receiver.
-      const line = `%c${headline(event)}${stamp}`;
-      if (collapsed) output.groupCollapsed(line, palette.header);
-      else output.group(line, palette.header);
-
-      // `finally` keeps the group balanced; the `catch` keeps the sink alive.
-      // Printing reads user state, so a throw here is a property of one value,
-      // not of the sink — escaping would reach the store's disable-on-throw
-      // rule and take devtools dark for the page. Reported through `error`
-      // rather than swallowed, so a genuine logger bug stays visible.
-      try {
-        body(event, { output, palette, diff });
-      } catch (error) {
-        reportError("devtools could not print this event", error);
-      } finally {
-        output.groupEnd();
-        if (unmounting) lastSeen.delete(key);
-      }
-
-      // Bounded: a mount whose fiber died never folds `Unmounted`, so a page
-      // churning through such mounts would grow this map without limit.
-      // Clearing wholesale only costs the next event per mount its elapsed
-      // figure.
-      if (lastSeen.size > 512) lastSeen.clear();
     },
   };
 };
 
-const defaultColors: Required<DevtoolsColors> & { readonly header: string } = {
+type Palette = Required<DevtoolsColors> & { readonly header: string };
+
+const defaultColors: Palette = {
   header: "color: inherit; font-weight: bold",
   previous: "color: #9E9E9E; font-weight: bold",
   action: "color: #03A9F4; font-weight: bold",
@@ -614,47 +612,41 @@ const headline = (event: DevtoolsEvent): string => {
   }
 };
 
+/** The events that open a group. The two subscription lines are printed whole by `print`. */
+type GroupedEvent = Exclude<DevtoolsEvent, { readonly _tag: `Subscription${string}` }>;
+
+/** The lines under a group: the event's own, then its cause, then the diff. */
 const body = (
-  event: DevtoolsEvent,
+  event: GroupedEvent,
   context: {
     readonly output: DevtoolsConsole;
-    readonly palette: Required<DevtoolsColors> & { readonly header: string };
+    readonly palette: Palette;
     readonly diff: boolean;
   },
 ): void => {
   const { output, palette } = context;
   switch (event._tag) {
-    case "Transition": {
+    case "Transition":
       output.log("%cprev state  ", palette.previous, event.previous);
       output.log("%caction      ", palette.action, event.action);
       output.log("%cnext state  ", palette.next, event.next);
-      output.log("%ccause       ", palette.header, event.cause);
-      if (context.diff) printDiff(event.previous, event.next, output, palette);
-      return;
-    }
-    case "Command": {
+      break;
+    case "Command":
       output.log("%ccommand     ", palette.command, formatCommand(event.command));
       output.log("%cgroup       ", palette.command, event.group);
-      output.log("%ccause       ", palette.header, event.cause);
-      return;
-    }
-    case "Output": {
+      break;
+    case "Output":
       output.log("%coutput      ", palette.output, event.output);
-      output.log("%ccause       ", palette.header, event.cause);
-      return;
-    }
-    case "Defect": {
+      break;
+    case "Defect":
       // `error`, not `log`: a defect belongs in the console's error channel,
       // where a filter set to errors-only still shows it.
       output.error("%cdefect      ", palette.defect, event.defect);
-      output.log("%ccause       ", palette.header, event.cause);
-      return;
-    }
-    case "SubscriptionStarted":
-    case "SubscriptionStopped":
-      // Never grouped: `onEvent` prints these as one line and returns before
-      // opening a group. Listed so the switch stays exhaustive.
-      return;
+      break;
+  }
+  output.log("%ccause       ", palette.header, event.cause);
+  if (context.diff && event._tag === "Transition") {
+    printDiff(event.previous, event.next, output, palette);
   }
 };
 
@@ -670,7 +662,7 @@ const printDiff = (
   previous: unknown,
   next: unknown,
   output: DevtoolsConsole,
-  palette: Required<DevtoolsColors> & { readonly header: string },
+  palette: Palette,
 ): void => {
   if (!isRecord(previous) || !isRecord(next)) return;
 
