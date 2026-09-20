@@ -343,7 +343,7 @@ cases under Browser coverage are green under
 - [x] A subscription that dies reports one `Defect` (`from` = key, `handled` on the store's rule), folds `Error` when handled with `from` = key, then reports `SubscriptionStopped { reason: "Died" }`. (`createFeatureStore` + recorder)
 - [x] A died key still declared on the next fold is not restarted. (`createFeatureStore`)
 - [x] A died key that leaves the declared set and returns restarts. (`createFeatureStore`)
-- [x] A subscription that dies before the mount fiber's booking statement runs is still reported. `forkChild` schedules the body on the dispatcher, and the scheduler's op budget can yield the mount fiber between the fork and its booking; the body books its own fiber before `sub.effect` runs, so a death there finds the key booked. The mount fiber books it too, for a fiber stopped before its body ran. Holds for the store and for `run`, across a 500- and 1000-key declaration. (`subscriptions.stress.test.ts`)
+- [x] A subscription that dies before the mount fiber's booking statement runs is still reported. `forkChild` schedules the body on the dispatcher, and the scheduler's op budget can yield the mount fiber between the fork and its booking; the book books the fiber first and then attaches its exit observer, and an observer attached after the fiber has exited fires at attach (`lib.probe.test.ts` P2), so the death is reported against a booked key. Holds for the store and for `run`, across a 500- and 1000-key declaration. (`subscriptions.stress.test.ts`)
 - [x] `Command.cancel(key)` for a running subscription's key interrupts nothing: the subscription keeps emitting. (`createFeatureStore`)
 - [x] A command group and a subscription key with the same name coexist: `cancel(name)` interrupts the command and leaves the subscription running. (`createFeatureStore`)
 
@@ -404,20 +404,22 @@ deliberate; each is marked **deviation**.
   The loop interprets it as `Fiber.interruptAll` over the stopped entries
   (awaited, so a fiber cannot emit after its key is gone), then one fork per
   start.
-- **`forkSubscription(key, subscription)`** mirrors `forkLeaf` minus the
-  `inFlight` increment and the group booking: `Effect.forkChild` of
-  `Effect.suspend(() => subscription.effect((a) => fold(a, { _tag: "Subscription", key })))`.
-  **Deviation:** the exit is observed by `Effect.onExit` inside the fiber's
-  own body, not by a forked `Fiber.await` watcher. Under `run` nothing counts
-  a subscription as in flight, so a death has to queue its `Error` before the
-  fiber completes, or the drain loop reaches quiescence between the death and
-  the fold; `onExit` runs before the fiber is done, a watcher runs after. The
-  store uses the same shape for symmetry. A fiber interrupted before it
-  starts never runs the body and has nothing to report, which is the case the
-  watcher existed for. `onExit` guards on the book still holding this fiber,
-  so a fiber that died as its key was being stopped does not report after its
-  `Undeclared`/`Unmounted`; then `raiseDefect` on a non-interrupt failure and
-  `SubscriptionStopped` with `Died` or `Completed`.
+- **`subscriptionBook(deps)`**, one module beside `commandInterpreter`, owns
+  the fiber map for the store and for `run`; the two differ only in its deps,
+  where an emission goes (`fold` with `{ _tag: "Subscription", key }`, or the
+  `run` queue) and what a death does. `fork(key, subscription)` mirrors
+  `forkLeaf` minus the group booking: `Effect.forkChild` of
+  `Effect.suspend(() => subscription.effect(…))`, then the booking, then
+  `fiber.addObserver`. The observer fires synchronously inside a pre-start
+  interrupt, at attach when the fiber has already exited, and once after a
+  deferred interrupt (`lib.probe.test.ts`), so a death between the fork and
+  the booking is reported against a booked key and nothing counts a
+  subscription as in flight. The observer reports only while the book still
+  holds this fiber under the key, so a fiber that died as its key was being
+  stopped does not report after its `Undeclared`/`Unmounted`; then
+  `raiseDefect` on a non-interrupt failure and `SubscriptionStopped` with
+  `Died` or `Completed`. `diffDeclared(previous, next)` is the pure diff both
+  reconciles call.
 - **`reconcile(from: string, cause: DevtoolsCause)`** on the store: returns
   early when the feature has no hook; when there is no live mount it returns
   too, except for the re-arm case below; otherwise evaluates
