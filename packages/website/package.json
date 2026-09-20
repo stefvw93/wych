@@ -4,13 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "pnpm --filter @wych/react build && next build",
-    "start": "next start",
-    "test": "vp test"
+    "build": "vp run @wych/react#build && next build",
+    "start": "next start"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
-    "@effect/opentelemetry": "4.0.0-rc.112",
+    "@effect/opentelemetry": "4.0.0-rc.116",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/resources": "^2.11.0",
     "@opentelemetry/semantic-conventions": "^1.43.0",
@@ -21,7 +20,7 @@
     "@wych/react": "workspace:^",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "effect": "^4.0.0-rc.112",
+    "effect": "^4.0.0-rc.116",
     "gray-matter": "^4.0.3",
     "marked": "^18.0.11",
     "minisearch": "^7.2.0",

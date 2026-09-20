@@ -24,9 +24,6 @@
     "access": "public"
   },
   "scripts": {
-    "build": "vp pack",
-    "dev": "vp pack --watch",
-    "test": "vp test --project node --project browser --project docs",
     "check": "vp check && vp run test:types",
     "prepublishOnly": "vp run build"
   },
@@ -44,7 +41,7 @@
   "peerDependencies": {
     "@types/react": "^18.3 || ^19",
     "@types/react-dom": "^18.3 || ^19",
-    "effect": "^4.0.0-rc",
+    "effect": "^4.0.0-rc.116",
     "react": "^18.3 || ^19",
     "react-dom": "^18.3 || ^19"
   }

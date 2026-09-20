@@ -763,7 +763,7 @@ defect is `it.fails` with a `HINT` above it naming the spec entry.
 - Pinned, `it.fails`: a hung uninterruptible finalizer on `Cancel` stalls the
   next command (Known limitations); `run` never resolves with a
   never-completing command in flight (Known limitations).
-- Property tests (`lib.differential.stress.test.ts`, `FastCheck`, 200 runs):
+- Property tests (`lib.differential.stress.test.ts`, `Arbitrary` from `effect/unstable/arbitrary`, 200 runs):
   `run` and a hand-driven store agree on final state and emission order for
   sequences of commands that complete before the next action; after any
   sequence including `restart` and `cancel` the books are empty and the log

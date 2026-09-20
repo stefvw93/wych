@@ -10,7 +10,7 @@
   "dependencies": {
     "@tanstack/react-query": "^5.102.8",
     "@wych/react": "workspace:^",
-    "effect": "^4.0.0-rc.112",
+    "effect": "^4.0.0-rc.116",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

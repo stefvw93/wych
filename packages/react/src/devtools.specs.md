@@ -41,10 +41,16 @@ cached context, and the sink shape is a plain synchronous function.
 7. **No timestamp on the event.** The sink is called synchronously at the
    emission point, so emit-time and receive-time are the same instant.
 
-### Verified against the installed `effect@4.0.0-beta.102`
+### Verified against the installed `effect`
 
 The design leans on all four of these, so each was probed against the installed
-dist rather than assumed:
+dist rather than assumed. The `d.ts` line numbers are from the original probe
+and drift with every release. What holds them now: the reference and identity
+claims are pinned by `devtools.test.ts` ("the Devtools reference"), the
+sync-layer `cachedContext` capture by `lib.test.ts` ("emits the `Mounted`
+transition from `start`"), and the `Layer<never>` claim by
+`__type-tests__/devtools.tst.ts`. The async-layer blind window is a documented
+limitation, not a test.
 
 | Claim                                                                                                                | Result                                                                                                                                                                                         |
 | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -376,7 +382,7 @@ Elapsed uses `performance.now()` in a `Map` keyed by `${name}#${instance}`.
 
 ## Dependencies & Integrations
 
-- `effect@4.0.0-beta.102` — `Context.Reference`, `Context.getReferenceUnsafe`, `Layer.succeed`, `ManagedRuntime.cachedContext`.
+- `effect` (the peer range in `package.json`) — `Context.Reference`, `Context.getReferenceUnsafe`, `Layer.succeed`, `ManagedRuntime.cachedContext`.
 - `src/lib.ts` — type-only import of `Command` and `Group`; the runtime edge goes the other way (`lib → devtools`).
 - `src/index.ts` — `export * from "./devtools"`.
 

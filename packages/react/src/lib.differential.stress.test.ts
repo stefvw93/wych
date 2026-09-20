@@ -1,5 +1,9 @@
 /**
- * Property tests over the runtime, with `FastCheck` from `effect/testing`.
+ * Property tests over the runtime, with `Arbitrary` from
+ * `effect/unstable/arbitrary`. Generators derive from the action schemas, so
+ * a payload bound is a schema check; `check` below runs a property to 200
+ * runs, shrinks the first falsification, and rethrows the failing assertion
+ * with the shrunk input and a replay token in front of it.
  *
  * The differential check drives the same feature two ways, `Feature.run` and
  * a hand-driven `createFeatureStore`, and asserts they agree. The two share
@@ -12,7 +16,7 @@
  * two are driven, not in the runtime.
  */
 import { Effect, Layer, Schema } from "effect";
-import { FastCheck as fc } from "effect/testing";
+import { Arbitrary } from "effect/unstable/arbitrary";
 import { describe, expect, it } from "vite-plus/test";
 import {
   Go,
@@ -34,12 +38,16 @@ import { Action, Command, createFeatureStore, define } from "./lib";
 // The feature under test
 // ---------------------------------------------------------------------------
 
+/** An integer in `[min, max]`: the payload bound is the schema, so `Arbitrary.schema` honours it. */
+const int = (min: number, max: number) =>
+  Schema.Int.check(Schema.isBetween({ minimum: min, maximum: max }));
+
 const Inc = Action("Inc", {});
 const Dec = Action("Dec", {});
-const Echo = Action("Echo", { n: Schema.Number });
+const Echo = Action("Echo", { n: int(0, 99) });
 const Echoed = Action("Echoed", { n: Schema.Number });
 const Twice = Action("Twice", {});
-const Restart = Action("Restart", { k: Schema.Number });
+const Restart = Action("Restart", { k: int(0, 9) });
 const Cancel = Action("Cancel", {});
 
 const State = Schema.Struct({ n: Schema.Number, log: Schema.Array(Schema.Number) });
@@ -80,19 +88,47 @@ const differential = define({
 
 type Msg = { readonly _tag: string; readonly [key: string]: unknown };
 
-const settling = fc.oneof(
-  fc.constant(Inc.make({}) as Msg),
-  fc.constant(Dec.make({}) as Msg),
-  fc.integer({ min: 0, max: 99 }).map((n) => Echo.make({ n }) as Msg),
-  fc.constant(Twice.make({}) as Msg),
-);
+/** Commands that complete before the next action is reduced. */
+const Settling = Schema.Union([Inc, Dec, Echo, Twice]);
 
-const suspending = fc.oneof(
-  fc.integer({ min: 0, max: 9 }).map((k) => Restart.make({ k }) as Msg),
-  fc.constant(Cancel.make({}) as Msg),
-);
+/** Commands that suspend once, and the cancel that can reach them. */
+const Suspending = Schema.Union([Restart, Cancel]);
 
-const sequence = (arb: fc.Arbitrary<Msg>) => fc.array(arb, { maxLength: 50 });
+const settling: Arbitrary.Arbitrary<Msg> = Arbitrary.schema(Settling);
+const any: Arbitrary.Arbitrary<Msg> = Arbitrary.schema(Schema.Union([Settling, Suspending]));
+
+const sequence = (arb: Arbitrary.Arbitrary<Msg>) => Arbitrary.array(arb, { maxLength: 50 });
+
+/**
+ * Run `property` against `runs` generated values. A throwing `expect` is a
+ * typed property failure, so the runner shrinks it; the rethrow carries the
+ * shrunk input and the replay token ahead of the original assertion message.
+ */
+const check = async <A>(
+  arb: Arbitrary.Arbitrary<A>,
+  property: (value: A) => Promise<void>,
+  runs: number,
+): Promise<void> => {
+  const result = await Effect.runPromise(
+    Arbitrary.checkEffect(
+      arb,
+      (value) =>
+        Effect.tryPromise({
+          try: () => property(value).then(() => true),
+          catch: (error) => error,
+        }),
+      { runs },
+    ),
+  );
+  if (result._tag === "Passed") return;
+  const summary = Arbitrary.formatCheckFailure(result) ?? result._tag;
+  if (result._tag === "Falsified" && result.failure._tag === "PropertyError") {
+    const cause = result.failure.error;
+    const message = cause instanceof Error ? cause.message : String(cause);
+    throw new Error(`${summary}\n${message}`, { cause });
+  }
+  throw new Error(summary);
+};
 
 /** Drive the store by hand: start, dispatch each with a settle between, stop. */
 const viaStore = async (actions: ReadonlyArray<Msg>) => {
@@ -125,22 +161,24 @@ const viaRun = (actions: ReadonlyArray<Msg>) =>
 
 describe("differential", () => {
   it("run and the hand-driven store agree on state and emission order for settling commands", async () => {
-    await fc.assert(
-      fc.asyncProperty(sequence(settling), async (actions) => {
+    await check(
+      sequence(settling),
+      async (actions) => {
         const [ran, stored] = await Promise.all([viaRun(actions), viaStore(actions)]);
         expect(stored.state).toEqual(ran.state);
         expect(stored.emitted).toEqual(ran.emitted);
         expect(idle(stored.probe)).toBe(true);
-      }),
-      { numRuns: 200 },
+      },
+      200,
     );
   });
 });
 
 describe("invariants", () => {
   it("after any sequence and stop(), every book is empty and the log matches what was emitted", async () => {
-    await fc.assert(
-      fc.asyncProperty(sequence(fc.oneof(settling, suspending)), async (actions) => {
+    await check(
+      sequence(any),
+      async (actions) => {
         const { state, emitted, probe: p } = await viaStore(actions);
         expect(idle(p)).toBe(true);
         expect(p.mounted).toBe(false);
@@ -152,14 +190,15 @@ describe("invariants", () => {
           0,
         );
         expect(state.n).toBe(expectedN);
-      }),
-      { numRuns: 200 },
+      },
+      200,
     );
   });
 
   it("restart never leaves two fibers booked under one key after a macrotask", async () => {
-    await fc.assert(
-      fc.asyncProperty(fc.integer({ min: 1, max: 200 }), async (n) => {
+    await check(
+      Arbitrary.schema(int(1, 200)),
+      async (n) => {
         const store = createFeatureStore({
           feature: restarter(),
           props: {},
@@ -179,8 +218,8 @@ describe("invariants", () => {
         await settle(store);
         store.stop();
         expect(idle(await released(store))).toBe(true);
-      }),
-      { numRuns: 25 },
+      },
+      25,
     );
   });
 
@@ -206,16 +245,13 @@ describe("invariants", () => {
       },
       render: () => null,
     });
-    const arb = fc.record({
-      id: fc.string(),
-      count: fc.double({ noNaN: true }),
-      on: fc.boolean(),
-      tags: fc.array(fc.string(), { maxLength: 5 }),
-      nested: fc.record({ a: fc.integer(), b: fc.string() }),
-    });
+    // NaN is the one number `structuredClone` preserves and equivalence cannot
+    // see as equal to itself, so props are finite by schema.
+    const arb = Arbitrary.schema(Schema.Struct({ ...Props.fields, count: Schema.Finite }));
 
-    await fc.assert(
-      fc.asyncProperty(arb, async (props) => {
+    await check(
+      arb,
+      async (props) => {
         const clone = structuredClone(props);
         expect(equivalence(props, clone)).toBe(true);
         const store = createFeatureStore({
@@ -229,8 +265,8 @@ describe("invariants", () => {
         expect(store.getSnapshot()).toEqual({ changes: 0 });
         store.stop();
         await released(store);
-      }),
-      { numRuns: 200 },
+      },
+      200,
     );
   });
 });

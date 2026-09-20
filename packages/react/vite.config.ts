@@ -118,9 +118,25 @@ export default defineConfig({
   },
   run: {
     tasks: {
+      // The tarball's `dist`, cached on its inputs and restored on a hit. The
+      // examples and the website type-check and run against it, not `src`,
+      // so every task here that `-r` fans out before theirs depends on it:
+      // `vpr -r test` and `vpr -r test:types` rebuild a stale `dist` first.
+      build: {
+        command: "vp pack",
+        input: ["src/**/*.{ts,tsx}", "!src/**/*.test.*", "tsconfig.json", "package.json"],
+        output: ["dist/**"],
+      },
+      dev: { command: "vp pack --watch", cache: false },
+      test: {
+        command: "vp test --project node --project browser --project docs",
+        dependsOn: ["build"],
+        cache: false,
+      },
       "test:types": {
         command: "tstyche",
         input: [{ auto: true }, "src/**/*.tst.{ts,tsx}", "tsconfig.json", "package.json"],
+        dependsOn: ["build"],
       },
       "docs:check": {
         command: "node scripts/docs-check.mjs --run",

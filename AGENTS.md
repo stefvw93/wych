@@ -32,13 +32,21 @@ release. Add a tool name to select part of the graph. For example, run
   `@wych/react` at `packages/react`. Root `package.json` is private.
 - Root `vite.config.ts` owns repo-wide `lint`/`fmt` and `defaultPackage`
   (`./packages/react`), so bare `vp` commands run against the library.
-  Build it with `vp pack` (or `vpr build`, the package script). Bare
-  `vp build` is the Vite app build and fails with "Cannot resolve entry
-  module index.html". Each package's `vite.config.ts` owns its Vitest,
-  pack, and run tasks.
+  Build it with `vpr build` (the cached `build` task in
+  `packages/react/vite.config.ts`, which runs `vp pack`). Bare `vp build`
+  is the Vite app build and fails with "Cannot resolve entry module
+  index.html". Each package's `vite.config.ts` owns its Vitest, pack, and
+  run tasks.
 - Run commands from the repo root. `vpr check` = `vp check && vpr -r test:types`;
   `vpr test` fans out with `-r`. Plain `vp check` is the built-in and skips the
   tstyche type tests.
+- The examples and the website resolve `@wych/react` to `packages/react/dist`,
+  not `src`. The library's `test` and `test:types` tasks `dependsOn: build`,
+  and `-r` runs in dependency order, so `vpr -r test` and `vpr -r test:types`
+  refresh a stale `dist` before any dependent checks against it. The website's
+  `test` task depends on `@wych/react#build` directly. Running a task inside
+  one example (`vp -C packages/react/docs/examples/<name> run test:types`)
+  skips that ordering; build first.
 - To work on one package: `vp -C packages/react <command>`.
 - `vp check` is cwd-scoped: from the root it covers every package and the
   package-level config files (`vite.config.ts`); from inside a package only
