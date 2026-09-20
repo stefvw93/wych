@@ -128,11 +128,13 @@ interface TaskOperation<Name, Success, Failure, Input, R, Ch> {
   readonly actions: readonly [ResolvedMessage, RejectedMessage];
   readonly run: (input: Input) => Command<TaskAction<...>, R>;
   readonly cancel: Command<TaskAction<...>>;
+  readonly into: <Key extends string>(key: Key) => TaskHandlers<Name, Key, Success, Failure>;
 }
 ```
 
-Three members. The operation holds no state; the feature's reducer writes the
-result into a state field.
+Four members. The operation holds no state; the feature's reducer writes the
+result into a state field. `into` is absent on `Task.output`: an announced
+operation has no reducer handler to write.
 
 ### `actions`
 
@@ -150,6 +152,71 @@ console.log(Object.keys(vocabulary.cases).sort());
 
 The `Resolved` and `Rejected` handlers write the result, so a handler can also
 derive other state from it.
+
+### `into`
+
+```ts fragment
+into: <Key extends string>(key: Key) => TaskHandlers<Name, Key, Success, Failure>;
+```
+
+`into(key)` returns the two settle handlers, keyed by the operation's own
+tags, spread into the reducer:
+
+```ts continue
+const viaInto = Mailbox.reducer({
+  Opened: ({ folder }, { state }) =>
+    Task.start({ ...state, folder }, "subjects", loadMail.run(folder)),
+  Cancelled: (_payload, { state }) => [{ ...state, subjects: Task.idle }, loadMail.cancel],
+  ...loadMail.into("subjects"),
+});
+```
+
+`Resolved` writes `Task.resolved(value)` into `key`, `Rejected` writes
+`Task.rejected(error)`, and the rest of the state is spread through unchanged.
+The spread site checks `key` against the feature's `State`: `key` must name a
+`TaskValue<Success, Failure>` field of that state, with the operation's own
+success and failure types. An optional field is accepted, the same as
+`Task.start`.
+
+A hand-written handler placed after the spread replaces the generated one for
+that tag, the same way a later key wins in any object literal. That handler is
+the extension point: `into` only ever writes the field, so deriving anything
+else from the result, a count, a first item, a cleared filter, is written by
+hand.
+
+```ts continue
+const overridden = Mailbox.reducer({
+  Opened: ({ folder }, { state }) =>
+    Task.start({ ...state, folder }, "subjects", loadMail.run(folder)),
+  Cancelled: (_payload, { state }) => [{ ...state, subjects: Task.idle }, loadMail.cancel],
+  ...loadMail.into("subjects"),
+  LoadMailResolved: (action, { state }) => {
+    console.log(action.value.length);
+    // => 1
+    return { ...state, subjects: Task.resolved(action.value) };
+  },
+});
+
+const mailboxWithCount = Mailbox.create({
+  initialState: Mailbox.initialState(() => ({ folder: "", subjects: Task.idle })),
+  reducer: overridden,
+  render: Mailbox.render(() => null),
+});
+
+const counted = await Effect.runPromise(
+  mailboxWithCount.run([Opened.make({ folder: "inbox" })], {
+    props: {},
+    hooks: {},
+    layer: MailApiLayer,
+  }),
+);
+
+console.log(counted.state.subjects);
+// => { _tag: "Resolved", value: ["Hello"] }
+```
+
+`Task.output` has no `into`: an announced operation's actions leave through
+`on<Tag>` props and never reach a reducer.
 
 ### `run`
 

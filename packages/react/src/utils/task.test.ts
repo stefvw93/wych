@@ -18,7 +18,12 @@ const layerOf = (value: Effect.Effect<string, Error>) => Layer.succeed(Api)({ lo
  * `Pending` write on the fold that issues the command, and two handlers that say
  * where the result lands. Take-first is a guard in the handler, not a mode.
  */
-const folded = (options?: { readonly mode?: "every"; readonly takeFirst?: boolean }) => {
+const folded = (options?: {
+  readonly mode?: "every";
+  readonly takeFirst?: boolean;
+  /** Spread `search.into("search")` instead of writing the two handlers. */
+  readonly into?: boolean;
+}) => {
   const search = Task("Search", {
     success: Schema.String,
     onError: Task.errorMessage,
@@ -39,8 +44,12 @@ const folded = (options?: { readonly mode?: "every"; readonly takeFirst?: boolea
             ? state
             : [{ ...state, search: Task.pending }, search.run(load)],
         Cancelled: (_a, { state }) => [{ ...state, search: Task.idle }, search.cancel],
-        SearchResolved: (a, { state }) => ({ ...state, search: Task.resolved(a.value) }),
-        SearchRejected: (a, { state }) => ({ ...state, search: Task.rejected(a.error) }),
+        ...(options?.into
+          ? search.into("search")
+          : {
+              SearchResolved: (a, { state }) => ({ ...state, search: Task.resolved(a.value) }),
+              SearchRejected: (a, { state }) => ({ ...state, search: Task.rejected(a.error) }),
+            }),
       }),
       render: F.render(() => null),
     }),
@@ -71,7 +80,63 @@ describe("Task", () => {
       "WallhavenSearchRejected",
     ]);
 
-    expect(Object.keys(search).sort()).toEqual(["actions", "cancel", "run"]);
+    expect(Object.keys(search).sort()).toEqual(["actions", "cancel", "into", "run"]);
+  });
+
+  it("into(key) folds both actions into the field", async () => {
+    const { feature } = folded({ into: true });
+
+    const ok = await run(feature, Effect.succeed("ok"));
+    expect(ok.state).toEqual({ colorValue: "#000", search: Task.resolved("ok") });
+
+    const failed = await run(feature, Effect.fail(new Error("boom")));
+    expect(failed.state).toEqual({ colorValue: "#000", search: Task.rejected("boom") });
+  });
+
+  it("into returns the two handlers keyed by the operation's tags, spreading the rest of the state", () => {
+    const search = Task("Search", { success: Schema.String, onError: Task.errorMessage });
+    const handlers = search.into("search");
+    const state = { colorValue: "#000", search: Task.idle as TaskValue<string, string> };
+
+    expect(Object.keys(handlers)).toEqual(["SearchResolved", "SearchRejected"]);
+    expect(handlers.SearchResolved({ value: "v" }, { state })).toEqual({
+      colorValue: "#000",
+      search: Task.resolved("v"),
+    });
+    expect(handlers.SearchRejected({ error: "e" }, { state })).toEqual({
+      colorValue: "#000",
+      search: Task.rejected("e"),
+    });
+  });
+
+  it("an explicit handler written after the spread wins", async () => {
+    const search = Task("Search", { success: Schema.String, onError: Task.errorMessage });
+    const State = Schema.Struct({ colorValue: Schema.String, search: Task.schema(Schema.String) });
+    const F = define({
+      props: Props,
+      state: State,
+      action: Action.of([Clicked, ...search.actions]),
+    });
+    const feature = F.create({
+      initialState: F.initialState(() => ({ colorValue: "#000", search: Task.idle })),
+      reducer: F.reducer({
+        Clicked: (_a, { state }) => Task.start(state, "search", search.run(load)),
+        ...search.into("search"),
+        SearchResolved: (a, { state }) => ({
+          ...state,
+          colorValue: "#fff",
+          search: Task.resolved(a.value.toUpperCase()),
+        }),
+      }),
+      render: F.render(() => null),
+    });
+
+    const ok = await run(feature, Effect.succeed("ok"));
+    expect(ok.state).toEqual({ colorValue: "#fff", search: Task.resolved("OK") });
+
+    // The generated `Rejected` handler still stands.
+    const failed = await run(feature, Effect.fail(new Error("boom")));
+    expect(failed.state).toEqual({ colorValue: "#000", search: Task.rejected("boom") });
   });
 
   it("resolves into whatever field the handler writes", async () => {
@@ -259,6 +324,11 @@ describe("Task.output", () => {
     initialState: F.initialState(() => ({ colorValue: "#000" })),
     reducer: F.reducer({ Clicked: (_a, { state }) => [state, search.run(load)] }),
     render: F.render(() => null),
+  });
+
+  it("has no into: an announced operation has no reducer handlers", () => {
+    expect("into" in search).toBe(false);
+    expect(Object.keys(search).sort()).toEqual(["actions", "cancel", "run"]);
   });
 
   it("announces the result instead of folding it", async () => {

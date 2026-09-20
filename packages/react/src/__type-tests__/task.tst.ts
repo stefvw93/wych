@@ -1,7 +1,10 @@
 import { Context, Effect, Option, Schema } from "effect";
 import { expect, test } from "tstyche";
 import { Task, type TaskValue } from "../utils/task";
-import { Next, type Command, type ServicesOf } from "../lib";
+import { Action, define, Next, type Command, type ServicesOf } from "../lib";
+
+const Clicked = Action("Clicked", {});
+const Props = Schema.Struct({});
 
 class Api extends Context.Service<Api, { readonly load: Effect.Effect<string> }>()("Api") {}
 
@@ -210,6 +213,79 @@ test("an announced operation is the same shape — only the channel differs", ()
 
   expect(search.run(Effect.succeed("ok"))).type.toBe<Command<SearchAction, never>>();
   expect(search.cancel).type.toBe<Command<SearchAction, never>>();
+
+  // An output has no reducer handler, so there is nothing to fold it into.
+  expect(search).type.not.toHaveProperty("into");
+});
+
+// ---------------------------------------------------------------------------
+// into
+// ---------------------------------------------------------------------------
+
+test("into(key) spreads into a reducer, keeps it exhaustive, and asks for no service", () => {
+  const search = Task("Search", { success: Schema.String, onError: Task.errorMessage });
+  const State = Schema.Struct({ colorValue: Schema.String, search: Task.schema(Schema.String) });
+  const F = define({ props: Props, state: State, action: Action.of([Clicked, ...search.actions]) });
+
+  const reducer = F.reducer({
+    Clicked: (_a, { state }) => Task.start(state, "search", search.run(Effect.succeed("ok"))),
+    ...search.into("search"),
+  });
+
+  expect<ServicesOf<typeof reducer>>().type.toBe<never>();
+  expect(
+    F.create({
+      initialState: () => ({ colorValue: "#000", search: Task.idle }),
+      reducer,
+      render: () => null,
+    }),
+  ).type.not.toBe<never>();
+});
+
+test("into rejects a key that is not a TaskValue field of the operation's own types", () => {
+  const search = Task("Search", { success: Schema.String, onError: Task.errorMessage });
+  const State = Schema.Struct({
+    colorValue: Schema.String,
+    count: Task.schema(Schema.Number),
+    search: Task.schema(Schema.String),
+  });
+  const F = define({ props: Props, state: State, action: Action.of([Clicked, ...search.actions]) });
+  const Clicked_ = (_a: {}, { state }: { readonly state: typeof State.Type }) => state;
+
+  // Not a TaskValue field.
+  expect(F.reducer).type.not.toBeCallableWith({ Clicked: Clicked_, ...search.into("colorValue") });
+  // Not a field at all.
+  expect(F.reducer).type.not.toBeCallableWith({ Clicked: Clicked_, ...search.into("missing") });
+  // A TaskValue field of another success type.
+  expect(F.reducer).type.not.toBeCallableWith({ Clicked: Clicked_, ...search.into("count") });
+  // The matching field, for contrast.
+  expect(F.reducer).type.toBeCallableWith({ Clicked: Clicked_, ...search.into("search") });
+});
+
+test("into addresses an optional field, as Task.start does", () => {
+  const search = Task("Search", { success: Schema.String, onError: Task.errorMessage });
+  const State = Schema.Struct({ search: Schema.optional(Task.schema(Schema.String)) });
+  const F = define({ props: Props, state: State, action: Action.of([Clicked, ...search.actions]) });
+
+  expect(F.reducer).type.toBeCallableWith({
+    Clicked: (_a: {}, { state }: { readonly state: typeof State.Type }) => state,
+    ...search.into("search"),
+  });
+});
+
+test("an explicit handler after the spread wins, typed by the action's payload", () => {
+  const search = Task("Search", { success: Schema.String, onError: Task.errorMessage });
+  const State = Schema.Struct({ first: Schema.String, search: Task.schema(Schema.String) });
+  const F = define({ props: Props, state: State, action: Action.of([Clicked, ...search.actions]) });
+
+  F.reducer({
+    Clicked: (_a, { state }) => state,
+    ...search.into("search"),
+    SearchResolved: ({ value }, { state }) => {
+      expect(value).type.toBe<string>();
+      return { ...state, first: value, search: Task.resolved(value) };
+    },
+  });
 });
 
 test("`Task.start` takes a lazy command, handed the state with `Pending` written", () => {

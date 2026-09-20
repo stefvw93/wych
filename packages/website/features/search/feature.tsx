@@ -98,8 +98,7 @@ export const docsSearch = DocsSearch.create({
       query.trim() === ""
         ? [{ ...state, query, results: Task.idle, selected: 0 }, search.cancel]
         : Task.start({ ...state, query, selected: 0 }, "results", search.run(query)),
-    SearchResolved: ({ value }, { state }) => ({ ...state, results: Task.resolved(value) }),
-    SearchRejected: ({ error }, { state }) => ({ ...state, results: Task.rejected(error) }),
+    ...search.into("results"),
     Moved: ({ delta }, { state }) => {
       const count = Task.getOrElse(state.results, () => []).length;
       if (count === 0) return state;

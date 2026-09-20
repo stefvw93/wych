@@ -9,14 +9,16 @@ into the two halves it actually has:
   declares two actions (`${Name}Resolved`, `${Name}Rejected`) and the command
   that produces them. It owns the _work_: scheduling it, interrupting it,
   turning however it ended into one of two actions. It writes nothing into
-  state. `Task.output` is the same operation announced rather than folded.
+  state; `into(key)` hands the feature the two handlers that do, for
+  spreading into its reducer. `Task.output` is the same operation announced
+  rather than folded.
 - **The value** — `TaskValue<A, E>` is `Idle | Pending | Resolved { value } |
 Rejected { error }`, with `Task.schema` for the field, constructors, a total
   `match` for render, partial reads and guards for everywhere else, and
   `Task.start` to write `Pending` beside a command.
 
-Nothing connects the two but the handlers the feature writes. That is the
-point: the field is declarable before the operation exists, an operation is
+Nothing connects the two but the handlers the feature writes or spreads in.
+That is the point: the field is declarable before the operation exists, an operation is
 declarable for a feature that stores nothing, and where a result lands is
 visible in the file that owns it.
 
@@ -58,19 +60,39 @@ and this returns a schema for one field.
 
 ## The operation — work, not state
 
-What it deliberately does not have: a state field, an initial value, reducer
-entries, or a `start` that writes into state on the feature's behalf. The
-reducer is already total over the action union, so the two handlers cost two
-lines and cannot be forgotten:
+What it deliberately does not have: a state field, an initial value, or a
+`start` that writes into state on the feature's behalf. The reducer is total
+over the action union, so the two settle handlers cannot be forgotten; what
+they do in the common case is fixed, so the operation writes them:
 
 ```ts
-SearchResolved: (action, { state }) => ({ ...state, search: Task.resolved(action.value) }),
-SearchRejected: (action, { state }) => ({ ...state, search: Task.rejected(action.error) }),
+...search.into("search"),
 ```
 
-That is also the extension point an injected version would not have: a handler
-that wants to select the first hit or clear a filter writes it in the same
-entry, instead of colliding with a spread-in handler for the same tag.
+`into(key)` returns `{ SearchResolved, SearchRejected }`, each writing
+`Task.resolved(value)` / `Task.rejected(error)` into `key` and spreading the
+rest of the state. The handlers are generic over the state, because the
+operation does not know the feature's `State`: `create`'s `U extends Reducer`
+unifies the type parameter with `State` where they are spread in, so a key
+that is not a `TaskValue<Success, Failure>` field of that state (missing, not
+a task field, or a task field of other types) is a compile error at the
+spread site. An optional field is accepted, as `Task.start` accepts one.
+
+The hand-written entry stays the extension point. An explicit key written
+after the spread replaces the generated handler (an object literal keeps the
+last spelling of a key), so a handler that selects the first hit or clears a
+filter is written as before, and only for the tag that needs it:
+
+```ts
+...search.into("search"),
+SearchResolved: (action, { state }) =>
+  ({ ...state, first: action.value[0], search: Task.resolved(action.value) }),
+```
+
+The earlier objection to generated handlers was collision with a hand-written
+one; spread-then-override is the resolution. `into` never derives anything
+beyond the field write; that is what the override is for. An announced
+operation (`Task.output`) has no `into`: an output has no reducer handler.
 
 **`Pending` is written on the fold that issues the command**, not dispatched by
 it. A dispatched `Pending` would paint a microtask later — exactly long enough
@@ -136,7 +158,9 @@ the same return.
 
 ### The operation
 
-- [x] `Task(name, …)` returns exactly `{ actions, run, cancel }` — no `field`, `initial`, `handlers`, `idle`, `start`, `match`, `get` or `reset`. Nothing state-shaped.
+- [x] `Task(name, …)` returns exactly `{ actions, run, cancel, into }` — no `field`, `initial`, `handlers`, `idle`, `start`, `match`, `get` or `reset`. Nothing state-shaped.
+- [x] `into(key)` returns `{ ${Name}Resolved, ${Name}Rejected }`, in that key order; `Resolved` returns `{ ...state, [key]: Task.resolved(value) }`, `Rejected` returns `{ ...state, [key]: Task.rejected(error) }`, and folded through `feature.run` the field lands exactly as with hand-written handlers.
+- [x] An explicit handler written after `...op.into(key)` replaces the generated one for that tag; the other generated handler still stands.
 - [x] `actions` is `[${Name}Resolved { value: Success }, ${Name}Rejected { error: Failure }]`, spreadable into `Action.of([...])` beside hand-written actions.
 - [x] A lower-case `name` is a compile error, on the same terms as an action tag.
 - [x] The effect's success dispatches `${Name}Resolved` with the value, and lands in whatever field the handler writes.
@@ -149,7 +173,7 @@ the same return.
 - [x] `Pending` is written synchronously on the fold that issues the command: `feature.reduce(Clicked, snapshot)` already shows `Pending` in the returned state.
 - [x] With `run` declared, the operation's `run` takes that input and only that input; the effect declared receives it.
 - [x] Without `run`, the operation's `run` takes an effect and carries its `R` to `ServicesOf`, so a service the effect needs is still a compile error at `component`.
-- [x] `Task.output(name, …)` has the same shape with both actions on the outbound channel: results land in `run`'s `outputs`, never in state, and a rejection is announced the same way.
+- [x] `Task.output(name, …)` has the same shape with both actions on the outbound channel: results land in `run`'s `outputs`, never in state, and a rejection is announced the same way. It has no `into`.
 
 ### Type-level (TSTyche) — `src/__type-tests__/task.tst.ts`
 
@@ -161,7 +185,11 @@ the same return.
 - [x] `Task.schema(Schema.String)`'s `Type` is the four-case union with `string` value and `string` error; with an explicit failure schema the error takes its `Type`.
 - [x] `match` result type is the union of the arms; three arms do not compile.
 - [x] `Task.value` / `error` / `getOrElse` are typed by the field; the guards narrow `value` / `error` inside the branch.
-- [x] `Task.output(…)`'s `run` and `cancel` are `Command<TaskAction<…>>` — the same types as the folded form.
+- [x] `Task.output(…)`'s `run` and `cancel` are `Command<TaskAction<…>>` — the same types as the folded form; it has no `into` property.
+- [x] `...op.into(key)` spread into `Definition.reducer` compiles, the reducer stays exhaustive, and `ServicesOf` of it is `never`.
+- [x] `into("notAField")`, `into` of a non-`TaskValue` field, and `into` of a `TaskValue` field whose success type differs from the operation's do not compile at the spread site; the matching key does.
+- [x] `into` addresses a field declared `Schema.optional(Task.schema(…))`.
+- [x] An explicit handler after the spread is typed by the action's payload (`value` is the success `Type`).
 - [x] `Task.start` with a thunk types the thunk's parameter as the passed state, and `Next.command` of the result is `Command<TaskAction<…>> | undefined`.
 
 ## Technical Requirements
@@ -175,6 +203,7 @@ the same return.
 - Internally the command is built as `Command.effect<any, unknown>`; the operation's declared `run` type restores `R` — from the bound effect's declaration, or from the effect passed to an unbound `run`.
 - `Task.errorMessage` is `Cause.squash` then `error instanceof Error ? error.message : String(error)`.
 - The guards and partial reads take `TaskValue<A, unknown>` / `TaskValue<unknown, E>`, which every concrete field is assignable to under readonly covariance.
+- `into`'s handlers are `<S extends { readonly [K in Key]?: TaskValue<Success, Failure> }>(payload, { state: S }) => S`. Assignability to a `Reducer` slot instantiates `S` from `Snapshot<Props, State, H>`, so `S = State`; `Exhaustive`'s `infer N` and `ServicesOf`'s `ReturnType` read the base signature, i.e. the constraint, which has no key beyond `Key` and is no command tuple, so both stay `never`. A wrong key surfaces as `Exhaustive`'s `state has no property …` message. `TaskOperation` is a conditional alias: `TaskOperationBase & TaskInto` on the internal channel, `TaskOperationBase` alone on the outbound one, so `into` is structurally absent rather than typed `never`.
 
 ## Expected Behavior & Edge Cases
 
@@ -186,6 +215,8 @@ the same return.
 - `Task.start` through a raw tuple (`[state, thunk]` written by hand, without `start`) types the thunk's parameter as the feature's `State`, not the narrowed literal — the contextual type is the handler's return. `Task.start` infers from its first argument and does narrow. Pinned in `core.tst.ts`.
 
 ## Known limitations
+
+- **`into` on an empty state.** A `State` of `Schema.Struct({})` has no properties, so the weak-type check that rejects `into("anything")` against it does not fire and the spread compiles. A feature with a task field is never in this position; recorded, not guarded.
 
 - **No `Refreshing` case.** Stale-while-revalidate — keep the last value readable while a refetch is pending — is not expressible; `Pending` empties the field. The fix is a fifth case, additive to the type, a fifth arm in `match`, and a decision about which of `value` / `isPending` reflect it. Recorded under Deferred decisions.
 - **`match`'s arm-union result needs an object literal at the call site.** A `cases` value pre-typed as `TaskCases<A, E, Out>` collapses to that one `Out` — which is what the node test does, and what a shared set of arms would do.

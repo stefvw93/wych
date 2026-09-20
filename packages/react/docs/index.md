@@ -58,8 +58,7 @@ const taskSearch = define({
     // Take latest: a new Typed interrupts the fiber still resolving the old one.
     Typed: ({ query }, { state }) => Task.start({ ...state, query }, "results", search.run(query)),
     Cleared: (_payload, { state }) => [{ ...state, query: "", results: Task.idle }, search.cancel],
-    SearchResolved: ({ value }, { state }) => ({ ...state, results: Task.resolved(value) }),
-    SearchRejected: ({ error }, { state }) => ({ ...state, results: Task.rejected(error) }),
+    ...search.into("results"),
   },
   render: ({ state, dispatch }) => (
     <div>

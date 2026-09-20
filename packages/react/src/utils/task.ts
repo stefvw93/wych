@@ -146,6 +146,44 @@ export type TaskAction<Name extends string, Success, Failure> =
   | { readonly _tag: ResolvedTag<Name>; readonly value: Success }
   | { readonly _tag: RejectedTag<Name>; readonly error: Failure };
 
+/**
+ * The state a generated handler accepts: a `TaskValue` of the operation's own
+ * types under `Key`. Optional, as `Task.start` allows an optional field.
+ */
+type TaskField<Key extends string, Success, Failure> = {
+  readonly [K in Key]?: TaskValue<Success, Failure>;
+};
+
+/**
+ * One generated handler. Generic over the state: the operation does not know
+ * the feature's `State`, so `create` unifies `S` with it where the handlers
+ * are spread in, and a key that is not a `TaskValue<Success, Failure>` field
+ * of that state fails there.
+ */
+type TaskHandler<Key extends string, Success, Failure, Payload> = <
+  S extends TaskField<Key, Success, Failure>,
+>(
+  payload: Payload,
+  snapshot: { readonly state: S },
+) => S;
+
+/** What `into(key)` returns: the two handlers, keyed by the operation's tags. */
+export type TaskHandlers<Name extends string, Key extends string, Success, Failure> = {
+  readonly [K in ResolvedTag<Name>]: TaskHandler<
+    Key,
+    Success,
+    Failure,
+    { readonly value: Success }
+  >;
+} & {
+  readonly [K in RejectedTag<Name>]: TaskHandler<
+    Key,
+    Success,
+    Failure,
+    { readonly error: Failure }
+  >;
+};
+
 // ---------------------------------------------------------------------------
 // Concurrency
 // ---------------------------------------------------------------------------
@@ -215,26 +253,26 @@ const errorMessage: TaskOnError<string> = (cause) => {
 /**
  * Two actions and the command that produces them. That is the whole surface.
  *
- * What it deliberately does not have: a state field, an initial value, reducer
- * entries, or a `start` that writes into state on your behalf. The operation
- * owns the *work* — scheduling it, interrupting it, turning however it ended
- * into one of two actions. Where the result lands is the feature's business,
- * and the feature's reducer is already exhaustive over the action union, so writing
- * those two entries by hand costs two lines and cannot be forgotten:
+ * What it deliberately does not have: a state field, an initial value, or a
+ * `start` that writes into state on your behalf. The operation owns the
+ * *work* — scheduling it, interrupting it, turning however it ended into one
+ * of two actions. Where the result lands is the feature's business: the
+ * reducer is exhaustive over the action union, so the two handlers cannot be
+ * forgotten. `into(key)` writes them for the common case, and a hand-written
+ * entry is the extension point:
  *
+ *     ...search.into("search"),
+ *
+ *     // or, to derive something else from the result — select the first
+ *     // item, clear a filter — write the entry yourself; after the spread,
+ *     // the explicit key wins:
  *     SearchResolved: (action, { state }) => ({ ...state, search: Task.resolved(action.value) }),
- *     SearchRejected: (action, { state }) => ({ ...state, search: Task.rejected(action.error) }),
- *
- * That is also the extension point the injected version did not have: a handler
- * that wants to derive something else from the result — select the first item,
- * clear a filter — writes it in the same entry, instead of colliding with a
- * spread-in handler for the same tag.
  *
  * Internal and announced operations are the same shape. The only difference is
  * the channel the two actions are declared on, which is what `Task.output`
  * changes — an announced operation was never anything but these three members.
  */
-export interface TaskOperation<
+export interface TaskOperationBase<
   Name extends string,
   Success extends Schema.Top,
   Failure extends Schema.Top,
@@ -282,6 +320,49 @@ export interface TaskOperation<
    */
   readonly cancel: Command<TaskAction<Name, Success["Type"], Failure["Type"]>>;
 }
+
+/**
+ * The reducer half of an internal operation.
+ */
+export interface TaskInto<
+  Name extends string,
+  Success extends Schema.Top,
+  Failure extends Schema.Top,
+> {
+  /**
+   * The two settle handlers for a field, to spread into the reducer:
+   *
+   *     reducer: {
+   *       Typed: ({ query }, { state }) => Task.start(state, "results", search.run(query)),
+   *       ...search.into("results"),
+   *     }
+   *
+   * `Resolved` writes `Task.resolved(value)` into `key`, `Rejected` writes
+   * `Task.rejected(error)`; nothing else moves. An entry written after the
+   * spread replaces the generated one, so deriving something from the result
+   * is the same hand-written handler as before. The handlers are generic over
+   * the state, so the spread site checks that `key` is a
+   * `TaskValue<Success, Failure>` field of the feature's `State`.
+   */
+  readonly into: <Key extends string>(
+    key: Key,
+  ) => TaskHandlers<Name, Key, Success["Type"], Failure["Type"]>;
+}
+
+/**
+ * An internal operation carries `into`; an announced one (`Task.output`) does
+ * not, because an output has no reducer handler.
+ */
+export type TaskOperation<
+  Name extends string,
+  Success extends Schema.Top,
+  Failure extends Schema.Top,
+  Input = never,
+  R = never,
+  Ch extends "internal" | "outbound" = "internal",
+> = Ch extends "internal"
+  ? TaskOperationBase<Name, Success, Failure, Input, R, Ch> & TaskInto<Name, Success, Failure>
+  : TaskOperationBase<Name, Success, Failure, Input, R, Ch>;
 
 // ---------------------------------------------------------------------------
 // Declaration
@@ -487,11 +568,30 @@ const make = <Ch extends "internal" | "outbound">(ch: Ch) =>
         ? (input as Effect.Effect<unknown, unknown, unknown>)
         : schemas.run(input);
 
-    return {
+    // Read at call time, so `helpers` being declared below is fine.
+    const into = (key: string) => ({
+      [resolvedTag]: (
+        payload: { readonly value: unknown },
+        snapshot: { readonly state: object },
+      ) => ({
+        ...snapshot.state,
+        [key]: helpers.resolved(payload.value),
+      }),
+      [rejectedTag]: (
+        payload: { readonly error: unknown },
+        snapshot: { readonly state: object },
+      ) => ({
+        ...snapshot.state,
+        [key]: helpers.rejected(payload.error),
+      }),
+    });
+
+    const operation = {
       actions: [Resolved, Rejected],
       run: (input: unknown) => scheduled(effectOf(input)),
       cancel: Command.cancel(group),
     };
+    return ch === "internal" ? { ...operation, into } : operation;
   } as unknown as TaskConstructor<Ch>;
 
 /**
@@ -543,12 +643,12 @@ const helpers: Omit<TaskConstructors, "output"> = {
  *
  *     const reducer = FeatureDefinition.reducer({
  *       ClickedSearch: (_action, { state }) =>
- *         [{ ...state, search: Task.pending }, wallhavenSearch.run(state.searchParams)],
- *       WallhavenSearchResolved: (action, { state }) =>
- *         ({ ...state, search: Task.resolved(action.value) }),
- *       WallhavenSearchRejected: (action, { state }) =>
- *         ({ ...state, search: Task.rejected(action.error) }),
+ *         Task.start(state, "search", wallhavenSearch.run(state.searchParams)),
+ *       ...wallhavenSearch.into("search"),
  *     })
+ *
+ * `into` writes the two settle handlers. To derive more from the result, write
+ * `WallhavenSearchResolved:` yourself after the spread; the explicit key wins.
  *
  *     // render
  *     Task.match(state.search, {

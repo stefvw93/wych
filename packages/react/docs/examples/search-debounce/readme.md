@@ -52,8 +52,11 @@ MoreClicked: (_payload, { state }) =>
 
 ## How It Works
 
-`search-api.ts` declares `SearchApi` as a service with one `hits` method
-that takes a query and an optional page. `main.tsx` supplies a layer where
+`taskSearch`'s two settle handlers come from `search.into("results")`,
+spread into its reducer; writing `SearchResolved` after the spread would
+replace the generated handler. `search-api.ts` declares `SearchApi` as a
+service with one `hits` method that takes a query and an optional page.
+`main.tsx` supplies a layer where
 `hits` sleeps 500 ms and mounts `DebouncedSearch`, `Search` and `PagedSearch`
 under one runtime. `src/search.test.ts` runs
 against a faster 50 ms layer: one `reduce` test checks the `Pending` write

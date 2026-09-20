@@ -54,8 +54,7 @@ const taskSearch = define({
   reducer: {
     Typed: ({ query }, { state }) => Task.start({ ...state, query }, "results", search.run(query)),
     Cleared: (_payload, { state }) => [{ ...state, query: "", results: Task.idle }, search.cancel],
-    SearchResolved: ({ value }, { state }) => ({ ...state, results: Task.resolved(value) }),
-    SearchRejected: ({ error }, { state }) => ({ ...state, results: Task.rejected(error) }),
+    ...search.into("results"),
   },
   render: ({ state, dispatch }) => (
     <div>

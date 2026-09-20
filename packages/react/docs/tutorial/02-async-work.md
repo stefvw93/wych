@@ -322,6 +322,10 @@ field.
 > compile error. Interruption is a normal ending for a task: a cancelled save
 > dispatches neither `SaveResolved` nor `SaveRejected`.
 
+`SaveResolved` here also clears `dirty`, so it stays hand-written. When a
+`Resolved` handler only writes the field, `...saveNote.into("save")` replaces
+it and `SaveRejected` both; see [`into`](/docs/reference/tasks#into).
+
 ## 6. Render the four cases
 
 The field holds one of four cases, and the view has to handle each one.
