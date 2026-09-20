@@ -1563,34 +1563,32 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
   const name = args.name ?? "WychFeature";
   const instance = args.instance ?? String(++instanceCount);
 
-  let resolved = false;
-  let sink: DevtoolsSink | undefined;
-
-  const devtools = (): DevtoolsSink | undefined => {
-    if (!resolved) {
-      const context = runtime.cachedContext;
-      if (context === undefined) return undefined;
-      const installed = Context.getUnsafe(context, Devtools);
-      sink = installed === noopDevtools ? undefined : installed;
-      resolved = true;
-    }
-    return sink;
-  };
+  /**
+   * The installed sink: `undefined` until the runtime's context exists to
+   * read it from, `null` once read and found to be `noopDevtools`, or
+   * disabled after it threw.
+   */
+  let sink: DevtoolsSink | null | undefined;
 
   /**
-   * Hand one event to the sink, and disable the sink if it throws.
+   * Hand one event to the sink, and disable the sink if it throws. The event
+   * is built only once a sink is known to want it, so the no-sink path
+   * allocates nothing. Re-reads `sink` per event: a single fold reports
+   * twice, and a sink that threw on the first event must not be called for
+   * the second.
    */
-  const report = (event: DevtoolsEvent): void => {
-    // Re-read `sink` rather than trusting the caller's handle: a single fold
-    // reports twice, and a sink that threw on the first event must not be
-    // called for the second. Call sites still guard on `devtools()` before
-    // building an event, which keeps the no-sink path free of allocation.
-    const target = sink;
-    if (target === undefined) return;
+  const report = (build: () => DevtoolsEvent): void => {
+    if (sink === undefined) {
+      const context = runtime.cachedContext;
+      if (context === undefined) return;
+      const installed = Context.getUnsafe(context, Devtools);
+      sink = installed === noopDevtools ? null : installed;
+    }
+    if (sink === null) return;
     try {
-      target.onEvent(event);
+      sink.onEvent(build());
     } catch {
-      sink = undefined;
+      sink = null;
     }
   };
 
@@ -1715,26 +1713,20 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
   };
 
   const emitOutput = (action: { readonly _tag: string }, cause: DevtoolsCause): void => {
-    const target = devtools();
-    if (target !== undefined) {
-      report({ _tag: "Output", name, instance, cause, output: action });
-    }
+    report(() => ({ _tag: "Output", name, instance, cause, output: action }));
 
     try {
       emit(action);
     } catch (error) {
-      const onThrow = devtools();
-      if (onThrow !== undefined) {
-        report({
-          _tag: "Defect",
-          name,
-          instance,
-          cause,
-          from: action._tag,
-          defect: summarizeDefect(error),
-          handled: false,
-        });
-      }
+      report(() => ({
+        _tag: "Defect",
+        name,
+        instance,
+        cause,
+        from: action._tag,
+        defect: summarizeDefect(error),
+        handled: false,
+      }));
       defect(error);
     }
   };
@@ -1757,34 +1749,28 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
 
     if (moved) state = nextState;
 
-    const target = devtools();
-
-    if (target !== undefined) {
-      report({
-        _tag: "Transition",
-        name,
-        instance,
-        cause,
-        action: reportableAction(action, opaqueFields),
-        previous,
-        next: nextState,
-      });
-    }
+    report(() => ({
+      _tag: "Transition",
+      name,
+      instance,
+      cause,
+      action: reportableAction(action, opaqueFields),
+      previous,
+      next: nextState,
+    }));
 
     if (command) {
       const ctx = { tag: action._tag };
       const accepted = offer({ _tag: "Run", command, ctx }, routeTo, cause._tag === "Dispatch");
-      if (target !== undefined) {
-        report({
-          _tag: "Command",
-          name,
-          instance,
-          cause,
-          group: ctx.tag,
-          command: summarizeCommand(command),
-          dropped: !accepted,
-        });
-      }
+      report(() => ({
+        _tag: "Command",
+        name,
+        instance,
+        cause,
+        group: ctx.tag,
+        command: summarizeCommand(command),
+        dropped: !accepted,
+      }));
     }
     return moved;
   };
@@ -1853,14 +1839,18 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
     declared = wanted;
     if (stopping.length === 0 && starting.length === 0) return;
 
-    const target = devtools();
-    if (target !== undefined) {
-      for (const key of stopping) {
-        report({ _tag: "SubscriptionStopped", name, instance, cause, key, reason: "Undeclared" });
-      }
-      for (const [key] of starting) {
-        report({ _tag: "SubscriptionStarted", name, instance, cause, key });
-      }
+    for (const key of stopping) {
+      report(() => ({
+        _tag: "SubscriptionStopped",
+        name,
+        instance,
+        cause,
+        key,
+        reason: "Undeclared",
+      }));
+    }
+    for (const [key] of starting) {
+      report(() => ({ _tag: "SubscriptionStarted", name, instance, cause, key }));
     }
 
     Queue.offerUnsafe(cells.queue, { _tag: "Subscriptions", stop: stopping, start: starting });
@@ -1878,19 +1868,16 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
 
   function raiseDefect(error: unknown, from: string, cause: DevtoolsCause, target?: Mount): void {
     const handled = from !== "Error" && handles("Error");
-    const sink = devtools();
 
-    if (sink !== undefined) {
-      report({
-        _tag: "Defect",
-        name,
-        instance,
-        cause,
-        from,
-        defect: summarizeDefect(error),
-        handled,
-      });
-    }
+    report(() => ({
+      _tag: "Defect",
+      name,
+      instance,
+      cause,
+      from,
+      defect: summarizeDefect(error),
+      handled,
+    }));
 
     if (!handled) {
       defect(error);
@@ -2023,10 +2010,7 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
             raiseDefect(Cause.squash(exit.cause), key, cause, cells);
             reason = "Died";
           }
-          const target = devtools();
-          if (target !== undefined) {
-            report({ _tag: "SubscriptionStopped", name, instance, cause, key, reason });
-          }
+          report(() => ({ _tag: "SubscriptionStopped", name, instance, cause, key, reason }));
         },
       }),
     };
@@ -2136,22 +2120,17 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
       // `Unmounted` transition: the console logger evicts the mount's elapsed
       // clock on that transition, and a later event would re-insert it. The
       // fibers themselves go on the mount fiber, first thing in the teardown.
-      if (declared.size > 0) {
-        const target = devtools();
-        if (target !== undefined) {
-          for (const key of declared) {
-            report({
-              _tag: "SubscriptionStopped",
-              name,
-              instance,
-              cause: LIFECYCLE,
-              key,
-              reason: "Unmounted",
-            });
-          }
-        }
-        declared = new Set();
+      for (const key of declared) {
+        report(() => ({
+          _tag: "SubscriptionStopped",
+          name,
+          instance,
+          cause: LIFECYCLE,
+          key,
+          reason: "Unmounted",
+        }));
       }
+      declared = new Set();
 
       let teardown: Command<any, any> | undefined;
       let thrown: { readonly error: unknown } | undefined;
@@ -2166,29 +2145,26 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
         Queue.offerUnsafe(cells.queue, { _tag: "Teardown", command: teardown });
       }
 
-      const target = devtools();
-
-      if (target !== undefined) {
-        report({
-          _tag: "Transition",
+      report(() => ({
+        _tag: "Transition",
+        name,
+        instance,
+        cause: LIFECYCLE,
+        action: { _tag: "Unmounted" },
+        previous: state,
+        next: state,
+      }));
+      if (teardown !== undefined) {
+        const command = teardown;
+        report(() => ({
+          _tag: "Command",
           name,
           instance,
           cause: LIFECYCLE,
-          action: { _tag: "Unmounted" },
-          previous: state,
-          next: state,
-        });
-        if (teardown !== undefined) {
-          report({
-            _tag: "Command",
-            name,
-            instance,
-            cause: LIFECYCLE,
-            group: "Unmounted",
-            command: summarizeCommand(teardown),
-            dropped: cells === undefined,
-          });
-        }
+          group: "Unmounted",
+          command: summarizeCommand(command),
+          dropped: cells === undefined,
+        }));
       }
 
       if (thrown !== undefined) raiseDefect(thrown.error, "Unmounted", LIFECYCLE);
