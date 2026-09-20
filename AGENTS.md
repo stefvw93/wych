@@ -62,9 +62,12 @@ release. Add a tool name to select part of the graph. For example, run
     "Performance and resilience". A defect the suites find is pinned as
     `it.fails` with a `HINT` comment naming its spec entry and gets a Known
     limitations bullet; the fix is a separate change that flips the pin and
-    the entry together. Fixtures and probes are in
-    `packages/react/src/__fixtures__/stress.ts`; browser `console.info`
-    output shows only under `--reporter verbose`.
+    the entry together. Fixtures live in `packages/react/src/__fixtures__/`:
+    `probe.ts` (internals probes, browser-safe), `devtools.ts` (recorder
+    queries), `dom.tsx` (the browser mount/click/text harness) and
+    `stress.ts` (node-only: waiting, heap, runtimes, stress features; it
+    re-exports `probe.ts`). Browser `console.info` output shows only under
+    `--reporter verbose`.
 - `vp run test:types` runs tstyche over `src/**/*.tst.ts`; task defined in
   `packages/react/vite.config.ts` under `run.tasks`, cached.
 - TypeScript: shared `compilerOptions` in root `tsconfig.base.json`; root

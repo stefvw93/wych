@@ -11,6 +11,7 @@
 import { Context, Effect, Layer, ManagedRuntime, Option, Schema } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 import {
+  MiB,
   alive,
   at,
   Bump,
@@ -40,8 +41,6 @@ import {
 import { devtoolsLayer, type DevtoolsSink } from "./devtools";
 import { Action, Command, createFeatureStore, define } from "./lib";
 import { Task } from "./utils/task";
-
-const MiB = 1024 * 1024;
 
 class Touch extends Context.Service<Touch, { readonly touch: () => void }>()("StressTouch") {}
 

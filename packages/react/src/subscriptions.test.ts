@@ -30,9 +30,8 @@ import {
   createRecorder,
   devtoolsLayer,
   type DevtoolsConsole,
-  type DevtoolsEvent,
-  type DevtoolsRecorder,
 } from "./devtools";
+import { tagged } from "./__fixtures__/devtools";
 import { Action, Command, createFeatureStore, define, Subscription } from "./lib";
 
 // ---------------------------------------------------------------------------
@@ -138,14 +137,6 @@ const makeStore = (
 
 /** Wall-clock wait, independent of any `TestClock` in the runtime. */
 const settle = (ms = 20) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-const only = <T extends DevtoolsEvent["_tag"]>(
-  recorder: DevtoolsRecorder,
-  tag: T,
-): ReadonlyArray<Extract<DevtoolsEvent, { readonly _tag: T }>> =>
-  recorder.events.filter(
-    (event): event is Extract<DevtoolsEvent, { readonly _tag: T }> => event._tag === tag,
-  );
 
 /**
  * A subscription that logs `key:start` when its body runs, then never
@@ -389,7 +380,7 @@ describe("Part 3 — the diff", () => {
     await settle();
 
     expect(log).toEqual(["feed:start"]);
-    expect(only(recorder, "SubscriptionStarted")).toEqual([
+    expect(tagged(recorder.events, "SubscriptionStarted")).toEqual([
       {
         _tag: "SubscriptionStarted",
         name: "room",
@@ -419,7 +410,10 @@ describe("Part 3 — the diff", () => {
     await settle();
 
     expect(log).toEqual(["base:start", "extra:start"]);
-    expect(only(recorder, "SubscriptionStarted").map((e) => e.key)).toEqual(["base", "extra"]);
+    expect(tagged(recorder.events, "SubscriptionStarted").map((e) => e.key)).toEqual([
+      "base",
+      "extra",
+    ]);
   });
 
   // HINT: `running ∖ declared` → `SubscriptionStopped { reason: "Undeclared" }`
@@ -437,7 +431,7 @@ describe("Part 3 — the diff", () => {
     await settle();
 
     expect(log).toEqual(["feed:start", "feed:stop"]);
-    expect(only(recorder, "SubscriptionStopped")).toEqual([
+    expect(tagged(recorder.events, "SubscriptionStopped")).toEqual([
       expect.objectContaining({ key: "feed", reason: "Undeclared", cause: { _tag: "Dispatch" } }),
     ]);
   });
@@ -469,7 +463,10 @@ describe("Part 3 — the diff", () => {
     await settle();
 
     expect(evaluated).toBe(2);
-    expect(only(recorder, "SubscriptionStarted").map((e) => e.key)).toEqual(["step:0", "step:3"]);
+    expect(tagged(recorder.events, "SubscriptionStarted").map((e) => e.key)).toEqual([
+      "step:0",
+      "step:3",
+    ]);
   });
 
   // HINT: `moved` is already computed by `foldOne`; no move, no reconcile.
@@ -523,7 +520,7 @@ describe("Part 3 — the diff", () => {
     store.sync({ room: "b" }, {});
     await settle();
     expect(log).toEqual([]);
-    expect(only(recorder, "SubscriptionStarted")).toEqual([]);
+    expect(tagged(recorder.events, "SubscriptionStarted")).toEqual([]);
 
     store.start();
     await settle();
@@ -595,7 +592,7 @@ describe("Part 3 — the diff", () => {
     await settle();
 
     expect(store.getSnapshot().errors).toBe(1);
-    expect(only(recorder, "Defect")).toEqual([
+    expect(tagged(recorder.events, "Defect")).toEqual([
       expect.objectContaining({ from: "Go", handled: true }),
     ]);
     expect(log).toEqual(["feed:start"]);
@@ -836,7 +833,7 @@ describe("Part 4 — teardown", () => {
     await settle();
 
     expect(log).toEqual(["feed:start", "feed:stop", "feed:start"]);
-    expect(only(recorder, "SubscriptionStarted")).toHaveLength(2);
+    expect(tagged(recorder.events, "SubscriptionStarted")).toHaveLength(2);
   });
 });
 
@@ -971,12 +968,12 @@ describe("Part 6 — devtools", () => {
 
     store.start();
     expect(log).toEqual([]);
-    expect(only(recorder, "SubscriptionStarted")).toEqual([
+    expect(tagged(recorder.events, "SubscriptionStarted")).toEqual([
       expect.objectContaining({ key: "base", cause: { _tag: "Lifecycle" } }),
     ]);
 
     store.dispatch({ _tag: "Go" });
-    expect(only(recorder, "SubscriptionStarted").at(-1)).toEqual(
+    expect(tagged(recorder.events, "SubscriptionStarted").at(-1)).toEqual(
       expect.objectContaining({ key: "extra", cause: { _tag: "Dispatch" } }),
     );
     await settle();
@@ -992,7 +989,7 @@ describe("Part 6 — devtools", () => {
     store.start();
     await settle();
 
-    expect(only(recorder, "SubscriptionStopped")).toEqual([
+    expect(tagged(recorder.events, "SubscriptionStopped")).toEqual([
       expect.objectContaining({
         key: "once",
         reason: "Completed",
@@ -1010,7 +1007,7 @@ describe("Part 6 — devtools", () => {
     store.start();
     await settle();
 
-    const tick = only(recorder, "Transition").find((e) => e.action._tag === "Tick");
+    const tick = tagged(recorder.events, "Transition").find((e) => e.action._tag === "Tick");
     expect(tick?.cause).toEqual({ _tag: "Subscription", key: "feed" });
   });
 
@@ -1087,14 +1084,14 @@ describe("Part 7 — beyond the exercises", () => {
     await settle();
 
     expect(outputs).toEqual([{ _tag: "Out", id: "o1" }]);
-    expect(only(recorder, "Output")).toEqual([
+    expect(tagged(recorder.events, "Output")).toEqual([
       expect.objectContaining({
         output: { _tag: "Out", id: "o1" },
         cause: { _tag: "Subscription", key: "feed" },
       }),
     ]);
     // An output never folds, so it never re-evaluates the hook: one start.
-    expect(only(recorder, "SubscriptionStarted")).toHaveLength(1);
+    expect(tagged(recorder.events, "SubscriptionStarted")).toHaveLength(1);
   });
 
   it("41 · a key built from hooks restarts when the hook value moves", async () => {
@@ -1128,7 +1125,7 @@ describe("Part 7 — beyond the exercises", () => {
     store.start();
     await settle();
     expect(log).toEqual(["always:start"]);
-    expect(only(recorder, "SubscriptionStarted").map((e) => e.key)).toEqual(["always"]);
+    expect(tagged(recorder.events, "SubscriptionStarted").map((e) => e.key)).toEqual(["always"]);
 
     store.dispatch({ _tag: "Go" });
     await settle();

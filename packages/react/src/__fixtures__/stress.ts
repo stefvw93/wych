@@ -10,8 +10,12 @@ import process from "node:process";
 import v8 from "node:v8";
 import vm from "node:vm";
 import { Effect, Equivalence, Layer, ManagedRuntime, Schema } from "effect";
-import { createRecorder, devtoolsLayer, type DevtoolsEvent } from "../devtools";
+import { createRecorder, devtoolsLayer } from "../devtools";
 import { Action, Command, createFeatureStore, define, Subscription } from "../lib";
+import { query } from "./devtools";
+import { idle, probe, type StoreProbe } from "./probe";
+
+export * from "./probe";
 
 // ---------------------------------------------------------------------------
 // Scale
@@ -22,52 +26,6 @@ export const SCALE = Math.max(1, Number(process.env.STRESS_SCALE ?? "1") || 1);
 
 /** `n` at scale 1, scaled. */
 export const at = (n: number): number => Math.round(n * SCALE);
-
-// ---------------------------------------------------------------------------
-// Probes
-// ---------------------------------------------------------------------------
-
-export interface StoreProbe {
-  readonly mounted: boolean;
-  readonly active: boolean;
-  readonly dead: boolean;
-  readonly queued: number;
-  readonly inFlight: number;
-  readonly groups: number;
-  readonly fibers: number;
-  readonly live: number;
-  readonly subscriptions: number;
-  readonly declared: number;
-  readonly buffered: number;
-  readonly pending: number;
-  readonly subscribers: number;
-}
-
-const slotOf = (target: object): symbol => {
-  const slot = Object.getOwnPropertySymbols(target).find(
-    (symbol) => symbol.description === "@wych/internals",
-  );
-  if (slot === undefined) throw new TypeError("no @wych/internals slot on the target");
-  return slot;
-};
-
-/** The store's closure counters, read now. */
-export const probe = (store: object): StoreProbe =>
-  (store as Record<symbol, () => StoreProbe>)[slotOf(store)]!();
-
-/** The size of the module-level `useFeature` context registry. */
-export const contexts = (runtime: object): number =>
-  (runtime as Record<symbol, { readonly contexts: () => number }>)[slotOf(runtime)]!.contexts();
-
-/** A probe that is empty of work: nothing booked, nothing queued. */
-export const idle = (p: StoreProbe): boolean =>
-  p.queued === 0 &&
-  p.inFlight === 0 &&
-  p.fibers === 0 &&
-  p.groups === 0 &&
-  p.pending === 0 &&
-  p.buffered === 0 &&
-  p.subscriptions === 0;
 
 // ---------------------------------------------------------------------------
 // Waiting
@@ -192,13 +150,7 @@ export const recordingRuntime = <R = never, E = never>(extra?: Layer.Layer<R, E,
   const runtime = ManagedRuntime.make(
     extra === undefined ? sink : Layer.mergeAll(sink, extra),
   ) as unknown as ManagedRuntime.ManagedRuntime<any, any>;
-  const tagged = <Tag extends DevtoolsEvent["_tag"]>(tag: Tag) =>
-    recorder.events.filter((event): event is Extract<DevtoolsEvent, { _tag: Tag }> => {
-      return event._tag === tag;
-    });
-  const transitions = (actionTag: string) =>
-    tagged("Transition").filter((event) => event.action._tag === actionTag);
-  return { runtime, recorder, tagged, transitions };
+  return { runtime, recorder, ...query(recorder) };
 };
 
 /** A bare root runtime, no sink. */

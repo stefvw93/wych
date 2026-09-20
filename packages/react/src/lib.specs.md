@@ -605,7 +605,9 @@ Two on-demand Vitest projects, outside `vpr -r test`. The `bench` project
 (`src/**/*.bench.test.ts`) runs tinybench through Vitest bench mode; the `stress`
 and `stress-browser` projects (`src/**/*.stress.test.ts`,
 `src/**/*.stress.browser.test.tsx`) hold the load, chaos, leak and property
-tests. Fixtures and probes are in `src/__fixtures__/stress.ts`.
+tests. Fixtures are in `src/__fixtures__/`: `probe.ts` (the internals
+probes, browser-safe), `devtools.ts` (recorder queries), `dom.tsx` (the
+browser harness) and `stress.ts` (node-only helpers, re-exporting `probe.ts`).
 
 ### How to run
 
