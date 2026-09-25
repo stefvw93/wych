@@ -32,16 +32,7 @@ import {
 import { createElement, type ReactNode } from "react";
 import { probe } from "./__fixtures__/stress";
 import { drafterLayer, mutativeDrafter, type DrafterService } from "./draft";
-import {
-  Action,
-  Children,
-  Command,
-  createFeatureStore,
-  define,
-  Next,
-  Subscription,
-  type Dispatcher,
-} from "./lib";
+import { Action, Children, Command, createFeatureStore, define, Next, Subscription } from "./lib";
 import { Task } from "./utils/task";
 
 // ---------------------------------------------------------------------------
@@ -3377,8 +3368,7 @@ describe("Command — the effect leaf", () => {
 
     const seen: Array<unknown> = [];
     await Effect.runPromise(
-      cmd.effect(((message: unknown) =>
-        Effect.sync(() => void seen.push(message))) as Dispatcher<any>),
+      cmd.effect((message: unknown) => Effect.sync(() => void seen.push(message))),
     );
 
     expect(seen).toEqual([{ _tag: "OrderPlaced", orderId: "o1" }]);
