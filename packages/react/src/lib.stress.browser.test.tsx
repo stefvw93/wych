@@ -262,7 +262,7 @@ test("2000 mount/unmount cycles under three names keep three contexts and a flat
 
   if (heap.length === rounds) {
     const tail = heap.slice(-5);
-    const growth = tail[tail.length - 1]! - tail[0]!;
+    const growth = tail[tail.length - 1] - tail[0];
     console.info(
       `[stress] 2000 cycles: heap ${heap.map((h) => (h / MiB).toFixed(1)).join(" → ")} MiB`,
     );

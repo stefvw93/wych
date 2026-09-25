@@ -108,8 +108,8 @@ const live = (): ReadonlyArray<string> => {
   const running = new Set<string>();
   for (const line of log) {
     const [, key, what] = /^(.+):(start|stop)$/.exec(line) ?? [];
-    if (what === "start") running.add(key!);
-    else running.delete(key!);
+    if (what === "start") running.add(key);
+    else running.delete(key);
   }
   return [...running];
 };
@@ -178,7 +178,7 @@ test("unmount stops the subscription and lets a pending command finish", async (
   expect(stopped).toBeGreaterThan(-1);
   expect(stopped).toBeLessThan(unmounted);
   expect(unmounted).toBeLessThan(late);
-  expect(transitions("Late")[0]!.cause).toEqual({ _tag: "Command", action: "Go" });
+  expect(transitions("Late")[0].cause).toEqual({ _tag: "Command", action: "Go" });
   expect(log).toEqual(["room:a:start", "room:a:stop"]);
 });
 

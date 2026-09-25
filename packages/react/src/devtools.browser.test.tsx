@@ -96,8 +96,8 @@ test("a real mount reports `Mounted` — the ordering the whole design rests on"
   await vi.waitFor(() => {
     const mounted = tagged("Transition").filter((event) => event.action._tag === "Mounted");
     expect(mounted).toHaveLength(1);
-    expect(mounted[0]!.name).toBe("counter");
-    expect(mounted[0]!.cause).toEqual({ _tag: "Lifecycle" });
+    expect(mounted[0].name).toBe("counter");
+    expect(mounted[0].cause).toEqual({ _tag: "Lifecycle" });
   });
 });
 
@@ -120,15 +120,15 @@ test("a real click reports the transition and the command it issued", async () =
   // an effect like any other.
   const commands = tagged("Command");
   expect(commands).toHaveLength(2);
-  expect(commands[0]!.dropped).toBe(false);
-  expect(commands[0]!.group).toBe("Bumped");
-  expect(commands[0]!.command).toEqual({
+  expect(commands[0].dropped).toBe(false);
+  expect(commands[0].group).toBe("Bumped");
+  expect(commands[0].command).toEqual({
     _tag: "Keyed",
     key: "bump",
     command: { _tag: "Effect" },
   });
-  expect(commands[1]!.group).toBe("Landed");
-  expect(commands[1]!.command).toEqual({ _tag: "Effect" });
+  expect(commands[1].group).toBe("Landed");
+  expect(commands[1].command).toEqual({ _tag: "Effect" });
 });
 
 test("an output crossing into a real `on<Tag>` prop is reported before the prop is called", async () => {
@@ -154,14 +154,14 @@ test("an output crossing into a real `on<Tag>` prop is reported before the prop 
     const outputs = tagged("Output");
     expect(outputs).toHaveLength(1);
     // The whole message. The prop received `{ at: 2 }` with `_tag` stripped.
-    expect(outputs[0]!.output).toEqual({ _tag: "Reached", at: 2 });
+    expect(outputs[0].output).toEqual({ _tag: "Reached", at: 2 });
 
     // The two-hop chain, which is the thing `cause` exists to make readable:
     // the click folded `Bumped`, whose keyed command emitted `Landed`, whose
     // own — unkeyed — command emitted the output. So the output is attributed
     // to `Landed` and not to the click two hops back. A devtools UI walks
     // these edges; the runtime only ever states the one it can see.
-    expect(outputs[0]!.cause).toEqual({ _tag: "Command", action: "Landed" });
+    expect(outputs[0].cause).toEqual({ _tag: "Command", action: "Landed" });
     const landed = tagged("Transition").find((event) => event.action._tag === "Landed");
     expect(landed!.cause).toEqual({ _tag: "Command", action: "Bumped", key: "bump" });
   });
@@ -191,8 +191,8 @@ test("a props change folded from the layout effect is reported", async () => {
 
   const propsChanged = tagged("Transition").filter((event) => event.action._tag === "PropsChanged");
   expect(propsChanged).toHaveLength(1);
-  expect(propsChanged[0]!.cause).toEqual({ _tag: "Lifecycle" });
-  expect(propsChanged[0]!.next).toEqual({ count: 2 });
+  expect(propsChanged[0].cause).toEqual({ _tag: "Lifecycle" });
+  expect(propsChanged[0].next).toEqual({ count: 2 });
 });
 
 test("a dying command reports one defect and then the recovery fold", async () => {
@@ -205,9 +205,9 @@ test("a dying command reports one defect and then the recovery fold", async () =
   await vi.waitFor(() => {
     const defects = tagged("Defect");
     expect(defects).toHaveLength(1);
-    expect(defects[0]!.from).toBe("Boom");
-    expect(defects[0]!.handled).toBe(true);
-    expect(defects[0]!.defect.message).toContain("kaboom");
+    expect(defects[0].from).toBe("Boom");
+    expect(defects[0].handled).toBe(true);
+    expect(defects[0].defect.message).toContain("kaboom");
 
     const recovered = tagged("Transition").find((event) => event.action._tag === "Error");
     expect(recovered!.cause).toEqual({ _tag: "Defect", from: "Boom" });
@@ -223,7 +223,7 @@ test("unmounting reports `Unmounted` and stops reporting", async () => {
 
   const unmounted = tagged("Transition").filter((event) => event.action._tag === "Unmounted");
   expect(unmounted).toHaveLength(1);
-  expect(unmounted[0]!.cause).toEqual({ _tag: "Lifecycle" });
+  expect(unmounted[0].cause).toEqual({ _tag: "Lifecycle" });
 });
 
 test("two mounts of one feature are distinguishable in the stream", async () => {

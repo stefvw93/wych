@@ -126,7 +126,7 @@ const makeStore = (
     props: parts.props ?? { room: "a" },
     equivalence,
     runtime,
-    layer: parts.layer as unknown as Layer.Layer<any, any, any> | undefined,
+    layer: parts.layer,
     emit: parts.emit ?? ((output) => void outputs.push(output)),
     defect: (error) => void defects.push(error),
     name: "room",

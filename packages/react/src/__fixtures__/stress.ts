@@ -144,7 +144,7 @@ export const slope = (samples: ReadonlyArray<number>): number => {
  * `ManagedRuntime<any, any>`; a root that provides only the sink is narrower
  * than that, so the widening goes through `unknown`, as `lib.test.ts` does.
  */
-export const recordingRuntime = <R = never, E = never>(extra?: Layer.Layer<R, E, never>) => {
+export const recordingRuntime = <R = never, E = never>(extra?: Layer.Layer<R, E>) => {
   const recorder = createRecorder();
   const sink = devtoolsLayer(recorder.sink);
   const runtime = ManagedRuntime.make(

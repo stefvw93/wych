@@ -197,11 +197,11 @@ describe("props", () => {
   let i = 0;
 
   bench("store.sync: 30 fields, equal props", () => {
-    store.sync(equal[i++ & 1023]!, {});
+    store.sync(equal[i++ & 1023], {});
   });
 
   bench("store.sync: 30 fields, one field changed", () => {
-    store.sync(changed[i++ & 1023]!, {});
+    store.sync(changed[i++ & 1023], {});
   });
 });
 
@@ -233,7 +233,7 @@ describe("draft", () => {
         items: state.items.map((item) => (item.id === i ? { ...item, qty: item.qty + 1 } : item)),
       }),
       NestedDraft: ({ i }, { draft }) => {
-        draft.items[i]!.qty += 1;
+        draft.items[i].qty += 1;
         return draft;
       },
     },

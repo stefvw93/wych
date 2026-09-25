@@ -332,7 +332,7 @@ test("an excess prop is rejected, which no spread would catch at compile time", 
   try {
     await mount(
       <ErrorBoundary onError={onError}>
-        <CounterView {...(config as React.ComponentProps<typeof CounterView>)} />
+        <CounterView {...config} />
       </ErrorBoundary>,
     );
     await vi.waitFor(() => expect(errors.length).toBeGreaterThan(0));

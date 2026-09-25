@@ -565,9 +565,9 @@ export interface TaskConstructors extends TaskConstructor<"internal"> {
    * the draft, never a spread of it: a draft's children are proxies that are
    * revoked once the fold ends, so a copy holding them is unreadable.
    */
-  readonly start: <State, Key extends TaskKeys<State>, Action, R>(
+  readonly start: <State, Action, R>(
     state: State,
-    key: Key,
+    key: TaskKeys<State>,
     command: Command<Action, R> | LazyCommand<State, Action, R>,
   ) => readonly [State, Command<Action, R> | LazyCommand<State, Action, R>];
 
@@ -740,7 +740,7 @@ const helpers: Omit<TaskConstructors, "output"> = {
   // The cast is the one place the four-way dispatch is not proven to
   // TypeScript: `cases` is exhaustive by its type, so the lookup cannot miss.
   match: (value, cases) =>
-    (cases as unknown as Record<string, (value: unknown) => never>)[value._tag]!(value),
+    (cases as unknown as Record<string, (value: unknown) => never>)[value._tag](value),
   value: (task) => (task._tag === "Resolved" ? Option.some(task.value) : Option.none()),
   error: (task) => (task._tag === "Rejected" ? Option.some(task.error) : Option.none()),
   getOrElse: (task, orElse) => (task._tag === "Resolved" ? task.value : orElse()),

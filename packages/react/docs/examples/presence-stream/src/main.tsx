@@ -17,7 +17,7 @@ const live = Layer.succeed(PresenceApi)({
     return Stream.tick("1 second").pipe(
       Stream.zipWithIndex,
       Stream.map(([, index]) => ({
-        userId: people[index % people.length]!,
+        userId: people[index % people.length],
         online: Math.floor(index / people.length) % 2 === 0,
       })),
     );

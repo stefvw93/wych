@@ -952,7 +952,7 @@ describe("Feature.run — defects", () => {
     // The `Error` action is the runtime's own, not something a command emitted.
     expect(emitted).toEqual([]);
     expect(defects).toEqual([{ from: "Boom", error: expect.any(Error), handled: true }]);
-    expect((defects[0]!.error as Error).message).toBe("kaboom");
+    expect((defects[0].error as Error).message).toBe("kaboom");
   });
 
   it("records a dying command without failing when no `Error` handler exists", async () => {
@@ -1094,7 +1094,7 @@ describe("snapshot.draft", () => {
     // Structural sharing: the sibling that was not written is the same object.
     expect(next.todos[0]).toBe(start.state.todos[0]);
     // The base never moved.
-    expect(start.state.todos[1]!.done).toBe(false);
+    expect(start.state.todos[1].done).toBe(false);
     // The finished state is frozen, deeply.
     expect(Object.isFrozen(next)).toBe(true);
     expect(Object.isFrozen(next.todos[1])).toBe(true);
@@ -1109,7 +1109,7 @@ describe("snapshot.draft", () => {
     leaked = undefined;
     const next = todos.reduce(Renamed.make({ id: "a", text: "uno" }), start);
     const state = Next.state(next);
-    expect(state.todos[0]!.text).toBe("uno");
+    expect(state.todos[0].text).toBe("uno");
     expect(state.renamed).toBe(1);
 
     // `Next.command` is where the thunk runs, on the tuple's own state: the
@@ -1298,7 +1298,7 @@ describe("Feature internals slot", () => {
     // does not exist at all and `create` never wrote the slot.
     expect(slot).toBeDefined();
 
-    const internals = (feature as unknown as Record<symbol, Record<string, unknown>>)[slot!];
+    const internals = (feature as unknown as Record<symbol, Record<string, unknown>>)[slot];
     expect(internals.initialState).toBeInstanceOf(Function);
     expect(internals.render).toBeInstanceOf(Function);
     expect(internals.props).toBeDefined();
@@ -1320,7 +1320,7 @@ describe("Feature internals slot", () => {
     const [slot] = Object.getOwnPropertySymbols(withOutputs).filter(
       (symbol) => symbol.description === "@wych/internals",
     );
-    const internals = (withOutputs as unknown as Record<symbol, Record<string, unknown>>)[slot!];
+    const internals = (withOutputs as unknown as Record<symbol, Record<string, unknown>>)[slot];
     expect(internals.outputTags).toEqual(["Done"]);
   });
 });
@@ -1347,9 +1347,6 @@ describe("createFeatureStore", () => {
   const equivalence = {
     props: Schema.toEquivalence(Props),
     hooks: Equivalence.Record(Equivalence.strictEqual<unknown>()),
-  } as {
-    props: Equivalence.Equivalence<StoreProps>;
-    hooks: Equivalence.Equivalence<Record<string, unknown>>;
   };
 
   const setup = (
@@ -3040,7 +3037,7 @@ describe("output-tag routing is one rule (review iteration 3)", () => {
     const [slot] = Object.getOwnPropertySymbols(feature).filter(
       (symbol) => symbol.description === "@wych/internals",
     );
-    const internals = (feature as unknown as Record<symbol, Record<string, unknown>>)[slot!];
+    const internals = (feature as unknown as Record<symbol, Record<string, unknown>>)[slot];
 
     // One derivation, so the store and `run` cannot drift about routing.
     expect(internals.outputTags).toEqual(["Done"]);
@@ -4076,8 +4073,8 @@ describe("Feature.run — the effect leaf", () => {
     // finishes, rather than a limitation. The timeout is load-bearing:
     // without it a plain `it` hangs the suite instead of failing it.
     const runWith = (parts: {
-      readonly command?: Command<never, never>;
-      readonly subscription?: Subscription<never, never>;
+      readonly command?: Command<never>;
+      readonly subscription?: Subscription<never>;
     }) => {
       const Feature = define({ props: RunProps, state: RunState, action: [Bump] });
       const feature = Feature.create({
@@ -4151,7 +4148,7 @@ describe("createFeatureStore — devtools", () => {
       initialState: () => ({ count: 0 }),
       reducer: options.reducer as any,
       render: () => null,
-    } as any);
+    });
 
     const store = createFeatureStore({
       feature: feature as any,
@@ -4198,9 +4195,9 @@ describe("createFeatureStore — devtools", () => {
 
     const transitions = only(recorder, "Transition");
     expect(transitions).toHaveLength(1);
-    expect(transitions[0]!.action._tag).toBe("Mounted");
-    expect(transitions[0]!.cause).toEqual({ _tag: "Lifecycle" });
-    expect(transitions[0]!.name).toBe("cart");
+    expect(transitions[0].action._tag).toBe("Mounted");
+    expect(transitions[0].cause).toEqual({ _tag: "Lifecycle" });
+    expect(transitions[0].name).toBe("cart");
   });
 
   it("emits a dispatch transition carrying the real state references", () => {
@@ -4218,14 +4215,14 @@ describe("createFeatureStore — devtools", () => {
     store.dispatch({ _tag: "Bump" } as never);
 
     const [event] = only(recorder, "Transition");
-    expect(event!.action).toEqual({ _tag: "Bump" });
-    expect(event!.cause).toEqual({ _tag: "Dispatch" });
-    expect(event!.name).toBe("cart");
-    expect(event!.instance).toEqual(expect.any(String));
+    expect(event.action).toEqual({ _tag: "Bump" });
+    expect(event.cause).toEqual({ _tag: "Dispatch" });
+    expect(event.name).toBe("cart");
+    expect(event.instance).toEqual(expect.any(String));
     // The actual objects, not copies. A sink that wants to keep them copies
     // them itself; the store does not pay for a snapshot nobody may read.
-    expect(event!.previous).toBe(before);
-    expect(event!.next).toBe(store.getSnapshot());
+    expect(event.previous).toBe(before);
+    expect(event.next).toBe(store.getSnapshot());
   });
 
   it("falls back to `WychFeature` when the caller named nothing", () => {
@@ -4236,7 +4233,7 @@ describe("createFeatureStore — devtools", () => {
     store.start();
     store.dispatch({ _tag: "Bump" } as never);
 
-    expect(recorder.events[0]!.name).toBe("WychFeature");
+    expect(recorder.events[0].name).toBe("WychFeature");
   });
 
   it("emits a `PropsChanged` transition with a lifecycle cause", () => {
@@ -4251,14 +4248,14 @@ describe("createFeatureStore — devtools", () => {
     });
 
     store.start();
-    store.sync({ id: "a" }, {} as never);
+    store.sync({ id: "a" }, {});
     recorder.clear();
-    store.sync({ id: "b" }, {} as never);
+    store.sync({ id: "b" }, {});
 
     const [event] = only(recorder, "Transition");
-    expect(event!.action._tag).toBe("PropsChanged");
-    expect(event!.cause).toEqual({ _tag: "Lifecycle" });
-    expect(event!.previous).toBe(event!.next);
+    expect(event.action._tag).toBe("PropsChanged");
+    expect(event.cause).toEqual({ _tag: "Lifecycle" });
+    expect(event.previous).toBe(event.next);
   });
 
   it("reports nothing before `start`, which is the documented blind window", () => {
@@ -4307,9 +4304,9 @@ describe("createFeatureStore — devtools", () => {
 
     const commands = only(recorder, "Command");
     expect(commands).toHaveLength(1);
-    expect(commands[0]!.group).toBe("Bump");
-    expect(commands[0]!.dropped).toBe(false);
-    expect(commands[0]!.command).toEqual({
+    expect(commands[0].group).toBe("Bump");
+    expect(commands[0].dropped).toBe(false);
+    expect(commands[0].command).toEqual({
       _tag: "Batch",
       commands: [
         { _tag: "Cancel", target: "Bump" },
@@ -4342,7 +4339,7 @@ describe("createFeatureStore — devtools", () => {
 
     const commands = only(recorder, "Command");
     expect(commands).toHaveLength(1);
-    expect(commands[0]!.dropped).toBe(true);
+    expect(commands[0].dropped).toBe(true);
   });
 
   it("attributes a command-emitted action to the command, key included", async () => {
@@ -4417,7 +4414,7 @@ describe("createFeatureStore — devtools", () => {
     expect(outputs).toHaveLength(1);
     // The whole message, unlike the `on<Tag>` prop, which has `_tag` stripped
     // because the prop's name already carries it. A log has no such context.
-    expect(outputs[0]!.output).toEqual({ _tag: "Placed", at: 1 });
+    expect(outputs[0].output).toEqual({ _tag: "Placed", at: 1 });
     expect(order).toEqual(["event", "handler"]);
   });
 
@@ -4442,7 +4439,7 @@ describe("createFeatureStore — devtools", () => {
     expect(emitted).toEqual([{ _tag: "Placed", at: 7 }]);
     const outputs = only(recorder, "Output");
     expect(outputs).toHaveLength(1);
-    expect(outputs[0]!.cause).toEqual({ _tag: "Dispatch" });
+    expect(outputs[0].cause).toEqual({ _tag: "Dispatch" });
     expect(only(recorder, "Transition")).toHaveLength(0);
   });
 
@@ -4468,9 +4465,9 @@ describe("createFeatureStore — devtools", () => {
 
     const raised = only(recorder, "Defect");
     expect(raised).toHaveLength(1);
-    expect(raised[0]!.from).toBe("Bump");
-    expect(raised[0]!.handled).toBe(true);
-    expect(raised[0]!.defect.message).toContain("kaboom");
+    expect(raised[0].from).toBe("Bump");
+    expect(raised[0].handled).toBe(true);
+    expect(raised[0].defect.message).toContain("kaboom");
 
     const errorFold = only(recorder, "Transition").find((event) => event.action._tag === "Error");
     expect(errorFold!.cause).toEqual({ _tag: "Defect", from: "Bump" });
@@ -4494,7 +4491,7 @@ describe("createFeatureStore — devtools", () => {
 
     const raised = only(recorder, "Defect");
     expect(raised).toHaveLength(1);
-    expect(raised[0]!.handled).toBe(false);
+    expect(raised[0].handled).toBe(false);
     // The devtools event does not replace the store's own contract.
     expect(defects).toHaveLength(1);
   });
@@ -4521,8 +4518,8 @@ describe("createFeatureStore — devtools", () => {
 
     const raised = only(recorder, "Defect");
     expect(raised).toHaveLength(1);
-    expect(raised[0]!.handled).toBe(false);
-    expect(raised[0]!.defect.message).toContain("parent blew up");
+    expect(raised[0].handled).toBe(false);
+    expect(raised[0].defect.message).toContain("parent blew up");
     expect(only(recorder, "Transition").some((event) => event.action._tag === "Error")).toBe(false);
   });
 
@@ -4617,7 +4614,7 @@ describe("createFeatureStore — devtools", () => {
       (event) => event.action._tag === "Unmounted",
     );
     expect(unmounted).toHaveLength(1);
-    expect(unmounted[0]!.cause).toEqual({ _tag: "Lifecycle" });
+    expect(unmounted[0].cause).toEqual({ _tag: "Lifecycle" });
     expect(defects).toHaveLength(1);
   });
 
@@ -4700,7 +4697,7 @@ describe("createFeatureStore — devtools", () => {
     });
     second.store.start();
 
-    expect(second.recorder.events[0]!.instance).not.toBe(first.recorder.events[0]!.instance);
+    expect(second.recorder.events[0].instance).not.toBe(first.recorder.events[0].instance);
   });
 
   it("emits the `Unmounted` transition and the teardown command", () => {
@@ -4719,12 +4716,12 @@ describe("createFeatureStore — devtools", () => {
     store.stop();
 
     const [transition] = only(recorder, "Transition");
-    expect(transition!.action._tag).toBe("Unmounted");
-    expect(transition!.cause).toEqual({ _tag: "Lifecycle" });
+    expect(transition.action._tag).toBe("Unmounted");
+    expect(transition.cause).toEqual({ _tag: "Lifecycle" });
 
     const commands = only(recorder, "Command");
     expect(commands).toHaveLength(1);
-    expect(commands[0]!.group).toBe("Unmounted");
+    expect(commands[0].group).toBe("Unmounted");
   });
 
   it("every emitted event survives `JSON.stringify`", async () => {
@@ -4773,9 +4770,9 @@ describe("createFeatureStore — devtools", () => {
     });
 
     store.start();
-    store.sync({ id: "a" }, { refetch: () => {} } as never);
+    store.sync({ id: "a" }, { refetch: () => {} });
     recorder.clear();
-    store.sync({ id: "a" }, { refetch: () => {} } as never);
+    store.sync({ id: "a" }, { refetch: () => {} });
 
     const changed = only(recorder, "Transition").find(
       (event) => event.action._tag === "HookChanged",
@@ -4800,9 +4797,9 @@ describe("createFeatureStore — devtools", () => {
     });
 
     store.start();
-    store.sync({ id: "a" }, {} as never);
+    store.sync({ id: "a" }, {});
     recorder.clear();
-    store.sync({ id: "b" }, {} as never);
+    store.sync({ id: "b" }, {});
 
     const changed = only(recorder, "Transition").find(
       (event) => event.action._tag === "PropsChanged",
@@ -4854,7 +4851,7 @@ describe("createFeatureStore — devtools", () => {
         Mounted: (_a: unknown, s: any) => s.state,
       } as any,
       render: () => null,
-    } as any);
+    });
 
     const store = createFeatureStore({
       feature: feature as any,
@@ -5065,9 +5062,9 @@ describe("Children", () => {
     });
 
     feature.start();
-    feature.sync({ id: "a", children: node() } as never, {} as never);
+    feature.sync({ id: "a", children: node() }, {});
     recorder.clear();
-    feature.sync({ id: "a", children: node() } as never, {} as never);
+    feature.sync({ id: "a", children: node() }, {});
 
     expect(feature.getSnapshot()).toEqual({ count: 0 });
     expect(recorder.events).toEqual([]);
@@ -5114,9 +5111,9 @@ describe("Children", () => {
     });
 
     mounted.start();
-    mounted.sync({ id: "a", children: node() } as never, {} as never);
+    mounted.sync({ id: "a", children: node() }, {});
     recorder.clear();
-    mounted.sync({ id: "b", children: node() } as never, {} as never);
+    mounted.sync({ id: "b", children: node() }, {});
 
     const changed = recorder.events.find(
       (event): event is Extract<DevtoolsEvent, { readonly _tag: "Transition" }> =>
@@ -5140,9 +5137,9 @@ describe("Children", () => {
     const feature = store({ props: Props, initial: { id: "a" }, sink: recorder.sink });
 
     feature.start();
-    feature.sync({ id: "a" } as never, {} as never);
+    feature.sync({ id: "a" }, {});
     recorder.clear();
-    feature.sync({ id: "b" } as never, {} as never);
+    feature.sync({ id: "b" }, {});
 
     const changed = recorder.events.find(
       (event): event is Extract<DevtoolsEvent, { readonly _tag: "Transition" }> =>

@@ -86,7 +86,7 @@ describe("high-frequency sources", () => {
     expect(tagged("Defect")).toHaveLength(0);
     // The source completed: booked as done until undeclared.
     await until(store, () => tagged("SubscriptionStopped").length === 1);
-    expect(tagged("SubscriptionStopped")[0]!.reason).toBe("Completed");
+    expect(tagged("SubscriptionStopped")[0].reason).toBe("Completed");
     expect(probe(store).subscriptions).toBe(1);
 
     store.dispatch(Declare.make({ keys: [] }));
@@ -281,7 +281,7 @@ describe("long sessions", () => {
     expect(count("SubscriptionStarted")).toBe(3 * rounds * perRound);
     expect(count("SubscriptionStopped")).toBe(3 * rounds * perRound);
     const tail = heap.slice(-5);
-    expect(tail[tail.length - 1]! - tail[0]!).toBeLessThan(2 * MiB);
+    expect(tail[tail.length - 1] - tail[0]).toBeLessThan(2 * MiB);
     expect(slope(tail)).toBeLessThan(MiB / 2);
     expect(alive(refs)).toBeLessThan(refs.length / 100);
   });

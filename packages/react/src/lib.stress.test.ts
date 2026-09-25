@@ -93,7 +93,7 @@ describe("many mounts", () => {
     for (const store of stores) store.start();
     for (const store of stores) store.dispatch(Bump.make({}));
     for (const store of stores.slice(1)) await settle(store);
-    await spin(stores[0]!, (p) => p.dead);
+    await spin(stores[0], (p) => p.dead);
 
     expect(rootAcquired).toBe(1);
     expect(tagged("Defect").map((e) => e.from)).toEqual(["Mounted"]);
@@ -451,7 +451,7 @@ describe("deep async churn", () => {
     expect(follow).toHaveLength(1);
     expect(tagged("Output")).toHaveLength(1);
     // Exactly one of: it ran on the closing mount, or it was dropped.
-    expect(ran + (follow[0]!.dropped ? 1 : 0)).toBe(1);
+    expect(ran + (follow[0].dropped ? 1 : 0)).toBe(1);
   });
 
   it("1k commands that throw in their builder each raise one defect and fold Error", async () => {
@@ -688,7 +688,7 @@ describe("long sessions", () => {
 
   const assertFlat = (heap: ReadonlyArray<number>, refs: ReadonlyArray<WeakRef<object>>) => {
     const tail = heap.slice(-5);
-    const growth = tail[tail.length - 1]! - tail[0]!;
+    const growth = tail[tail.length - 1] - tail[0];
     // The first rounds warm caches and JIT; the tail is what a session pays.
     expect(growth).toBeLessThan(2 * MiB);
     expect(slope(tail)).toBeLessThan(MiB / 2);
@@ -763,7 +763,7 @@ describe("long sessions", () => {
 
     expect(store.getSnapshot()).toEqual({ items: [] });
     const tail = heap.slice(-5);
-    expect(tail[tail.length - 1]! - tail[0]!).toBeLessThan(2 * MiB);
+    expect(tail[tail.length - 1] - tail[0]).toBeLessThan(2 * MiB);
     expect(slope(tail)).toBeLessThan(MiB / 2);
   });
 

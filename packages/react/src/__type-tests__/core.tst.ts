@@ -1404,7 +1404,7 @@ test("`snapshot.draft` is a mutable `Draft<State>` that keeps the key set", () =
         // Arrays and plain objects lose `readonly`, recursively.
         expect(draft.todos).type.toBe<Array<{ id: string; done: boolean }>>();
         draft.todos.push({ id, done: false });
-        draft.todos[0]!.done = true;
+        draft.todos[0].done = true;
         // An Effect data type passes through: same type, still immutable.
         expect(draft.opt).type.toBe<Option.Option<number>>();
         // The read-only snapshot beside it is untouched.
@@ -1426,7 +1426,7 @@ test("`snapshot.draft` is a mutable `Draft<State>` that keeps the key set", () =
     reducer: {
       Toggled: (_action, { draft }) => {
         // @ts-expect-error 'string' is not assignable to type 'boolean'
-        draft.todos[0]!.done = "yes";
+        draft.todos[0].done = "yes";
         return draft;
       },
       Ping: (_action, { draft }) => draft,

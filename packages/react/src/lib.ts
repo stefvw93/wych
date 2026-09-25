@@ -240,7 +240,7 @@ const message = (ch: Channel, tag: string, fields: Schema.Struct.Fields = {}) =>
   });
 };
 
-export const messages = <Ch extends Channel>(ch: Ch) =>
+export const messages = (ch: Channel) =>
   function messages(
     tagOrDefs: string | Record<string, Schema.Struct.Fields>,
     fields?: Schema.Struct.Fields,
@@ -566,8 +566,8 @@ const pipeable = <T extends object>(value: T): T & Pipeable.Pipeable =>
  * exactly as inferred. Used once, by `run` — see the call site for why `R`
  * specifically cannot be verified in that scope.
  */
-const discharge = <T>(effect: Effect.Effect<T, never, any>): Effect.Effect<T, never, never> =>
-  effect as Effect.Effect<T, never, never>;
+const discharge = <T>(effect: Effect.Effect<T, never, any>): Effect.Effect<T> =>
+  effect as Effect.Effect<T>;
 
 /**
  * The constructors, and the whole vocabulary a reducer has for describing work.
@@ -603,7 +603,7 @@ export const Command: {
    * Interrupts the one group booked under `target`. A bare action tag reaches
    * only that tag's *unkeyed* fibers — keyed work answers to its own name.
    */
-  readonly cancel: <A = never>(target: Group) => Command<A, never>;
+  readonly cancel: <A = never>(target: Group) => Command<A>;
 
   /**
    * Take-latest as one word: `restart(name, command)` is exactly
@@ -707,7 +707,7 @@ export const Subscription: {
 };
 
 /** The frozen empty set, for a feature that declared no hook. */
-const NO_SUBSCRIPTIONS: Subscriptions<never, never> = Object.freeze({});
+const NO_SUBSCRIPTIONS: Subscriptions<never> = Object.freeze({});
 
 /** The keys a record declares: own keys, record order, `undefined` values skipped. */
 const declaredKeys = (subscriptions: Subscriptions<any, any>): Array<string> =>
@@ -1521,7 +1521,7 @@ export const define: <
   const opaqueState = opaqueProps(spec.state as AnyPropsSchema);
   if (opaqueState.length > 0) {
     throw new TypeError(
-      `Opaque field "${opaqueState[0]![0]}" declared in the state schema; ` +
+      `Opaque field "${opaqueState[0][0]}" declared in the state schema; ` +
         "opaque declarations like Children belong in props",
     );
   }
@@ -1572,7 +1572,7 @@ export const define: <
           // must be closed and unbooked before the defect propagates.
           let next: Next<any, any, any>;
           try {
-            next = handler(payload as never, fold);
+            next = handler(payload, fold);
           } catch (error) {
             fold.discard();
             throw error;
@@ -1592,7 +1592,7 @@ export const define: <
           render: parts.render,
           useUnsafeHooks: spec.useUnsafeHooks,
           subscribes: parts.subscriptions !== undefined,
-          props: Schema.toType(spec.props as AnyPropsSchema),
+          props: Schema.toType(spec.props),
           outputTags,
           opaqueProps: opaqueProps(spec.props),
           handles: (tag) => handlerFor(parts.reducer, tag) !== undefined,
@@ -2087,7 +2087,7 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
 
     folding = true;
     let moved = false;
-    let last = pending[pending.length - 1]!;
+    let last = pending[pending.length - 1];
     try {
       while (pending.length > 0) {
         const next = pending.shift()!;
@@ -2372,8 +2372,7 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
 
     getSnapshot: () => state,
 
-    dispatch: ((message: unknown, payload?: unknown) =>
-      fold(toMessage(message, payload), DISPATCH)) as Dispatch<any>,
+    dispatch: (message: unknown, payload?: unknown) => fold(toMessage(message, payload), DISPATCH),
 
     sync: (nextProps, nextHooks) => {
       const previousProps = props;
