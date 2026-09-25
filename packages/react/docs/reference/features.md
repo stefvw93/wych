@@ -1,6 +1,6 @@
 ---
 title: Features
-description: define, the definition helpers, create, reduce, run, Snapshot, Next and Children.
+description: define and its action and output slots, the definition helpers, create, reduce, run, Snapshot, Next and Children.
 order: 2
 ---
 
@@ -15,18 +15,17 @@ draft text and announces a saved note.
 
 ```tsx
 import { Effect, Layer, Schema } from "effect";
-import { Action, Children, Command, define, Next } from "@wych/react";
+import { Action, Children, Command, define, Next, Task } from "@wych/react";
 import type { LazyCommand, Next as NextType, RenderSnapshot, Snapshot } from "@wych/react";
 
-const Typed = Action("Typed", { text: Schema.String });
-const Saved = Action("Saved", {});
+const actions = Action({ Typed: { text: Schema.String }, Saved: {} });
 const NoteSaved = Action.output("NoteSaved", { noteId: Schema.String, text: Schema.String });
 
 const NoteEditor = define({
   props: Schema.Struct({ noteId: Schema.String, autosave: Schema.Boolean }),
   state: Schema.Struct({ text: Schema.String, dirty: Schema.Boolean }),
-  action: Action.of([Typed, Saved]),
-  output: Action.of([NoteSaved]),
+  action: actions,
+  output: NoteSaved,
 });
 ```
 
@@ -34,40 +33,79 @@ const NoteEditor = define({
 
 ```ts fragment
 define({
-  props: Schema.Struct,      // required
-  state: Schema.Struct,      // required
-  action: Action.of([...]),  // required, internal channel
-  output?: Action.of([...]), // optional, outbound channel
+  props: Schema.Struct, // required
+  state: Schema.Struct, // required
+  action: MemberSource<"internal">, // required
+  output?: MemberSource<"outbound">, // optional
   useUnsafeHooks?: (props, state) => H,
 }): FeatureDefinition
 ```
 
-`props` and `state` are `Schema.Struct`s. `action` and `output` are
-vocabularies built with `Action.of`. `define` infers `Props`, `State`, the two
-vocabularies and the hooks from that one object literal, so no type argument is
-written by hand.
-
-Two rules are compile errors:
+`props` and `state` are `Schema.Struct`s. `action` and `output` each take a
+message, a record of messages (`Action({ ... })`), a
+[task](/docs/reference/tasks) operation, or an array of those, one array
+nested inside another at most. `define` infers `Props`, `State`, the messages
+of each slot and the hooks from that one object literal, so no type argument
+is written by hand.
 
 ```ts continue
-const Collides = Action.of([Action.output("Typed", {})]);
+const autosave = Task("Autosave", { success: Schema.String });
 
-const tagCollision = define({
+const OneMessage = define({
   props: Schema.Struct({}),
   state: Schema.Struct({}),
-  action: Action.of([Typed]),
+  action: actions.Saved,
+});
+
+const WithTask = define({
+  props: Schema.Struct({}),
+  state: Schema.Struct({ text: Schema.String, autosave: autosave.schema }),
+  action: [actions, autosave],
+  output: [NoteSaved, Action.output("Discarded")],
+});
+```
+
+The slot fixes the channel: `action` takes internal messages only, `output`
+outbound ones. The check is a compile error and, for a source that got past
+the types, a throw at `define`.
+
+```ts continue
+define({
+  props: Schema.Struct({}),
+  state: Schema.Struct({}),
+  // @ts-expect-error NoteSaved is outbound and cannot be declared in "action"
+  action: [actions, NoteSaved],
+});
+// throws TypeError: define: "NoteSaved" is outbound and cannot be declared in "action"
+```
+
+Two more rules are compile errors: an output tag equal to an action tag, and
+a prop named after a derived output prop. A tag declared twice across both
+slots also throws at `define`.
+
+```ts continue
+const Collides = Action.output("Typed");
+
+define({
+  props: Schema.Struct({}),
+  state: Schema.Struct({}),
+  action: actions.Typed,
   // @ts-expect-error output tag "Typed" collides with an action tag
   output: Collides,
 });
+// throws TypeError: define: tag "Typed" is declared twice
 
 const propCollision = define({
   props: Schema.Struct({ onNoteSaved: Schema.String }),
   state: Schema.Struct({}),
-  action: Action.of([Saved]),
+  action: actions.Saved,
   // @ts-expect-error prop "onNoteSaved" collides with the derived output prop
-  output: Action.of([NoteSaved]),
+  output: NoteSaved,
 });
 ```
+
+The member sources a slot takes are in
+[The `define` slots](/docs/reference/actions#the-define-slots).
 
 `Children` in the state schema throws at `define`, because state reaches a
 devtools sink verbatim and an opaque value does not encode.
@@ -76,7 +114,7 @@ devtools sink verbatim and an opaque value does not encode.
 define({
   props: Schema.Struct({}),
   state: Schema.Struct({ children: Children }),
-  action: Action.of([Saved]),
+  action: actions.Saved,
 });
 // throws TypeError: Opaque field "children" declared in the state schema
 ```
@@ -98,7 +136,7 @@ hooks hold and `useThing(id)`-shaped hooks work. Its result arrives as
 const WithHooks = define({
   props: Schema.Struct({ noteId: Schema.String }),
   state: Schema.Struct({ text: Schema.String }),
-  action: Action.of([Typed]),
+  action: actions.Typed,
   useUnsafeHooks: (props) => ({ storageKey: `note:${props.noteId}` }),
 });
 ```
@@ -136,7 +174,7 @@ const reducer = NoteEditor.reducer({
 const render = NoteEditor.render(({ state, dispatch }) => (
   <textarea
     value={state.text}
-    onChange={(event) => dispatch({ _tag: "Typed", text: event.target.value })}
+    onChange={(event) => dispatch(actions.Typed, { text: event.target.value })}
   />
 ));
 
@@ -222,8 +260,10 @@ type EditorRenderSnapshot = RenderSnapshot<
 >;
 ```
 
-`render`'s `dispatch` carries the outbound vocabulary as well, so the view can
-announce an output without a mirror action.
+`render`'s `dispatch` takes a message schema and its payload, or a built
+message, and it carries the declared outputs as well, so the view can announce
+an output without a mirror action. See
+[Runtime](/docs/reference/runtime#dispatch).
 
 ## `ReducerSnapshot` and `snapshot.draft`
 
@@ -288,7 +328,7 @@ const mixedReducer = NoteEditor.reducer({
 
 const mixedFeature = NoteEditor.create({ initialState, reducer: mixedReducer, render });
 
-mixedFeature.reduce(Typed.make({ text: "hi" }), {
+mixedFeature.reduce(actions.Typed.make({ text: "hi" }), {
   state: { text: "", dirty: false },
   props: { noteId: "n_1", autosave: true },
   hooks: {},
@@ -319,7 +359,7 @@ const leakyReducer = NoteEditor.reducer({
 
 const leakyFeature = NoteEditor.create({ initialState, reducer: leakyReducer, render });
 
-leakyFeature.reduce(Typed.make({ text: "hi" }), {
+leakyFeature.reduce(actions.Typed.make({ text: "hi" }), {
   state: { text: "", dirty: false },
   props: { noteId: "n_1", autosave: true },
   hooks: {},
@@ -409,7 +449,7 @@ of its own only to swap the drafting library. See
 install a custom one at the root.
 
 ```ts continue
-const typed = noteEditor.reduce(Typed.make({ text: "hi" }), {
+const typed = noteEditor.reduce(actions.Typed.make({ text: "hi" }), {
   state: { text: "", dirty: false },
   props: { noteId: "n_1", autosave: true },
   hooks: {},
@@ -476,12 +516,14 @@ feature.run(
 }>
 ```
 
-`run` folds a sequence of actions, interprets each command against `layer`,
-feeds what a command emits back into the reducer, and collects what left.
+`run` folds a sequence of built messages, interprets each command against
+`layer`, feeds what a command emits back into the reducer, and collects what
+left. `make` builds a seed; `make()` takes no argument when every field is
+optional.
 
 ```ts continue
 const result = await Effect.runPromise(
-  noteEditor.run([Typed.make({ text: "hi" }), Saved.make({})], {
+  noteEditor.run([actions.Typed.make({ text: "hi" }), actions.Saved.make()], {
     props: { noteId: "n_1", autosave: true },
     hooks: {},
     layer: Layer.empty,
@@ -541,13 +583,13 @@ handler folded it: `false` with no handler, or when the dying command was the
 undeclared subscription key) is how work normally ends and is never a defect.
 
 ```ts continue
-const Boomed = Action("Boomed", {});
+const Boomed = Action("Boomed");
 const dying = Command.effect(() => Effect.die(new Error("kaboom")));
 
 const flaky = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ crashed: Schema.Boolean }),
-  action: Action.of([Boomed]),
+  action: Boomed,
 }).create({
   initialState: () => ({ crashed: false }),
   reducer: {
@@ -561,7 +603,7 @@ const flaky = define({
 });
 
 const withError = await Effect.runPromise(
-  flaky.run([Boomed.make({})], { props: {}, hooks: {}, layer: Layer.empty }),
+  flaky.run([Boomed.make()], { props: {}, hooks: {}, layer: Layer.empty }),
 );
 
 console.log(withError.state);
@@ -596,7 +638,7 @@ const Panel = define({
     row: Children.as<(id: string) => React.ReactNode>(),
   }),
   state: Schema.Struct({ open: Schema.Boolean }),
-  action: Action.of([Action("Toggled", {})]),
+  action: Action("Toggled"),
 });
 
 const panel = Panel.create({

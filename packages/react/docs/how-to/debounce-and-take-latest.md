@@ -30,7 +30,7 @@ const Loaded = Action("Loaded", { hits: Hits });
 const searchFeature = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ query: Schema.String, hits: Hits }),
-  action: Action.of([Typed, Loaded]),
+  action: [Typed, Loaded],
 }).create({
   initialState: () => ({ query: "", hits: [] }),
   reducer: {
@@ -45,7 +45,7 @@ const searchFeature = define({
               yield* Effect.sleep("300 millis");
               const api = yield* SearchApi;
               const hits = yield* api.hits(query);
-              yield* dispatch(Loaded.make({ hits }));
+              yield* dispatch(Loaded, { hits });
             }),
           ),
         ),
@@ -60,7 +60,7 @@ const searchFeature = define({
     <div>
       <input
         value={state.query}
-        onChange={(event) => dispatch(Typed.make({ query: event.target.value }))}
+        onChange={(event) => dispatch(Typed, { query: event.target.value })}
       />
       <ul>
         {state.hits.map((hit) => (
@@ -78,12 +78,11 @@ The next keystroke returns the same command again. Its `cancel` half interrupts 
 
 ## Take latest with a task
 
-`Task` declares the two result actions and the command. Its default `mode` is `"latest"`, which books the work under `Task/${Name}` with `Command.restart`.
+`Task` declares the two result actions, the command, and `search.schema`, the schema of the state field that holds the result. The operation goes into the `action` slot beside the feature's own messages. Its default `mode` is `"latest"`, which books the work under `Task/${Name}` with `Command.restart`.
 
 ```tsx continue
 const search = Task("Search", {
   success: Hits,
-  onError: Task.errorMessage,
   run: (query: string) =>
     Effect.gen(function* () {
       const api = yield* SearchApi;
@@ -91,12 +90,12 @@ const search = Task("Search", {
     }),
 });
 
-const Cleared = Action("Cleared", {});
+const Cleared = Action("Cleared");
 
 const taskSearch = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({ query: Schema.String, results: Task.schema(Hits) }),
-  action: Action.of([Typed, Cleared, ...search.actions]),
+  state: Schema.Struct({ query: Schema.String, results: search.schema }),
+  action: [Typed, Cleared, search],
 }).create({
   initialState: () => ({ query: "", results: Task.idle }),
   reducer: {
@@ -115,9 +114,9 @@ const taskSearch = define({
     <div>
       <input
         value={state.query}
-        onChange={(event) => dispatch(Typed.make({ query: event.target.value }))}
+        onChange={(event) => dispatch(Typed, { query: event.target.value })}
       />
-      <button onClick={() => dispatch(Cleared.make({}))}>clear</button>
+      <button onClick={() => dispatch(Cleared)}>clear</button>
       {Task.match(state.results, {
         Idle: () => null,
         Pending: () => <p>Searching</p>,
@@ -135,7 +134,7 @@ const taskSearch = define({
 });
 ```
 
-`Task.start` writes `Pending` into `results` on the same fold that issues the command, so the view never paints a gap. `search.cancel` interrupts the group and dispatches nothing, so the `Cleared` handler writes `Task.idle` itself.
+`Task.start` writes `Pending` into `results` on the same fold that issues the command, so the view never paints a gap. `...search.into("results")` writes the two settle handlers. `search.cancel` interrupts the group and dispatches nothing, so the `Cleared` handler writes `Task.idle` itself. No `failure` schema is declared, so the error is the cause's message.
 
 ### Where the delay lives
 
@@ -159,7 +158,6 @@ Put the delay in `run` when the wait belongs to the search itself, wherever it i
 ```tsx continue
 const searchEvery = Task("SearchEvery", {
   success: Hits,
-  onError: Task.errorMessage,
   mode: "every",
   run: (query: string) =>
     Effect.gen(function* () {
@@ -170,8 +168,8 @@ const searchEvery = Task("SearchEvery", {
 
 const everySearch = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({ results: Task.schema(Hits) }),
-  action: Action.of([Typed, ...searchEvery.actions]),
+  state: Schema.Struct({ results: searchEvery.schema }),
+  action: [Typed, searchEvery],
 }).create({
   initialState: () => ({ results: Task.idle }),
   reducer: {
@@ -224,7 +222,6 @@ A "more" button asks for the page after the one on screen. The handler writes `p
 ```tsx continue
 const searchPage = Task("SearchPage", {
   success: Hits,
-  onError: Task.errorMessage,
   run: ({ query, page }: { readonly query: string; readonly page: number }) =>
     Effect.gen(function* () {
       const api = yield* SearchApi;
@@ -232,12 +229,12 @@ const searchPage = Task("SearchPage", {
     }),
 });
 
-const MoreClicked = Action("MoreClicked", {});
+const MoreClicked = Action("MoreClicked");
 
 const pagedSearch = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({ query: Schema.String, page: Schema.Number, results: Task.schema(Hits) }),
-  action: Action.of([Typed, MoreClicked, ...searchPage.actions]),
+  state: Schema.Struct({ query: Schema.String, page: Schema.Number, results: searchPage.schema }),
+  action: [Typed, MoreClicked, searchPage],
 }).create({
   initialState: () => ({ query: "", page: 1, results: Task.idle }),
   reducer: {
@@ -263,9 +260,9 @@ const pagedSearch = define({
     <div>
       <input
         value={state.query}
-        onChange={(event) => dispatch(Typed.make({ query: event.target.value }))}
+        onChange={(event) => dispatch(Typed, { query: event.target.value })}
       />
-      <button onClick={() => dispatch(MoreClicked.make({}))}>more</button>
+      <button onClick={() => dispatch(MoreClicked)}>more</button>
       {Task.match(state.results, {
         Idle: () => null,
         Pending: () => <p>Loading page {state.page}</p>,
@@ -293,7 +290,7 @@ const pagedApi = Layer.succeed(SearchApi)({
 });
 
 const paged = await Effect.runPromise(
-  pagedSearch.run([Typed.make({ query: "a" }), MoreClicked.make({})], {
+  pagedSearch.run([Typed.make({ query: "a" }), MoreClicked.make()], {
     props: {},
     hooks: {},
     layer: pagedApi,

@@ -473,7 +473,7 @@ subscriptions }`. Emission entries carry `origin: "subscription"` and are
   hook fell to `never`. There is no `SubscriptionServicesOf`. The same two
   consequences as for `Command.effect` apply: standalone needs the type
   argument, and `.pipe` severs it. `Exhaustive` gained an allowed-key set
-  (`TagsOf<A> | LifecycleTag`), so `subscriptions` under `reducer` is an
+  (`A["_tag"] | LifecycleTag`), so `subscriptions` under `reducer` is an
   error string on that key.
 - **Devtools.** Two event members and a fifth cause; see `devtools.specs.md`.
 - Every emission site keeps the `const target = devtools(); if (target !== undefined)` shape.

@@ -68,11 +68,13 @@ result.
 import { Cause, Schema } from "effect";
 import { Action, Command, define } from "@wych/react";
 
-const TextChanged = Action("TextChanged", { text: Schema.String });
-const Reverted = Action("Reverted", {});
-const SaveClicked = Action("SaveClicked", {});
-const Saved = Action("Saved", { revision: Schema.String });
-const SaveFailed = Action("SaveFailed", { message: Schema.String });
+const byHandActions = Action({
+  TextChanged: { text: Schema.String },
+  Reverted: {},
+  SaveClicked: {},
+  Saved: { revision: Schema.String },
+  SaveFailed: { message: Schema.String },
+});
 
 const ByHand = define({
   props: Schema.Struct({ noteId: Schema.String, initialText: Schema.String }),
@@ -82,7 +84,7 @@ const ByHand = define({
     saving: Schema.Boolean,
     error: Schema.String,
   }),
-  action: Action.of([TextChanged, Reverted, SaveClicked, Saved, SaveFailed]),
+  action: byHandActions,
 });
 
 const byHandInitialState = ByHand.initialState((props) => ({
@@ -112,12 +114,12 @@ const byHandReducer = ByHand.reducer({
         Effect.gen(function* () {
           const api = yield* NotesApi;
           const revision = yield* api.save({ id: props.noteId, text: state.text });
-          yield* dispatch(Saved.make({ revision }));
+          yield* dispatch(byHandActions.Saved, { revision });
         }).pipe(
           Effect.catchCause((cause) => {
             const error = Cause.squash(cause);
             const message = error instanceof Error ? error.message : String(error);
-            return dispatch(SaveFailed.make({ message }));
+            return dispatch(byHandActions.SaveFailed, { message });
           }),
         ),
       ),
@@ -139,9 +141,13 @@ const byHandRender = ByHand.render(({ state, dispatch }) => (
   <form>
     <textarea
       value={state.text}
-      onChange={(event) => dispatch(TextChanged.make({ text: event.target.value }))}
+      onChange={(event) => dispatch(byHandActions.TextChanged, { text: event.target.value })}
     />
-    <button type="button" disabled={state.saving} onClick={() => dispatch(SaveClicked.make({}))}>
+    <button
+      type="button"
+      disabled={state.saving}
+      onClick={() => dispatch(byHandActions.SaveClicked)}
+    >
       {state.saving ? "Saving..." : "Save"}
     </button>
     {state.error !== "" && <span role="alert">{state.error}</span>}
@@ -161,10 +167,13 @@ returns. The effect reads like a function body: get the service, call it,
 dispatch the result. Its error channel must be `never`, which is what
 `catchCause` is for: every failure becomes a `SaveFailed` action the reducer
 can render. And `dispatch` inside the effect is typed to this feature's
-actions, so a typo in `Saved` is a compile error.
+actions, so a message from another feature or a wrong payload is a compile
+error.
 
 `feature.run` folds a list of actions, runs every command against a layer
 you choose, and folds what the commands dispatch back. No React in the path.
+A seed is a built message, and `make` needs no argument when the message has
+no fields.
 
 ```ts continue
 const stubSave = Layer.succeed(NotesApi)({
@@ -172,7 +181,7 @@ const stubSave = Layer.succeed(NotesApi)({
 });
 
 const oneSave = await Effect.runPromise(
-  byHand.run([SaveClicked.make({})], {
+  byHand.run([byHandActions.SaveClicked.make()], {
     props: { noteId: "n1", initialText: "Buy milk" },
     hooks: {},
     layer: stubSave,
@@ -203,7 +212,7 @@ const slowSave = Layer.succeed(NotesApi)({
 });
 
 const twoByHand = await Effect.runPromise(
-  byHand.run([SaveClicked.make({}), SaveClicked.make({})], {
+  byHand.run([byHandActions.SaveClicked.make(), byHandActions.SaveClicked.make()], {
     props: { noteId: "n1", initialText: "Buy milk" },
     hooks: {},
     layer: slowSave,
@@ -231,7 +240,7 @@ const guarded = ByHand.create({
 });
 
 const twoGuarded = await Effect.runPromise(
-  guarded.run([SaveClicked.make({}), SaveClicked.make({})], {
+  guarded.run([byHandActions.SaveClicked.make(), byHandActions.SaveClicked.make()], {
     props: { noteId: "n1", initialText: "Buy milk" },
     hooks: {},
     layer: slowSave,
@@ -250,15 +259,14 @@ A save has four outcomes, and two booleans cannot spell four cases.
 ## 5. The same thing as a Task
 
 `Task` is the by-hand version with the parts folded in. It declares the two
-result actions, the command, and the failure mapping, from a name and a
-schema of what the work returns.
+result actions, the command, the failure mapping and the state field, from a
+name and a schema of what the work returns.
 
 ```ts continue
 import { Task } from "@wych/react";
 
 const saveNote = Task("Save", {
   success: Schema.String,
-  onError: Task.errorMessage,
   run: (note: { readonly id: string; readonly text: string }) =>
     Effect.gen(function* () {
       const api = yield* NotesApi;
@@ -269,27 +277,33 @@ const saveNote = Task("Save", {
 
 Each piece replaces something from step 3:
 
-- `saveNote.actions` is `SaveResolved { value }` and `SaveRejected { error }`,
+- `saveNote` declares `SaveResolved { value }` and `SaveRejected { error }`,
   in place of `Saved` and `SaveFailed`.
 - `saveNote.run(note)` is the `Command.effect` with `catchCause` inside.
-- `Task.errorMessage` is the `catchCause` body: the message off the cause.
+- The `catchCause` body is `Task.errorMessage`, the message off the cause. It
+  is the default; a `failure` schema of your own takes an `onError` beside it.
 - `saveNote.cancel` interrupts the save in flight. By hand that needs a named
   group; see [groups and cancellation](/docs/explanation/groups-and-cancellation).
-
-The state field replaces `saving` and `error`. `Task.schema` holds one of
-four cases: `Idle`, `Pending`, `Resolved { value }`, `Rejected { error }`.
+- `saveNote.schema` is the state field, in place of `saving` and `error`. It
+  holds one of four cases: `Idle`, `Pending`, `Resolved { value }`,
+  `Rejected { error }`.
 
 ```ts continue
-const SaveCancelled = Action("SaveCancelled", {});
+const actions = Action({
+  TextChanged: { text: Schema.String },
+  Reverted: {},
+  SaveClicked: {},
+  SaveCancelled: {},
+});
 
 const Editor = define({
   props: Schema.Struct({ noteId: Schema.String, initialText: Schema.String }),
   state: Schema.Struct({
     text: Schema.String,
     dirty: Schema.Boolean,
-    save: Task.schema(Schema.String),
+    save: saveNote.schema,
   }),
-  action: Action.of([TextChanged, Reverted, SaveClicked, SaveCancelled, ...saveNote.actions]),
+  action: [actions, saveNote],
 });
 
 const initialState = Editor.initialState((props) => ({
@@ -299,8 +313,8 @@ const initialState = Editor.initialState((props) => ({
 }));
 ```
 
-The two generated actions are spread into the vocabulary beside the ones you
-wrote. The reducer now owes a handler for each.
+The operation goes into the `action` slot beside the record, and brings its
+two actions with it. The reducer now owes a handler for each.
 
 ```ts continue
 const reducer = Editor.reducer({
@@ -324,15 +338,11 @@ const reducer = Editor.reducer({
     draft.save = Task.idle;
     return [draft, saveNote.cancel];
   },
-  SaveResolved: ({ value }, { draft }) => {
+  ...saveNote.into("save"),
+  SaveResolved: saveNote.resolvedInto("save", (_revision, { draft }) => {
     draft.dirty = false;
-    draft.save = Task.resolved(value);
     return draft;
-  },
-  SaveRejected: ({ error }, { draft }) => {
-    draft.save = Task.rejected(error);
-    return draft;
-  },
+  }),
 });
 ```
 
@@ -342,13 +352,18 @@ guard is the one from step 4, reading the field instead of a boolean.
 `saveNote.cancel` writes nothing, which is why the same handler clears the
 field.
 
+`...saveNote.into("save")` writes the two settle handlers: `SaveResolved`
+puts `Resolved { value }` into the field and `SaveRejected` puts
+`Rejected { error }`. A resolved save also clears `dirty`, so `SaveResolved`
+is written again after the spread, with `resolvedInto`: the field is already
+in the draft when the follow-up runs, and the follow-up returns the draft.
+The later key wins.
+
 > `key` is checked against the state's task fields, so a renamed field is a
 > compile error. Interruption is a normal ending for a task: a cancelled save
-> dispatches neither `SaveResolved` nor `SaveRejected`.
-
-`SaveResolved` here also clears `dirty`, so it stays hand-written. When a
-`Resolved` handler only writes the field, `...saveNote.into("save")` replaces
-it and `SaveRejected` both; see [`into`](/docs/reference/tasks#into).
+> dispatches neither `SaveResolved` nor `SaveRejected`. The full contract of
+> `into`, `resolvedInto` and `rejectedInto` is in
+> [Tasks](/docs/reference/tasks#into).
 
 ## 6. Render the four cases
 
@@ -361,15 +376,15 @@ const render = Editor.render(({ state, dispatch }) => (
   <form>
     <textarea
       value={state.text}
-      onChange={(event) => dispatch(TextChanged.make({ text: event.target.value }))}
+      onChange={(event) => dispatch(actions.TextChanged, { text: event.target.value })}
     />
-    <button type="button" disabled={!state.dirty} onClick={() => dispatch(Reverted.make({}))}>
+    <button type="button" disabled={!state.dirty} onClick={() => dispatch(actions.Reverted)}>
       Revert
     </button>
-    <button type="button" onClick={() => dispatch(SaveClicked.make({}))}>
+    <button type="button" onClick={() => dispatch(actions.SaveClicked)}>
       Save
     </button>
-    <button type="button" onClick={() => dispatch(SaveCancelled.make({}))}>
+    <button type="button" onClick={() => dispatch(actions.SaveCancelled)}>
       Cancel
     </button>
     {Task.match(state.save, {
@@ -404,7 +419,7 @@ Two clicks still produce one save, and the outcome now lands in the field.
 
 ```ts continue
 const twoSaves = await Effect.runPromise(
-  editor.run([SaveClicked.make({}), SaveClicked.make({})], {
+  editor.run([actions.SaveClicked.make(), actions.SaveClicked.make()], {
     props: { noteId: "n1", initialText: "Buy milk" },
     hooks: {},
     layer: slowSave,
@@ -436,7 +451,7 @@ const failingSave = Layer.succeed(NotesApi)({
 });
 
 const failed = await Effect.runPromise(
-  editor.run([SaveClicked.make({})], {
+  editor.run([actions.SaveClicked.make()], {
     props: { noteId: "n1", initialText: "Buy milk" },
     hooks: {},
     layer: failingSave,
@@ -451,7 +466,7 @@ console.log(failed.state.save);
 
 ```ts continue
 const cancelled = await Effect.runPromise(
-  editor.run([SaveClicked.make({}), SaveCancelled.make({})], {
+  editor.run([actions.SaveClicked.make(), actions.SaveCancelled.make()], {
     props: { noteId: "n1", initialText: "Buy milk" },
     hooks: {},
     layer: slowSave,
@@ -483,7 +498,8 @@ import { notesApiLayer } from "./notes-api"; // runtime.ts
 import { NotesApi } from "./notes-api"; // note-editor.tsx, note-editor-by-hand.tsx
 import { component } from "./runtime"; // note-editor.tsx, note-editor-by-hand.tsx
 import { NoteEditor } from "./note-editor"; // main.tsx
-import { editor, SaveCancelled, SaveClicked } from "./note-editor"; // note-editor.test.ts
+import { actions, editor } from "./note-editor"; // note-editor.test.ts
+import { actions as byHandActions, byHand } from "./note-editor-by-hand"; // note-editor.test.ts
 ```
 
 ## Next
@@ -491,9 +507,9 @@ import { editor, SaveCancelled, SaveClicked } from "./note-editor"; // note-edit
 One editor saves one note. A list that mounts many editors, and hears about
 every save, is [chapter 3](/docs/tutorial/composing-features).
 
-For every option on `Task`, including `mode: "every"` and a typed failure
-schema, see [Tasks](/docs/reference/tasks). For the command constructors
-underneath it, see [Commands](/docs/reference/commands).
+For every option on `Task`, including `mode: "every"` and a `failure` schema
+with its `onError`, see [Tasks](/docs/reference/tasks). For the command
+constructors underneath it, see [Commands](/docs/reference/commands).
 
 Every command in this chapter completes: a save returns or fails, and `run`
 resolves once nothing is in flight. A source that never completes, such as a

@@ -45,12 +45,12 @@ import {
 import { Task } from "./utils/task";
 
 // ---------------------------------------------------------------------------
-// Vocabularies (Action, Action.output, Action.of)
+// Vocabularies (Action, Action.output, the define slots)
 // ---------------------------------------------------------------------------
 
 /**
  * The channel brand is module-private, so it is located by description. Used to
- * assert the value-level half of what `ChannelOf` asserts at the type level.
+ * assert the value-level half of what the slot types assert at the type level.
  */
 const channelOf = (branded: object): unknown => {
   const brand = Object.getOwnPropertySymbols(branded).find(
@@ -72,8 +72,8 @@ describe("vocabularies", () => {
     expect(Object.keys(Foo.fields).sort()).toEqual(["_tag", "id"]);
 
     // The channel brand is a real runtime property, not only a phantom:
-    // `Action.of` reads it off member zero to brand the vocabulary, so the
-    // value-level half has to be there for the type-level half to be honest.
+    // `define` reads it to check each slot, so the value-level half has to be
+    // there for the type-level half to be honest.
     expect(channelOf(Foo)).toBe("internal");
     expect(channelOf(OutboundFoo)).toBe("outbound");
   });
@@ -99,71 +99,82 @@ describe("vocabularies", () => {
     expect(channelOf(outputs.Saved)).toBe("outbound");
   });
 
-  it("`.of` builds a tagged union exposing cases, guards, and match", () => {
-    const Started = Action("Started", {});
-    const Failed = Action("Failed", { reason: Schema.String });
-    const Async = Action.of([Started, Failed]);
-
-    expect(Object.keys(Async.cases)).toEqual(["Started", "Failed"]);
-    expect(Async.guards.Started({ _tag: "Started" })).toBe(true);
-    expect(Async.guards.Started({ _tag: "Failed", reason: "x" })).toBe(false);
-
-    const matched = Async.match(
-      { _tag: "Failed", reason: "boom" },
-      { Started: () => "started", Failed: (f) => `failed:${f.reason}` },
-    );
-    expect(matched).toBe("failed:boom");
-
-    // Exposed by `Schema.toTaggedUnion` itself, not hand-rolled here — a
-    // presence check is enough; Effect's own suite covers its behavior.
-    expect(typeof Async.mapMembers).toBe("function");
-
-    // One `make` per case, filling `_tag` — this is what lets a reducer or a
-    // command construct a member without repeating the discriminant, and it is
-    // the half of `cases` that a plain array of schemas could not provide.
-    expect(Async.cases.Started.make({})).toEqual({ _tag: "Started" });
-    expect(Async.cases.Failed.make({ reason: "boom" })).toEqual({
-      _tag: "Failed",
-      reason: "boom",
+  it("a slot takes messages, records, tasks and nested arrays, flattened", async () => {
+    const Started = Action("Started");
+    const records = Action({ Failed: { reason: Schema.String }, Retried: {} });
+    const load = Task("Load", { success: Schema.String, run: () => Effect.succeed("ok") });
+    const outputs = Action.output({ Done: {} });
+    const Emitted = Action.output("Emitted");
+    const Feature = define({
+      props: Schema.Struct({}),
+      state: Schema.Struct({ log: Schema.Array(Schema.String), load: load.schema }),
+      action: [Started, [records, load]],
+      output: [outputs, Emitted],
     });
+    const feature = Feature.create({
+      initialState: () => ({ log: [], load: Task.idle }),
+      reducer: {
+        Started: (_p, { state }) =>
+          Task.start({ ...state, log: [...state.log, "Started"] }, "load", load.run()),
+        Failed: ({ reason }, { state }) => ({ ...state, log: [...state.log, reason] }),
+        Retried: (_p, { state }) => state,
+        ...load.into("load"),
+        LoadResolved: ({ value }, { state }) => [
+          { ...state, load: Task.resolved(value) },
+          Command.effect((dispatch) => Effect.andThen(dispatch(outputs.Done), dispatch(Emitted))),
+        ],
+      },
+      render: () => null,
+    });
+    const { state, outputs: out } = await Effect.runPromise(
+      feature.run([Started.make(), records.Failed.make({ reason: "x" })], {
+        props: {},
+        hooks: {},
+        layer: Layer.empty,
+      }),
+    );
+    expect(state.log).toEqual(["Started", "x"]);
+    expect(state.load).toEqual({ _tag: "Resolved", value: "ok" });
+    expect(out).toEqual([{ _tag: "Done" }, { _tag: "Emitted" }]);
   });
 
-  it("`.of` reads its channel off the members rather than being told", () => {
-    const Internal = Action.of([Action("Foo", {})]);
-    const Outbound = Action.of([Action.output("Bar", {})]);
-
-    // One `of`, two channels: the vocabulary's brand comes from member zero,
-    // which is the value-level counterpart of `ChannelOf`.
-    expect(channelOf(Internal)).toBe("internal");
-    expect(channelOf(Outbound)).toBe("outbound");
-
-    // ...and there is no per-channel `of` to disagree with it. Asking the
-    // caller to name a channel the members already carry would be a second
-    // source of truth. (The type-level half is in core.tst.ts.)
-    expect("of" in Action.output).toBe(false);
+  it("an announced task goes in the output slot", async () => {
+    const saved = Task.output("Saved", { success: Schema.String });
+    const Go = Action("Go");
+    const feature = define({
+      props: Schema.Struct({}),
+      state: Schema.Struct({}),
+      action: Go,
+      output: saved,
+    }).create({
+      initialState: () => ({}),
+      reducer: { Go: (_p, { state }) => [state, saved.run(Effect.succeed("ok"))] },
+      render: () => null,
+    });
+    const { outputs } = await Effect.runPromise(
+      feature.run([Go.make()], { props: {}, hooks: {}, layer: Layer.empty }),
+    );
+    expect(outputs).toEqual([{ _tag: "SavedResolved", value: "ok" }]);
   });
 
-  it("a vocabulary built with `.of` nests, flattening the outer `cases`", () => {
-    const Started = Action("Started", {});
-    const Failed = Action("Failed", { reason: Schema.String });
-    const Async = Action.of([Started, Failed]);
-    const CheckoutRequested = Action("CheckoutRequested", {});
-    const CartActions = Action.of([Async, CheckoutRequested]);
-
-    expect(Object.keys(CartActions.cases).sort()).toEqual(
-      ["CheckoutRequested", "Failed", "Started"].sort(),
+  it("a message in the wrong slot, a duplicate tag, or a non-message throws at define", () => {
+    const props = Schema.Struct({});
+    const state = Schema.Struct({});
+    const Out = Action.output("Out");
+    const In = Action("In");
+    expect(() => define({ props, state, action: [In, Out] as never })).toThrow(
+      /"Out" is outbound and cannot be declared in "action"/,
     );
-
-    // Key presence alone would be satisfied by a placeholder. A flattened tag
-    // has to be a first-class case of the *outer* union — constructible and
-    // discriminable there — since `Reducer` keys off `cases` and a handler for
-    // `Failed` has to receive the inner member's own type.
-    expect(CartActions.cases.Failed.make({ reason: "boom" })).toEqual({
-      _tag: "Failed",
-      reason: "boom",
-    });
-    expect(CartActions.guards.Failed({ _tag: "Failed", reason: "boom" })).toBe(true);
-    expect(CartActions.guards.Failed({ _tag: "CheckoutRequested" })).toBe(false);
+    expect(() => define({ props, state, action: In, output: In as never })).toThrow(
+      /"In" is internal and cannot be declared in "output"/,
+    );
+    expect(() => define({ props, state, action: [In, Action("In")] })).toThrow(
+      /tag "In" is declared twice/,
+    );
+    expect(() =>
+      define({ props, state, action: In, output: Action.output("In") as never }),
+    ).toThrow(/tag "In" is declared twice/);
+    expect(() => define({ props, state, action: [In, 1] as never })).toThrow(/1 is not a message/);
   });
 
   // Reserved lifecycle tags are rejected at compile time only — see
@@ -279,7 +290,7 @@ describe("Next", () => {
     const lazy = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Action("Bump", {}), Action("Seen", { count: Schema.Number })]),
+      action: [Action("Bump", {}), Action("Seen", { count: Schema.Number })],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -312,7 +323,7 @@ const Incremented = Action("Incremented", {});
 const Counter = define({
   props: CounterProps,
   state: CounterState,
-  action: Action.of([Incremented]),
+  action: [Incremented],
 });
 
 const counter = Counter.create({
@@ -344,7 +355,7 @@ describe("Feature.reduce", () => {
     const TwoWay = define({
       props: CounterProps,
       state: CounterState,
-      action: Action.of([Up, Down]),
+      action: [Up, Down],
     });
     const mountCommand = Command.effect(() => Effect.void);
     const twoWay = TwoWay.create({
@@ -495,7 +506,7 @@ const Announced = Action.output("Announced", { id: Schema.String });
 describe("Feature.run", () => {
   it("seeded actions are processed but not recorded in `emitted`", async () => {
     const Echo = Action("Echo", {});
-    const Feature = define({ props: RunProps, state: RunState, action: Action.of([Bump, Echo]) });
+    const Feature = define({ props: RunProps, state: RunState, action: [Bump, Echo] });
     const feature = Feature.create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -532,7 +543,7 @@ describe("Feature.run", () => {
 
   it("a seeded action's command starts before the next seeded action is reduced", async () => {
     const started: number[] = [];
-    const Feature = define({ props: RunProps, state: RunState, action: Action.of([Bump]) });
+    const Feature = define({ props: RunProps, state: RunState, action: [Bump] });
     const feature = Feature.create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -570,7 +581,7 @@ describe("Feature.run", () => {
   });
 
   it("a command's emissions feed back into the reducer and land in `emitted`", async () => {
-    const Feature = define({ props: RunProps, state: RunState, action: Action.of([Bump]) });
+    const Feature = define({ props: RunProps, state: RunState, action: [Bump] });
     const feature = Feature.create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -599,7 +610,7 @@ describe("Feature.run", () => {
     const feature = define({
       props: RunProps,
       state: RunState,
-      action: Action.of([Set]),
+      action: [Set],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -628,7 +639,7 @@ describe("Feature.run", () => {
     const Feature = define({
       props: RunProps,
       state: RunState,
-      action: Action.of([Bump, Echo, Done]),
+      action: [Bump, Echo, Done],
     });
     const feature = Feature.create({
       initialState: () => ({ count: 0 }),
@@ -659,7 +670,7 @@ describe("Feature.run", () => {
 
   it("`emitted` records every emission, including repeats of the same action", async () => {
     const Tick = Action("Tick", {});
-    const Feature = define({ props: RunProps, state: RunState, action: Action.of([Bump, Tick]) });
+    const Feature = define({ props: RunProps, state: RunState, action: [Bump, Tick] });
     const feature = Feature.create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -696,8 +707,8 @@ describe("Feature.run", () => {
     const Feature = define({
       props: RunProps,
       state: RunState,
-      action: Action.of([Bump]),
-      output: Action.of([Announced]),
+      action: [Bump],
+      output: [Announced],
     });
     const feature = Feature.create({
       initialState: () => ({ count: 0 }),
@@ -723,8 +734,8 @@ describe("Feature.run", () => {
     const Feature = define({
       props: RunProps,
       state: RunState,
-      action: Action.of([Bump]),
-      output: Action.of([Announced]),
+      action: [Bump],
+      output: [Announced],
     });
     const feature = Feature.create({
       initialState: () => ({ count: 0 }),
@@ -744,7 +755,7 @@ describe("Feature.run", () => {
   });
 
   it("services requested by a command are satisfied from options.layer", async () => {
-    const Feature = define({ props: RunProps, state: RunState, action: Action.of([Bump]) });
+    const Feature = define({ props: RunProps, state: RunState, action: [Bump] });
     const feature = Feature.create({
       initialState: () => ({ count: 0 }),
       reducer: { Bump: () => [{ count: 1 }, Command.effect(() => push("via-layer"))] },
@@ -759,7 +770,7 @@ describe("Feature.run", () => {
   });
 
   it("Command.none is interpreted as a no-op and does not hold up quiescence", async () => {
-    const Feature = define({ props: RunProps, state: RunState, action: Action.of([Bump]) });
+    const Feature = define({ props: RunProps, state: RunState, action: [Bump] });
     const feature = Feature.create({
       initialState: () => ({ count: 0 }),
       // The explicit no-op, as opposed to the bare-state return: the state
@@ -780,7 +791,7 @@ describe("Feature.run", () => {
 
   it("resolves only once quiescent, including a settle with no emission", async () => {
     const { ref, layer } = makeLogLayer();
-    const Feature = define({ props: RunProps, state: RunState, action: Action.of([Bump]) });
+    const Feature = define({ props: RunProps, state: RunState, action: [Bump] });
     const feature = Feature.create({
       initialState: () => ({ count: 0 }),
       // A bare Command.effect that emits nothing must still let `run` settle —
@@ -813,7 +824,7 @@ describe("Feature.run", () => {
   });
 
   it("Feature.run discards Unmounted's returned state (matches reduce)", async () => {
-    const Feature = define({ props: RunProps, state: RunState, action: Action.of([Bump]) });
+    const Feature = define({ props: RunProps, state: RunState, action: [Bump] });
     const feature = Feature.create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -844,7 +855,7 @@ describe("Feature.run", () => {
     const seen: ReadonlyArray<string>[] = [];
     let reachable = false;
 
-    const Feature = define({ props: RunProps, state: RunState, action: Action.of([Bump]) });
+    const Feature = define({ props: RunProps, state: RunState, action: [Bump] });
     const feature = Feature.create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -873,7 +884,7 @@ describe("Feature.run", () => {
     const captured: unknown[] = [];
     const capture = Logger.make(({ message }) => void captured.push(message));
 
-    const Feature = define({ props: RunProps, state: RunState, action: Action.of([Bump]) });
+    const Feature = define({ props: RunProps, state: RunState, action: [Bump] });
     const feature = Feature.create({
       initialState: () => ({ count: 0 }),
       reducer: { Bump: (_action, { state }) => ({ count: state.count + 1 }) },
@@ -890,7 +901,7 @@ describe("Feature.run", () => {
   });
 
   it("an unhandled lifecycle action in run() leaves state unchanged and does not throw", async () => {
-    const Feature = define({ props: RunProps, state: RunState, action: Action.of([Bump]) });
+    const Feature = define({ props: RunProps, state: RunState, action: [Bump] });
     const feature = Feature.create({
       initialState: () => ({ count: 0 }),
       // No PropsChanged handler declared.
@@ -909,7 +920,7 @@ describe("Feature.run", () => {
   });
 
   it("a genuinely unhandled tag reaching run()'s step rejects rather than silently no-opping", async () => {
-    const Feature = define({ props: RunProps, state: RunState, action: Action.of([Bump]) });
+    const Feature = define({ props: RunProps, state: RunState, action: [Bump] });
     const feature = Feature.create({
       initialState: () => ({ count: 0 }),
       reducer: { Bump: (_action, { state }) => ({ count: state.count + 1 }) },
@@ -925,7 +936,7 @@ describe("Feature.run", () => {
 
 describe("Feature.run — defects", () => {
   const Boom = Action("Boom", {});
-  const Feature = define({ props: RunProps, state: RunState, action: Action.of([Boom]) });
+  const Feature = define({ props: RunProps, state: RunState, action: [Boom] });
   const dying = Command.effect(() => Effect.die(new Error("kaboom")));
 
   it("folds a dying command through the `Error` handler and records it", async () => {
@@ -1034,7 +1045,7 @@ describe("snapshot.draft", () => {
   const Todos = define({
     props: Schema.Struct({}),
     state: Schema.Struct({ todos: Schema.Array(Todo), renamed: Schema.Number }),
-    action: Action.of([Toggled, Renamed, Reset, Mixed, Leaky]),
+    action: [Toggled, Renamed, Reset, Mixed, Leaky],
   });
   const persist = Command.effect(() => Effect.void);
   let leaked: unknown;
@@ -1173,7 +1184,7 @@ describe("snapshot.draft", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ n: Schema.Number }),
-      action: Action.of([Boom]),
+      action: [Boom],
     }).create({
       initialState: () => ({ n: 0 }),
       reducer: {
@@ -1201,7 +1212,7 @@ describe("snapshot.draft", () => {
         items: Schema.Array(Schema.Number),
         load: Task.schema(Schema.String),
       }),
-      action: Action.of([Clicked, ...load.actions]),
+      action: [Clicked, ...load.actions],
     }).create({
       initialState: () => ({ items: [], load: Task.idle }),
       reducer: {
@@ -1276,7 +1287,7 @@ describe("Feature internals slot", () => {
   const feature = define({
     props: Schema.Struct({ id: Schema.String }),
     state: Schema.Struct({ count: Schema.Number }),
-    action: Action.of([Action("Bump", {})]),
+    action: [Action("Bump", {})],
   }).create({
     initialState: () => ({ count: 0 }),
     reducer: { Bump: (_action, snapshot) => ({ count: snapshot.state.count + 1 }) },
@@ -1307,8 +1318,8 @@ describe("Feature internals slot", () => {
     const withOutputs = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Action("Bump", {})]),
-      output: Action.of([Action.output("Done", { at: Schema.Number })]),
+      action: [Action("Bump", {})],
+      output: [Action.output("Done", { at: Schema.Number })],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: { Bump: (_action, snapshot) => snapshot.state },
@@ -1363,8 +1374,8 @@ describe("createFeatureStore", () => {
     const feature = define({
       props: Props,
       state: State,
-      action: Action.of([Action("Bump", {}), Action("Echo", {})]),
-      ...(overrides.outputs ? { output: Action.of(overrides.outputs as any) } : {}),
+      action: [Action("Bump", {}), Action("Echo", {})],
+      ...(overrides.outputs ? { output: overrides.outputs as any } : {}),
     } as any).create({
       initialState: () => ({ count: 0, seen: 0 }),
       reducer: overrides.reducer ?? {
@@ -1448,7 +1459,7 @@ describe("createFeatureStore — sync", () => {
     const feature = define({
       props: Props,
       state: Schema.Struct({ propsChanged: Schema.Number, hookChanged: Schema.Number }),
-      action: Action.of([Action("Bump", {})]),
+      action: [Action("Bump", {})],
     }).create({
       initialState: () => ({ propsChanged: 0, hookChanged: 0 }),
       reducer: {
@@ -1501,7 +1512,7 @@ describe("createFeatureStore — sync", () => {
     const feature = define({
       props: Props,
       state: Schema.Struct({ id: Schema.String }),
-      action: Action.of([Action("Bump", {})]),
+      action: [Action("Bump", {})],
     }).create({
       initialState: (props) => ({ id: props.id }),
       reducer: {
@@ -1612,7 +1623,7 @@ describe("createFeatureStore — lifecycle", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Action("Bump", {})]),
+      action: [Action("Bump", {})],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: reducer as any,
@@ -1712,8 +1723,8 @@ describe("createFeatureStore — outputs", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Action("Bump", {})]),
-      output: Action.of([Done]),
+      action: [Action("Bump", {})],
+      output: [Done],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -1760,7 +1771,7 @@ describe("createFeatureStore — defects", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ handled: Schema.Number }),
-      action: Action.of([Action("Boom", {})]),
+      action: [Action("Boom", {})],
     }).create({
       initialState: () => ({ handled: 0 }),
       reducer: reducer as any,
@@ -1870,7 +1881,7 @@ describe("createFeatureStore — feature layers", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Action("Use", {})]),
+      action: [Action("Use", {})],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -1914,7 +1925,7 @@ describe("createFeatureStore — feature layers", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Action("Open", {})]),
+      action: [Action("Open", {})],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -2022,7 +2033,7 @@ describe("createFeatureStore — defects from commands (review regression)", () 
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ handled: Schema.Number }),
-      action: Action.of([Action("Boom", {})]),
+      action: [Action("Boom", {})],
     }).create({
       initialState: () => ({ handled: 0 }),
       reducer: reducer as any,
@@ -2139,7 +2150,7 @@ describe("createFeatureStore — remount races (review regression)", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Action("Loaded", {})]),
+      action: [Action("Loaded", {})],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -2203,7 +2214,7 @@ describe("createFeatureStore — remount races (review regression)", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Action("Noop", {})]),
+      action: [Action("Noop", {})],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -2254,8 +2265,8 @@ describe("createFeatureStore — output handler throw (review regression)", () =
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Action("Announce", {})]),
-      output: Action.of([Done]),
+      action: [Action("Announce", {})],
+      output: [Done],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -2305,7 +2316,7 @@ describe("createFeatureStore — review iteration 2 regressions", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Action("Boom", {}), Action("Step", {})]),
+      action: [Action("Boom", {}), Action("Step", {})],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: reducer as any,
@@ -2450,7 +2461,7 @@ describe("createFeatureStore — review iteration 2 regressions", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Action("Flushed", {})]),
+      action: [Action("Flushed", {})],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -2524,7 +2535,7 @@ describe("Command.batch grouping (review iteration 3)", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Action("Go", {}), Action("Stop", {})]),
+      action: [Action("Go", {}), Action("Stop", {})],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: reducer as any,
@@ -2594,7 +2605,7 @@ describe("createFeatureStore — a dead mount re-arms on demand", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ count: Schema.Number, errors: Schema.Number }),
-      action: Action.of([Action("Go", {})]),
+      action: [Action("Go", {})],
     }).create({
       initialState: () => ({ count: 0, errors: 0 }),
       reducer: {
@@ -2755,7 +2766,7 @@ describe("createFeatureStore — teardown belongs to the mount that started it",
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Action("Noop", {})]),
+      action: [Action("Noop", {})],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -2822,7 +2833,7 @@ describe("createFeatureStore — teardown belongs to the mount that started it",
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Action("Noop", {}), Action("SecondHop", {})]),
+      action: [Action("Noop", {}), Action("SecondHop", {})],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -2882,7 +2893,7 @@ describe("createFeatureStore — teardown belongs to the mount that started it",
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Action("Noop", {})]),
+      action: [Action("Noop", {})],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -2932,7 +2943,7 @@ describe("createFeatureStore — teardown belongs to the mount that started it",
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Action("Noop", {})]),
+      action: [Action("Noop", {})],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -2982,7 +2993,7 @@ describe("createFeatureStore — teardown belongs to the mount that started it",
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Action("Go", {})]),
+      action: [Action("Go", {})],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -3027,8 +3038,8 @@ describe("output-tag routing is one rule (review iteration 3)", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Action("Bump", {})]),
-      output: Action.of([Done]),
+      action: [Action("Bump", {})],
+      output: [Done],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: { Bump: (_action, snapshot) => snapshot.state },
@@ -3049,8 +3060,8 @@ describe("output-tag routing is one rule (review iteration 3)", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Action("Bump", {})]),
-      output: Action.of([Done]),
+      action: [Action("Bump", {})],
+      output: [Done],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: { Bump: (_action, snapshot) => snapshot.state },
@@ -3085,7 +3096,7 @@ describe("createFeatureStore — recovery after a dead mount (review iteration 4
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Action("Retry", {})]),
+      action: [Action("Retry", {})],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -3134,7 +3145,7 @@ describe("createFeatureStore — teardown drains to quiescence (review iteration
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Action("Go", {}), Action("Flushed", {})]),
+      action: [Action("Go", {}), Action("Flushed", {})],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: reducer as any,
@@ -3381,8 +3392,8 @@ describe("dispatch(Message, payload)", () => {
   const Counter = define({
     props: Schema.Struct({}),
     state: Schema.Struct({ n: Schema.Number }),
-    action: Action.of([Go, Bump]),
-    output: Action.of([Out]),
+    action: [Go, Bump],
+    output: [Out],
   });
 
   it("a command's schema-form dispatch folds the message `make` builds", async () => {
@@ -3502,7 +3513,7 @@ describe("Feature.run — the effect leaf", () => {
 
   it("a command emits by calling dispatch — zero times, once, or many", async () => {
     const Echo = Action("Echo", { id: Schema.String });
-    const Feature = define({ props: RunProps, state: RunState, action: Action.of([Bump, Echo]) });
+    const Feature = define({ props: RunProps, state: RunState, action: [Bump, Echo] });
     const feature = Feature.create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -3538,7 +3549,7 @@ describe("Feature.run — the effect leaf", () => {
 
   it("a command that ignores its dispatch emits nothing, whatever it succeeds with", async () => {
     const { ref, layer } = makeLogLayer();
-    const Feature = define({ props: RunProps, state: RunState, action: Action.of([Bump]) });
+    const Feature = define({ props: RunProps, state: RunState, action: [Bump] });
     const feature = Feature.create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -3572,8 +3583,8 @@ describe("Feature.run — the effect leaf", () => {
     const Feature = define({
       props: RunProps,
       state: RunState,
-      action: Action.of([Bump]),
-      output: Action.of([Announced]),
+      action: [Bump],
+      output: [Announced],
     });
     const feature = Feature.create({
       initialState: () => ({ count: 0 }),
@@ -3619,7 +3630,7 @@ describe("Feature.run — the effect leaf", () => {
     const Feature = define({
       props: RunProps,
       state: RunState,
-      action: Action.of([Go, Action("Stop", { id: Schema.String }), Action("Arm", {})]),
+      action: [Go, Action("Stop", { id: Schema.String }), Action("Arm", {})],
     });
     const feature = Feature.create({
       initialState: () => ({ count: 0 }),
@@ -3677,12 +3688,7 @@ describe("Feature.run — the effect leaf", () => {
     const Feature = define({
       props: RunProps,
       state: RunState,
-      action: Action.of([
-        Action("Search", {}),
-        Action("Poll", {}),
-        Action("Arm", {}),
-        Action("Stop", {}),
-      ]),
+      action: [Action("Search", {}), Action("Poll", {}), Action("Arm", {}), Action("Stop", {})],
     });
     const feature = Feature.create({
       initialState: () => ({ count: 0 }),
@@ -3726,12 +3732,7 @@ describe("Feature.run — the effect leaf", () => {
     const Feature = define({
       props: RunProps,
       state: RunState,
-      action: Action.of([
-        Action("Go", {}),
-        Action("Other", {}),
-        Action("Arm", {}),
-        Action("Stop", {}),
-      ]),
+      action: [Action("Go", {}), Action("Other", {}), Action("Arm", {}), Action("Stop", {})],
     });
     const feature = Feature.create({
       initialState: () => ({ count: 0 }),
@@ -3773,7 +3774,7 @@ describe("Feature.run — the effect leaf", () => {
     const Feature = define({
       props: RunProps,
       state: RunState,
-      action: Action.of([Go, Action("Stop", {}), Action("Arm", {})]),
+      action: [Go, Action("Stop", {}), Action("Arm", {})],
     });
     const feature = Feature.create({
       initialState: () => ({ count: 0 }),
@@ -3827,12 +3828,7 @@ describe("Feature.run — the effect leaf", () => {
     const Feature = define({
       props: RunProps,
       state: RunState,
-      action: Action.of([
-        Action("Go", {}),
-        Action("Arm", {}),
-        Action("StopTag", {}),
-        Action("StopName", {}),
-      ]),
+      action: [Action("Go", {}), Action("Arm", {}), Action("StopTag", {}), Action("StopName", {})],
     });
     const feature = Feature.create({
       initialState: () => ({ count: 0 }),
@@ -3903,7 +3899,7 @@ describe("Feature.run — the effect leaf", () => {
     const Feature = define({
       props: RunProps,
       state: RunState,
-      action: Action.of([Go, Action("Stop", {}), Action("Arm", {})]),
+      action: [Go, Action("Stop", {}), Action("Arm", {})],
     });
     const feature = Feature.create({
       initialState: () => ({ count: 0 }),
@@ -3963,7 +3959,7 @@ describe("Feature.run — the effect leaf", () => {
     const Feature = define({
       props: RunProps,
       state: RunState,
-      action: Action.of([Go, Action("Arm", {})]),
+      action: [Go, Action("Arm", {})],
     });
     const feature = Feature.create({
       initialState: () => ({ count: 0 }),
@@ -4033,7 +4029,7 @@ describe("Feature.run — the effect leaf", () => {
     const Feature = define({
       props: RunProps,
       state: RunState,
-      action: Action.of([Go, Action("Arm", {})]),
+      action: [Go, Action("Arm", {})],
     });
     const feature = Feature.create({
       initialState: () => ({ count: 0 }),
@@ -4093,7 +4089,7 @@ describe("Feature.run — the effect leaf", () => {
       readonly command?: Command<never, never>;
       readonly subscription?: Subscription<never, never>;
     }) => {
-      const Feature = define({ props: RunProps, state: RunState, action: Action.of([Bump]) });
+      const Feature = define({ props: RunProps, state: RunState, action: [Bump] });
       const feature = Feature.create({
         initialState: () => ({ count: 0 }),
         reducer: {
@@ -4159,8 +4155,8 @@ describe("createFeatureStore — devtools", () => {
     const feature = define({
       props: Schema.Struct({ id: Schema.String }),
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Action("Bump", {}), Action("Land", {})]),
-      ...(options.outputs ? { output: Action.of([Placed]) } : {}),
+      action: [Action("Bump", {}), Action("Land", {})],
+      ...(options.outputs ? { output: [Placed] } : {}),
     } as any).create({
       initialState: () => ({ count: 0 }),
       reducer: options.reducer as any,
@@ -4857,7 +4853,7 @@ describe("createFeatureStore — devtools", () => {
     const feature = define({
       props: Schema.Struct({ id: Schema.String }),
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Action("Bump", {})]),
+      action: [Action("Bump", {})],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -4931,7 +4927,7 @@ describe("Children", () => {
       define({
         props: Schema.Struct({}),
         state: Schema.Struct({ node: Children }) as never,
-        action: Action.of([Action("Bump", {})]),
+        action: [Action("Bump", {})],
       }),
     ).toThrow(/node.*state.*props/s);
   });
@@ -4947,7 +4943,7 @@ describe("Children", () => {
     define({
       props: props as never,
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Action("Bump", {})]),
+      action: [Action("Bump", {})],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -5099,7 +5095,7 @@ describe("Children", () => {
     const feature = define({
       props: Props as never,
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Action("Bump", {})]),
+      action: [Action("Bump", {})],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: {

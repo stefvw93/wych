@@ -61,7 +61,7 @@ describe("commands", () => {
   const batcher = define({
     props: Schema.Struct({}),
     state: Schema.Struct({ n: Schema.Number }),
-    action: Action.of([Many]),
+    action: [Many],
   }).create({
     initialState: () => ({ n: 0 }),
     reducer: {
@@ -120,7 +120,7 @@ describe("Feature.run", () => {
   const echo = define({
     props: Schema.Struct({}),
     state: Schema.Struct({ pongs: Schema.Number }),
-    action: Action.of([Ping, Pong]),
+    action: [Ping, Pong],
   }).create({
     initialState: () => ({ pongs: 0 }),
     reducer: {
@@ -173,7 +173,7 @@ describe("props", () => {
   const wide = define({
     props: Props30,
     state: Schema.Struct({ changes: Schema.Number }),
-    action: Action.of([Tock]),
+    action: [Tock],
   }).create({
     initialState: () => ({ changes: 0 }),
     reducer: {
@@ -219,7 +219,7 @@ describe("draft", () => {
   const feature = define({
     props: Props,
     state: Schema.Struct({ n: Schema.Number, items: Schema.Array(Item) }),
-    action: Action.of([Top, TopDraft, Nested, NestedDraft]),
+    action: [Top, TopDraft, Nested, NestedDraft],
   }).create({
     initialState: () => ({ n: 0, items: Array.from({ length: 20 }, (_, id) => ({ id, qty: 1 })) }),
     reducer: {

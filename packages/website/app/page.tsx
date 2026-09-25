@@ -26,12 +26,12 @@ export class SearchApi extends Context.Service<
 >()("SearchApi") {}
 
 export const Typed = Action("Typed", { query: Schema.String });
-const Cleared = Action("Cleared", {});
+const Cleared = Action("Cleared");
 
-// Two actions (SearchResolved, SearchRejected) and one cancellable command.
+// Two actions (SearchResolved, SearchRejected), one cancellable command,
+// and the schema of the field that holds the result.
 const search = Task("Search", {
   success: Hits,
-  onError: Task.errorMessage,
   run: (query: string) =>
     Effect.gen(function* () {
       const api = yield* SearchApi;
@@ -41,8 +41,8 @@ const search = Task("Search", {
 
 export const taskSearch = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({ query: Schema.String, results: Task.schema(Hits) }),
-  action: Action.of([Typed, Cleared, ...search.actions]),
+  state: Schema.Struct({ query: Schema.String, results: search.schema }),
+  action: [Typed, Cleared, search],
 }).create({
   initialState: () => ({ query: "", results: Task.idle }),
   reducer: {
@@ -62,7 +62,7 @@ export const taskSearch = define({
     <div>
       <input
         value={state.query}
-        onChange={(e) => dispatch(Typed.make({ query: e.target.value }))}
+        onChange={(e) => dispatch(Typed, { query: e.target.value })}
       />
       {Task.match(state.results, {
         Idle: () => null,

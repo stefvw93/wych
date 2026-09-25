@@ -3,7 +3,8 @@
 ## Overview & Purpose
 
 A **feature** is declared with `define` and built with `create`: schema-typed props and state, a tagged
-action vocabulary, an optional outbound output vocabulary, optional ambient
+action vocabulary, an optional outbound output vocabulary (each a message, a
+record of messages, a `Task`, or an array of those), optional ambient
 hooks, and a reducer. The reducer is pure — it returns the next state and,
 optionally, a `Command` describing work to do. The runtime interprets commands
 as Effects. A handler builds the next state by hand or through
@@ -349,7 +350,8 @@ Immer is not shipped; a user who wants it writes
 
 **What is not drafted.** `render` and `subscriptions` receive a plain
 `Snapshot`: neither is a place to change state. `Task.into`'s generated
-handlers spread `snapshot.state` and are unaffected. Effect data types
+handlers spread `snapshot.state` and are unaffected; `resolvedInto` and
+`rejectedInto` write into `snapshot.draft` and hand it on. Effect data types
 inside state (`Option`, `Chunk`, anything with `pipe`) are atomic to the
 drafter and to `Draft<T>`: same value, same type, still immutable.
 
@@ -365,15 +367,15 @@ here. The devtools pass closed the last two (its criteria live in
 `devtools.specs.md`), and the flat-group-namespace + `Command.restart` pass
 landed with every box checked again.
 
-### Vocabularies (`Action`, `Action.output`, `Action.of`)
+### Vocabularies (`Action`, `Action.output`, the `define` slots)
 
 - [x] `Action("Tag", fields)` / `Action.output("Tag", fields)` constructs a `Schema.TaggedStruct` branded with its channel (`"internal"` vs `"outbound"`).
 - [x] `fields` is optional: `Action("Reverted")` is `Action("Reverted", {})`. A message whose fields are all optional has `make()` with no argument, equal to `make({})`; a message with a required field does not.
 - [x] `Action({ Tag: fields, … })` / `Action.output({ … })` is the record form: one branded message per key, the key as its tag, frozen, in key order. A lower-case key or a lifecycle key is a compile error naming the key.
-- [x] `Action.of([...])` builds a branded tagged union exposing `cases`, `guards`, `match`, `mapMembers`, and a `make` per case.
-- [x] `Action.of` infers the channel from its members' brand; there is no per-channel `of`.
-- [x] `Action.of` rejects a member list mixing channels, at the call rather than at `define`.
-- [x] A vocabulary built with `.of` nests inside another `.of`, and the outer `cases` include the flattened inner tags.
+- [x] `define`'s `action` and `output` slots take a `MemberSource`: a message, a record of messages, a `Task` operation, or an array of those, one array deep inside another at most. There is no vocabulary wrapper; `define` flattens the source once, and `MemberOf`/`TagsOf` flatten it at the type level.
+- [x] The slot is the channel check: `action` takes internal members only and `output` outbound ones, so an outbound message, a `Task.output` operation or a mixed array in `action` is a compile error, and the reverse in `output`. `define` repeats the check at runtime and throws a `TypeError` naming the tag, for a source that got past the types through a cast.
+- [x] A tag declared twice across both slots throws a `TypeError` at `define`. The types do not catch it: two members with one tag unify into a union payload.
+- [x] A `Task` operation is a member source through a module-private `members` brand, which survives the `{ ...operation, into }` spread; `op.actions` is the same pair, for reading.
 - [x] The channels are not mutually assignable in either direction.
 - [x] A reserved `LifecycleTag` (`Mounted`/`PropsChanged`/`Error`/`Unmounted`/`HookChanged`) as a message tag is a compile error.
 
@@ -482,6 +484,7 @@ landed with every box checked again.
 ### Type-level (TSTyche)
 
 - [x] `Disjoint`, `NoPropCollision`, `Exhaustive`/`Excess`, `ServiceOf`/`ServicesOf` reject what they document and accept what they document.
+- [x] `MemberOf` over `[Started, [Action({ Failed }), load]]` is the union of the four message values, `TagsOf` their tags; each slot rejects a member of the other channel, alone, in an array, or as a `Task`. `MemberSource`'s depth is bounded because `MemberOf` recurses over it, and over a recursive constraint it never bottoms out (`Type instantiation is excessively deep`).
 - [x] A transforming props schema is accepted: `define` normalizes it to its `Type` side with `Schema.toType`, so a codec field surfaces to `initialState`, the reducer and `render` as its decoded `Type`, the parent passes decoded values, and the wire shape is rejected by `validateProps` rather than decoded.
 - [x] A props schema declaring `children: Children` surfaces the field to `initialState`, the reducer and `render` as `ReactNode`, optional under `Schema.optionalKey` and as the given function type under `Children.as<T>()`.
 - [x] `Command<Narrow>` stays assignable to `Command<Wide>` under the callback leaf, and `Command.none: Command<never>` stays the bottom. `Dispatcher<A>` is contravariant in `A` and sits in a parameter position — contravariant again — so the two compose to covariant. **The existing covariance test passes unchanged.**
@@ -1181,7 +1184,7 @@ Mutative default keeps every call site as it was; the override stays.
 removed, and outbound messages go through the same `dispatch`, routed by `_tag`
 against the declared output cases — which is already how routing works and
 already own-keys checked. The channel brand keeps its declaration-time jobs
-(`ChannelOf`, `SameChannel`, `Disjoint`, `OutputProps`); it stops being checked
+(the slot types, `Disjoint`, `OutputProps`); it stops being checked
 at the command call site, where it never affected routing anyway.
 
 **Partially executed.** `dispatch` takes `(Message, payload)` as well as a built message, so every send site has the one shape `Command.output(Message, payload)` already had. `dispatch` now carries `Emit<A, O>` everywhere — the

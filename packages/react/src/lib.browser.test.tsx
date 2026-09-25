@@ -26,8 +26,8 @@ const Reached = Action.output("Reached", { at: Schema.Number });
 const Counter = define({
   props: Schema.Struct({ step: Schema.Number, label: Schema.String }),
   state: Schema.Struct({ count: Schema.Number, renders: Schema.Number }),
-  action: Action.of([Action("Bumped", {}), Action("Announce", {})]),
-  output: Action.of([Reached]),
+  action: [Action("Bumped", {}), Action("Announce", {})],
+  output: [Reached],
 });
 
 const counter = Counter.create({
@@ -139,7 +139,7 @@ test("a hook derived from state catches up on a props-driven change in the same 
   const Derived = define({
     props: Schema.Struct({ step: Schema.Number }),
     state: Schema.Struct({ count: Schema.Number, big: Schema.Boolean }),
-    action: Action.of([Action("Noop", {})]),
+    action: [Action("Noop", {})],
     useUnsafeHooks: (_props, state) => ({ big: state.count >= 10 }),
   }).create({
     initialState: (props) => ({ count: props.step, big: false }),
@@ -186,7 +186,7 @@ test("`Mounted` folds before a `PropsChanged` that lands in the first commit", a
   const Ordered = define({
     props: Schema.Struct({ step: Schema.Number }),
     state: Schema.Struct({ step: Schema.Number }),
-    action: Action.of([Action("Noop", {})]),
+    action: [Action("Noop", {})],
   }).create({
     initialState: (props) => ({ step: props.step }),
     reducer: {
@@ -229,7 +229,7 @@ test("props identity churn alone does not raise `PropsChanged`", async () => {
   const Watched = define({
     props: Schema.Struct({ id: Schema.String }),
     state: Schema.Struct({ changes: Schema.Number }),
-    action: Action.of([Action("Noop", {})]),
+    action: [Action("Noop", {})],
   }).create({
     initialState: () => ({ changes: 0 }),
     reducer: {
@@ -296,8 +296,8 @@ test("a declared prop that merely looks like an output handler survives the spli
   const Scroller = define({
     props: Schema.Struct({ onScroll: Schema.Any }),
     state: Schema.Struct({ count: Schema.Number }),
-    action: Action.of([Action("Noop", {})]),
-    output: Action.of([Reached]),
+    action: [Action("Noop", {})],
+    output: [Reached],
   }).create({
     initialState: () => ({ count: 0 }),
     reducer: { Noop: (_action, { state }) => state },
@@ -362,7 +362,7 @@ test("a Retry from the `Error` handler rebuilds a failed layer and runs its comm
   const Flaky = define({
     props: Schema.Struct({}),
     state: Schema.Struct({ status: Schema.String, from: Schema.String }),
-    action: Action.of([Action("Retry", {}), Action("Loaded", {})]),
+    action: [Action("Retry", {}), Action("Loaded", {})],
   });
 
   const flakyFeature = Flaky.create({
@@ -406,7 +406,7 @@ const codedFeature = () =>
   define({
     props: Schema.Struct({ page: Schema.NumberFromString }),
     state: Schema.Struct({ seen: Schema.Number }),
-    action: Action.of([Action("Noop", {})]),
+    action: [Action("Noop", {})],
   }).create({
     initialState: (props) => ({ seen: props.page }),
     reducer: {
@@ -476,8 +476,8 @@ test("an output dispatched straight from render leaves through its prop", async 
   const echo = define({
     props: Schema.Struct({}),
     state: Schema.Struct({}),
-    action: Action.of([]),
-    output: Action.of([Sent]),
+    action: [],
+    output: [Sent],
   }).create({
     initialState: () => ({}),
     reducer: {},
@@ -507,8 +507,8 @@ test("`render`'s dispatch takes a message schema and its payload", async () => {
   const tally = define({
     props: Schema.Struct({}),
     state: Schema.Struct({ total: Schema.Number }),
-    action: Action.of([actions.Bumped, actions.Added]),
-    output: Action.of([outputs.Sent]),
+    action: [actions.Bumped, actions.Added],
+    output: [outputs.Sent],
   }).create({
     initialState: () => ({ total: 0 }),
     reducer: {
@@ -577,7 +577,7 @@ test("a props change costs two renders and one frame, measured", async () => {
   const Counted = define({
     props: Schema.Struct({ step: Schema.Number }),
     state: Schema.Struct({ mirrored: Schema.Number }),
-    action: Action.of([Action("Noop", {})]),
+    action: [Action("Noop", {})],
   }).create({
     initialState: (props) => ({ mirrored: props.step }),
     reducer: {
@@ -654,7 +654,7 @@ test("declared `children` render, and changing them alone does not raise `PropsC
   const Panel = define({
     props: Schema.Struct({ title: Schema.String, children: Schema.optionalKey(Children) }),
     state: Schema.Struct({ changes: Schema.Number }),
-    action: Action.of([Action("Noop", {})]),
+    action: [Action("Noop", {})],
   }).create({
     initialState: () => ({ changes: 0 }),
     reducer: {
@@ -709,7 +709,7 @@ test("`children` can be a render prop, called with the feature's own state", asy
       children: Children.as<(row: { readonly id: string }) => React.ReactNode>(),
     }),
     state: Schema.Struct({ picked: Schema.String }),
-    action: Action.of([Action("Picked", { id: Schema.String })]),
+    action: [Action("Picked", { id: Schema.String })],
   }).create({
     initialState: () => ({ picked: "a" }),
     reducer: { Picked: (action, { state }) => ({ ...state, picked: action.id }) },
@@ -744,8 +744,8 @@ test("`children` can be a render prop, called with the feature's own state", asy
 const Tally = define({
   props: Schema.Struct({ step: Schema.Number }),
   state: Schema.Struct({ count: Schema.Number }),
-  action: Action.of([Action("Bumped", {})]),
-  output: Action.of([Reached]),
+  action: [Action("Bumped", {})],
+  output: [Reached],
 }).create({
   initialState: () => ({ count: 0 }),
   reducer: { Bumped: (_action, { state, props }) => ({ count: state.count + props.step }) },

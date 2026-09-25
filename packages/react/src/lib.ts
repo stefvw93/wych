@@ -136,47 +136,67 @@ export type AnyMessage<Ch extends Channel> = Schema.Codec<any, any> & {
   readonly [channel]: Ch;
 };
 
-/**
- * Tagged union, branded with channel.
- */
-export type Vocabulary<
-  Members extends ReadonlyArray<AnyMessage<Channel>>,
-  Ch extends Channel,
-> = Schema.toTaggedUnion<"_tag", Members> & { readonly [channel]: Ch };
+const members: unique symbol = Symbol("@wych/members");
+
+/** Anything carrying a channel brand: the least a carried member has to show. */
+type Branded<Ch extends Channel> = { readonly [channel]: Ch };
 
 /**
- * The channel a member list belongs to, read off the members' own brand.
+ * @internal A value that declares messages without being one: a `Task`
+ * operation carries its two actions this way, so it goes into a slot as is.
  */
-export type ChannelOf<Members extends ReadonlyArray<AnyMessage<Channel>>> =
-  Members extends ReadonlyArray<AnyMessage<"internal">>
-    ? Members extends ReadonlyArray<AnyMessage<"outbound">>
-      ? never
-      : "internal"
-    : "outbound";
+export interface MemberCarrier<M extends ReadonlyArray<Branded<Channel>>> {
+  readonly [members]: M;
+}
+
+/** @internal Brand `value` as carrying `list`. */
+export const carryMembers = <T extends object, const M extends ReadonlyArray<Branded<Channel>>>(
+  value: T,
+  list: M,
+): T & MemberCarrier<M> => Object.assign(value, { [members]: list });
+
+/** One source that is not an array: a message, a `Task`, or a record of messages. */
+export type MemberLeaf<Ch extends Channel> =
+  | AnyMessage<Ch>
+  | MemberCarrier<ReadonlyArray<Branded<Ch>>>
+  | { readonly [tag: string]: AnyMessage<Ch> };
 
 /**
- * Rejects a member list that straddles both channels, at the `of` call rather
- * than wherever the resulting vocabulary is used.
+ * What `define`'s `action` and `output` slots take: a message, a record of
+ * messages (`Action({ … })`), a `Task` operation, or an array of those, one
+ * array deep inside another at most. `Ch` is the slot's channel, so an
+ * outbound message in the `action` slot is a compile error.
+ *
+ * The depth is bounded because `MemberOf` recurses over it: over a recursive
+ * constraint it would never bottom out.
  */
-export type SameChannel<Members extends ReadonlyArray<AnyMessage<Channel>>> =
-  Members extends ReadonlyArray<AnyMessage<"internal">>
-    ? unknown
-    : Members extends ReadonlyArray<AnyMessage<"outbound">>
-      ? unknown
-      : never;
+export type MemberSource<Ch extends Channel> =
+  | MemberLeaf<Ch>
+  | ReadonlyArray<MemberLeaf<Ch> | ReadonlyArray<MemberLeaf<Ch>>>;
 
 /**
- * The constraint everything downstream is written against.
+ * The message values a source declares, as a union. Reads the channel brand
+ * rather than matching `AnyMessage`: a structural check against a schema is
+ * deep, and this recurses.
  */
-export type AnyVocabulary<Ch extends Channel> = {
-  readonly [channel]: Ch;
-  readonly cases: Record<string, { readonly Type: { readonly _tag: string } }>;
-  readonly Type: { readonly _tag: string };
-};
+export type MemberOf<S> = S extends { readonly [channel]: Channel; readonly Type: infer T }
+  ? T
+  : S extends { readonly [members]: infer M extends ReadonlyArray<unknown> }
+    ? MemberOf<M[number]>
+    : S extends ReadonlyArray<infer E>
+      ? MemberOf<E>
+      : S extends object
+        ? MemberOf<S[keyof S]>
+        : never;
 
-export type TagsOf<V extends AnyVocabulary<Channel>> = keyof V["cases"] & string;
+/** The message values a source declares, known to be tagged. */
+export type MembersOf<S> = Extract<MemberOf<S>, Tagged>;
 
-export type MemberOf<V extends AnyVocabulary<Channel>> = V["Type"];
+/** The tags a source declares. */
+export type TagsOf<S> = MembersOf<S>["_tag"];
+
+/** A message value: what the vocabulary types below are written against. */
+export type Tagged = { readonly _tag: string };
 
 export interface MessageConstructor<Ch extends Channel> {
   /** One message. `fields` is optional: `Action("Reverted")` carries no payload. */
@@ -205,17 +225,17 @@ export interface Vocabularies extends MessageConstructor<"internal"> {
    * Delivered as one `on<Tag>` prop per output — see `OutputProps`.
    */
   readonly output: MessageConstructor<"outbound">;
-
-  readonly of: <const Members extends ReadonlyArray<AnyMessage<Channel>>>(
-    members: Members & SameChannel<Members>,
-  ) => Vocabulary<Members, ChannelOf<Members>>;
 }
+
+/** The tag a message was declared with, read by `define` without decoding the schema. */
+const messageTag: unique symbol = Symbol("@wych/tag");
 
 const message = (ch: Channel, tag: string, fields: Schema.Struct.Fields = {}) => {
   const schema = Schema.TaggedStruct(tag, fields);
   const make = schema.make.bind(schema);
   return Object.assign(schema, {
     [channel]: ch,
+    [messageTag]: tag,
     make: (input?: object, options?: Schema.MakeOptions) => make((input ?? {}) as never, options),
   });
 };
@@ -239,27 +259,19 @@ export const messages = <Ch extends Channel>(ch: Ch) =>
  */
 export const Action = Object.assign(messages("internal"), {
   output: messages("outbound"),
-  of: (members: ReadonlyArray<AnyMessage<Channel>>) =>
-    Object.assign(Schema.Union(members).pipe(Schema.toTaggedUnion("_tag")), {
-      [channel]: members[0]?.[channel],
-    }),
 }) as Vocabularies;
 
-/** The empty vocabulary, so a leaf feature declares nothing. `Type` is `never`. */
-export type NoOutputs = Vocabulary<readonly [], "outbound">;
-
-export type Disjoint<A extends AnyVocabulary<"internal">, O extends AnyVocabulary<"outbound">> = [
-  Extract<TagsOf<A>, TagsOf<O>>,
-] extends [never]
+/** An action tag and an output tag may not coincide. */
+export type Disjoint<A extends Tagged, O extends Tagged> = [Extract<A["_tag"], O["_tag"]>] extends [
+  never,
+]
   ? unknown
   : never;
 
 /**
  * What a command may emit.
  */
-export type Emit<A extends AnyVocabulary<"internal">, O extends AnyVocabulary<"outbound">> =
-  | MemberOf<A>
-  | MemberOf<O>;
+export type Emit<A extends Tagged, O extends Tagged> = A | O;
 
 export type AnyStateSchema = Schema.Struct<any>;
 
@@ -361,10 +373,11 @@ export type OutputProps<Output extends { readonly _tag: string }> = {
   ) => void;
 };
 
-export type NoPropCollision<
-  PropsSchema extends AnyPropsSchema,
-  O extends AnyVocabulary<"outbound">,
-> = [Extract<keyof PropsOf<PropsSchema>, `on${TagsOf<O>}`>] extends [never] ? unknown : never;
+export type NoPropCollision<PropsSchema extends AnyPropsSchema, O extends Tagged> = [
+  Extract<keyof PropsOf<PropsSchema>, `on${O["_tag"]}`>,
+] extends [never]
+  ? unknown
+  : never;
 
 // ---------------------------------------------------------------------------
 // Services
@@ -384,6 +397,48 @@ type ServiceOf<T> = T extends readonly [any, Command<any, infer R>]
 export type ServicesOf<U> = {
   [K in keyof U]: ServiceOf<ReturnType<Extract<U[K], (...args: any) => any>>>;
 }[keyof U];
+
+// ---------------------------------------------------------------------------
+// Member sources, at runtime
+// ---------------------------------------------------------------------------
+
+/** Every message a `MemberSource` declares, in declaration order. */
+const flattenMembers = (
+  source: unknown,
+  out: Array<AnyMessage<Channel>> = [],
+): Array<AnyMessage<Channel>> => {
+  // First: a message schema is a function carrying properties, which the
+  // record branch would otherwise walk.
+  if (isMessage(source)) out.push(source);
+  else if (Array.isArray(source)) for (const member of source) flattenMembers(member, out);
+  else if (typeof source === "object" && source !== null && Object.hasOwn(source, members))
+    flattenMembers((source as MemberCarrier<ReadonlyArray<Branded<Channel>>>)[members], out);
+  else if (typeof source === "object" && source !== null)
+    for (const member of Object.values(source)) flattenMembers(member, out);
+  else
+    throw new TypeError(
+      `define: ${String(source)} is not a message, a record of messages, a Task, or an array of those`,
+    );
+  return out;
+};
+
+/** The tags of a slot, checked against its channel and against every tag seen so far. */
+const tagsIn = (
+  source: unknown,
+  expected: Channel,
+  slot: "action" | "output",
+  seen: Set<string>,
+): Array<string> =>
+  flattenMembers(source).map((member) => {
+    const tag = (member as unknown as { readonly [messageTag]: string })[messageTag];
+    if (member[channel] !== expected)
+      throw new TypeError(
+        `define: "${tag}" is ${member[channel]} and cannot be declared in "${slot}"`,
+      );
+    if (seen.has(tag)) throw new TypeError(`define: tag "${tag}" is declared twice`);
+    seen.add(tag);
+    return tag;
+  });
 
 // ---------------------------------------------------------------------------
 // Commands
@@ -1191,13 +1246,13 @@ export type Exhaustive<U, State, Allowed extends string = string> = {
 export type Reducer<
   Props,
   State,
-  A extends AnyVocabulary<"internal">,
-  O extends AnyVocabulary<"outbound">,
+  A extends Tagged,
+  O extends Tagged,
   H extends AnyHooks,
   R = never,
 > = {
-  readonly [K in keyof A["cases"]]: (
-    payload: Simplify<Omit<A["cases"][K]["Type"], "_tag">>,
+  readonly [K in A["_tag"]]: (
+    payload: Simplify<Omit<Extract<A, { readonly _tag: K }>, "_tag">>,
     snapshot: ReducerSnapshot<Props, State, H>,
   ) => Next<State, Emit<A, O>, R>;
 } & LifecycleHandlers<Props, State, Emit<A, O>, H, R>;
@@ -1368,14 +1423,14 @@ export interface RunDefect {
 export interface FeatureDefinition<
   Props,
   State,
-  A extends AnyVocabulary<"internal">,
-  O extends AnyVocabulary<"outbound">,
+  A extends Tagged,
+  O extends Tagged,
   H extends AnyHooks,
 > {
   readonly initialState: (initialState: (props: Props) => State) => (props: Props) => State;
 
   readonly reducer: <U extends Reducer<Props, State, A, O, H, any>>(
-    reducer: U & Exhaustive<U, State, TagsOf<A> | LifecycleTag>,
+    reducer: U & Exhaustive<U, State, A["_tag"] | LifecycleTag>,
   ) => U;
 
   /**
@@ -1408,10 +1463,10 @@ export interface FeatureDefinition<
    */
   readonly create: <U extends Reducer<Props, State, A, O, H, any>, SR = never>(parts: {
     readonly initialState: (props: Props) => State;
-    readonly reducer: U & Exhaustive<U, State, TagsOf<A> | LifecycleTag>;
+    readonly reducer: U & Exhaustive<U, State, A["_tag"] | LifecycleTag>;
     readonly render: Render<Props, State, Emit<A, O>, H>;
     readonly subscriptions?: SubscriptionsHook<Props, State, H, Emit<A, O>, SR>;
-  }) => Feature<Props, State, MemberOf<A>, MemberOf<O>, H, ServicesOf<U> | SR>;
+  }) => Feature<Props, State, A, O, H, ServicesOf<U> | SR>;
 }
 
 /**
@@ -1419,13 +1474,14 @@ export interface FeatureDefinition<
  *
  * Every piece arrives from a *value*, so there are no explicit type arguments
  * at all — `Props`, `State`, the vocabularies and the hooks are inferred from
- * one object literal.
+ * one object literal. `action` and `output` each take a message, a record of
+ * messages, a `Task`, or an array of those.
  *
  *     const Cart = define({
  *       props: Props,
  *       state: State,
- *       action: Action.of([…]),
- *       output: Action.of([OrderPlaced]),
+ *       action: [actions, checkout],
+ *       output: OrderPlaced,
  *       useUnsafeHooks: …,
  *     })
  *
@@ -1434,17 +1490,31 @@ export interface FeatureDefinition<
 export const define: <
   PropsSchema extends AnyPropsSchema,
   StateSchema extends AnyStateSchema,
-  A extends AnyVocabulary<"internal">,
-  O extends AnyVocabulary<"outbound"> = NoOutputs,
+  const AS extends MemberSource<"internal">,
+  const OS extends MemberSource<"outbound"> = readonly [],
   H extends AnyHooks = {},
 >(spec: {
   readonly props: PropsSchema;
   readonly state: StateSchema;
-  readonly action: A;
-  readonly output?: O & Disjoint<A, O> & NoPropCollision<PropsSchema, O>;
+  readonly action: AS;
+  readonly output?: OS &
+    Disjoint<MembersOf<AS>, MembersOf<OS>> &
+    NoPropCollision<PropsSchema, MembersOf<OS>>;
 
   readonly useUnsafeHooks?: HookSpec<PropsOf<PropsSchema>, StateOf<StateSchema>, H>;
-}) => FeatureDefinition<PropsOf<PropsSchema>, StateOf<StateSchema>, A, O, H> = (spec) => {
+}) => FeatureDefinition<
+  PropsOf<PropsSchema>,
+  StateOf<StateSchema>,
+  MembersOf<AS>,
+  MembersOf<OS>,
+  H
+> = ((spec: {
+  readonly props: AnyPropsSchema;
+  readonly state: AnyStateSchema;
+  readonly action: unknown;
+  readonly output?: unknown;
+  readonly useUnsafeHooks?: HookSpec<any, any, any>;
+}): FeatureDefinition<any, any, any, any, any> => {
   // Opaque declarations (`Children`) are redacted only in `PropsChanged`
   // events; state reaches devtools transitions verbatim. Refusing them here
   // keeps the "every event is encodable" contract honest.
@@ -1456,13 +1526,20 @@ export const define: <
     );
   }
 
+  // The slot types already hold both checks; these catch a source that got
+  // past them through a cast, where a wrong channel would route an action
+  // out through a prop, or an output into the reducer.
+  const seen = new Set<string>();
+  tagsIn(spec.action, "internal", "action", seen);
+  const outputTags =
+    spec.output === undefined ? [] : tagsIn(spec.output, "outbound", "output", seen);
+
   return {
     initialState: (initialState) => (props) => initialState(props),
     reducer: identity,
     render: identity,
     subscriptions: identity,
     create: (parts) => {
-      const outputTags = spec.output ? Object.keys(spec.output.cases) : [];
       const outputTagSet = new Set(outputTags);
       const subscriptions: SubscriptionsHook<any, any, any, any, any> =
         parts.subscriptions ?? (() => NO_SUBSCRIPTIONS);
@@ -1656,7 +1733,7 @@ export const define: <
       };
     },
   };
-};
+}) as never;
 
 // ---------------------------------------------------------------------------
 // Mounting a feature

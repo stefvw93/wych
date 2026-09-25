@@ -1,7 +1,7 @@
 import { Context, Effect, Option, Schema } from "effect";
 import { expect, test } from "tstyche";
 import { Task, type TaskValue } from "../utils/task";
-import { Action, define, Next, type Command, type ServicesOf } from "../lib";
+import { Action, Command, define, Next, type ServicesOf } from "../lib";
 
 const Clicked = Action("Clicked", {});
 const Props = Schema.Struct({});
@@ -260,7 +260,7 @@ test("an announced operation is the same shape — only the channel differs", ()
 test("into(key) spreads into a reducer, keeps it exhaustive, and asks for no service", () => {
   const search = Task("Search", { success: Schema.String, onError: Task.errorMessage });
   const State = Schema.Struct({ colorValue: Schema.String, search: Task.schema(Schema.String) });
-  const F = define({ props: Props, state: State, action: Action.of([Clicked, ...search.actions]) });
+  const F = define({ props: Props, state: State, action: [Clicked, ...search.actions] });
 
   const reducer = F.reducer({
     Clicked: (_a, { state }) => Task.start(state, "search", search.run(Effect.succeed("ok"))),
@@ -284,7 +284,7 @@ test("into rejects a key that is not a TaskValue field of the operation's own ty
     count: Task.schema(Schema.Number),
     search: Task.schema(Schema.String),
   });
-  const F = define({ props: Props, state: State, action: Action.of([Clicked, ...search.actions]) });
+  const F = define({ props: Props, state: State, action: [Clicked, ...search.actions] });
   const Clicked_ = (_a: {}, { state }: { readonly state: typeof State.Type }) => state;
 
   // Not a TaskValue field.
@@ -300,7 +300,7 @@ test("into rejects a key that is not a TaskValue field of the operation's own ty
 test("into addresses an optional field, as Task.start does", () => {
   const search = Task("Search", { success: Schema.String, onError: Task.errorMessage });
   const State = Schema.Struct({ search: Schema.optional(Task.schema(Schema.String)) });
-  const F = define({ props: Props, state: State, action: Action.of([Clicked, ...search.actions]) });
+  const F = define({ props: Props, state: State, action: [Clicked, ...search.actions] });
 
   expect(F.reducer).type.toBeCallableWith({
     Clicked: (_a: {}, { state }: { readonly state: typeof State.Type }) => state,
@@ -311,7 +311,7 @@ test("into addresses an optional field, as Task.start does", () => {
 test("an explicit handler after the spread wins, typed by the action's payload", () => {
   const search = Task("Search", { success: Schema.String, onError: Task.errorMessage });
   const State = Schema.Struct({ first: Schema.String, search: Task.schema(Schema.String) });
-  const F = define({ props: Props, state: State, action: Action.of([Clicked, ...search.actions]) });
+  const F = define({ props: Props, state: State, action: [Clicked, ...search.actions] });
 
   F.reducer({
     Clicked: (_a, { state }) => state,
@@ -335,4 +335,133 @@ test("`Task.start` takes a lazy command, handed the state with `Pending` written
 
   expect(next[0]).type.toBe<State>();
   expect(Next.command(next)).type.toBeAssignableTo<Command<SearchAction> | undefined>();
+});
+
+// ---------------------------------------------------------------------------
+// resolvedInto / rejectedInto
+// ---------------------------------------------------------------------------
+
+const settle = (() => {
+  const search = Task("Search", { success: Schema.Array(Schema.String) });
+  const Picked = Action("Picked", { id: Schema.String });
+  const State = Schema.Struct({
+    selected: Schema.String,
+    results: search.schema,
+    n: Schema.Number,
+  });
+  const F = define({
+    props: Schema.Struct({ id: Schema.String }),
+    state: State,
+    action: [Clicked, Picked, search],
+  });
+  const init = () => ({ selected: "", results: Task.idle, n: 0 });
+  return { search, State, F, init };
+})();
+
+test("`resolvedInto`'s follow-up is typed by the feature, in its key's position", () => {
+  const { search, State, F, init } = settle;
+  F.create({
+    initialState: init,
+    render: () => null,
+    reducer: {
+      Clicked: (_a, s) => s.state,
+      Picked: (_a, s) => s.state,
+      ...search.into("results"),
+      SearchResolved: search.resolvedInto("results", (value, snapshot) => {
+        expect(value).type.toBe<ReadonlyArray<string>>();
+        expect(snapshot.props).type.toBe<{ readonly id: string }>();
+        expect(snapshot.draft.selected).type.toBe<string>();
+        snapshot.draft.selected = value[0] ?? "";
+        return [
+          snapshot.draft,
+          Command.effect((dispatch) => dispatch({ _tag: "Picked", id: "x" })),
+        ];
+      }),
+    },
+  });
+
+  F.create({
+    initialState: init,
+    render: () => null,
+    reducer: {
+      Clicked: (_a, s) => s.state,
+      Picked: (_a, s) => s.state,
+      ...search.into("results"),
+      SearchResolved: search.resolvedInto("results", (_v, s) => [
+        s.draft,
+        // @ts-expect-error is not assignable
+        Command.effect((dispatch) => dispatch({ _tag: "Nope" })),
+      ]),
+    },
+  });
+
+  expect<(typeof State.Type)["results"]>().type.toBe<TaskValue<ReadonlyArray<string>, string>>();
+});
+
+test("both sides by hand, with no `into` spread", () => {
+  const { search, F } = settle;
+  F.reducer({
+    Clicked: (_a, s) => s.state,
+    Picked: (_a, s) => s.state,
+    SearchResolved: search.resolvedInto("results", (_v, s) => s.draft),
+    SearchRejected: search.rejectedInto("results", (error, snapshot) => {
+      expect(error).type.toBe<string>();
+      snapshot.draft.n += 1;
+      return snapshot.draft;
+    }),
+  });
+});
+
+test("`R` from a follow-up's command reaches `ServicesOf`, and none leaks otherwise", () => {
+  const { search, F } = settle;
+  const withApi = F.reducer({
+    Clicked: (_a, s) => s.state,
+    Picked: (_a, s) => s.state,
+    ...search.into("results"),
+    SearchResolved: search.resolvedInto("results", (_v, s) => [
+      s.draft,
+      Command.effect(() => Effect.flatMap(Api, (api) => api.load)),
+    ]),
+  });
+  expect<ServicesOf<typeof withApi>>().type.toBe<Api>();
+
+  const quiet = F.reducer({
+    Clicked: (_a, s) => s.state,
+    Picked: (_a, s) => s.state,
+    ...search.into("results"),
+    SearchRejected: search.rejectedInto("results", (_e, s) => s.draft),
+  });
+  expect<ServicesOf<typeof quiet>>().type.toBe<never>();
+});
+
+test("the key is checked, and an excess state key is still reported", () => {
+  const { search, F } = settle;
+  // `selected` is a string field, so the snapshot `resolvedInto` asks for is
+  // one no reducer can hand it. The control with `results` is what makes the
+  // rejection about the key.
+  expect(F.reducer).type.toBeCallableWith({
+    Clicked: (_a: unknown, s: { readonly state: typeof settle.State.Type }) => s.state,
+    Picked: (_a: unknown, s: { readonly state: typeof settle.State.Type }) => s.state,
+    ...search.into("results"),
+    SearchResolved: search.resolvedInto("results", (_v, s) => s.state),
+  });
+  expect(F.reducer).type.not.toBeCallableWith({
+    Clicked: (_a: unknown, s: { readonly state: typeof settle.State.Type }) => s.state,
+    Picked: (_a: unknown, s: { readonly state: typeof settle.State.Type }) => s.state,
+    ...search.into("results"),
+    SearchResolved: search.resolvedInto("selected", (_v, s) => s.state),
+  });
+  F.reducer({
+    Clicked: (_a, s) => s.state,
+    Picked: (_a, s) => s.state,
+    ...search.into("results"),
+    // @ts-expect-error state has no property bogus
+    SearchResolved: search.resolvedInto("results", (_v, s) => ({ ...s.state, bogus: 1 })),
+  });
+});
+
+test("an announced operation has no `resolvedInto`", () => {
+  const announced = Task.output("Announced", { success: Schema.String });
+  expect(announced).type.not.toHaveProperty("resolvedInto");
+  expect(announced).type.not.toHaveProperty("rejectedInto");
 });

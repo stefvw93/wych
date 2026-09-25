@@ -164,7 +164,8 @@ the same return.
 - [x] Without `failure`, `onError` may be omitted and is `Task.errorMessage`. With `failure`, `onError` is required, `Schema.String` included.
 - [x] `into(key)` returns `{ ${Name}Resolved, ${Name}Rejected }`, in that key order; `Resolved` returns `{ ...state, [key]: Task.resolved(value) }`, `Rejected` returns `{ ...state, [key]: Task.rejected(error) }`, and folded through `feature.run` the field lands exactly as with hand-written handlers.
 - [x] An explicit handler written after `...op.into(key)` replaces the generated one for that tag; the other generated handler still stands.
-- [x] `actions` is `[${Name}Resolved { value: Success }, ${Name}Rejected { error: Failure }]`, spreadable into `Action.of([...])` beside hand-written actions.
+- [x] `op.resolvedInto(key, then)` is a `${Name}Resolved` handler: it writes `Task.resolved(value)` into `snapshot.draft[key]`, then returns `then(value, snapshot)` with the same snapshot, so what `then` writes lands beside the field and a returned draft is the one finished state. `op.rejectedInto` is the same for `Rejected`. A returned state other than the draft is the fold's draft `TypeError`; a lazy command beside the draft sees the finished state. An announced operation has neither.
+- [x] `actions` is `[${Name}Resolved { value: Success }, ${Name}Rejected { error: Failure }]`. The operation itself goes into `define`'s slot (`action: [Clicked, search]`), and so does `...op.actions` inside an array.
 - [x] A lower-case `name` is a compile error, on the same terms as an action tag.
 - [x] The effect's success dispatches `${Name}Resolved` with the value, and lands in whatever field the handler writes.
 - [x] A typed failure passes through `onError` and dispatches `${Name}Rejected`; a **defect** passes through `onError` too — nothing reaches the `Error` lifecycle handler.
@@ -195,13 +196,14 @@ the same return.
 - [x] `into("notAField")`, `into` of a non-`TaskValue` field, and `into` of a `TaskValue` field whose success type differs from the operation's do not compile at the spread site; the matching key does.
 - [x] `into` addresses a field declared `Schema.optional(Task.schema(…))`.
 - [x] An explicit handler after the spread is typed by the action's payload (`value` is the success `Type`).
+- [x] Written as a reducer entry, `resolvedInto`'s `then` gets the feature's `ReducerSnapshot` (props, draft) and the value by context, a command in it keeps the contextual `A`, its `R` reaches `ServicesOf`, a side written without one leaks no `any`, a key that is not the operation's `TaskValue` field is rejected, and an excess state key is still reported.
 - [x] `Task.start` with a thunk types the thunk's parameter as the passed state, and `Next.command` of the result is `Command<TaskAction<…>> | undefined`.
 
 ## Technical Requirements
 
 - Depends on `lib.ts` only: `Action` / `Action.output` for the two messages, `Command.effect` / `keyed` / `restart` / `cancel` for the work, `LazyCommand` for `start`'s thunk form, `Message` for the action types.
 - `TaskSchema` is `Schema.TaggedUnion`, not `Schema.Union(...).pipe(Schema.toTaggedUnion)`: the latter constrains members to `{ Type: { _tag } }`, which TypeScript cannot prove for `TaggedStruct<Tag, Fields>` while `Fields` is a type parameter — `Struct<F>["Type"]` is a stack of mapped types that will not reduce until `F` is concrete.
-- `TaskMessage` intersects `Message<…>` with `{ Type: { _tag: Tag } }` for the same reason: `Action.of` wants a demonstrable `_tag`, and the intersection hands TypeScript the proof it cannot compute.
+- `TaskMessage` intersects `Message<…>` with `{ Type: { _tag: Tag } }` for the same reason: a slot reads each member's `Type` for its `_tag`, and the intersection hands TypeScript the proof it cannot compute.
 - `` `${Name}Resolved` `` is `` `${string}Resolved` ``, which does not satisfy `Capitalize<string>`; `ResolvedTag<Name>` re-applies `Capitalize` to the joined string.
 - The work is `effect.pipe(flatMap(dispatch Resolved), catchCause(hasInterruptsOnly ? void : dispatch Rejected(onError(cause))))`, so the command's error channel is `never` — which `Command.effect` requires anyway — and interruption is the one cause that dispatches nothing.
 - `"latest"` is `Command.restart(group, work)`; `"every"` is `Command.keyed(group, work)`. Both book under the group, so `cancel` addresses them all; only `latest` also interrupts what is running.
@@ -234,6 +236,18 @@ None with a decision made. The two candidates are recorded below as deferred
 rather than left as unchecked boxes.
 
 ## Deferred decisions
+
+### `into(key, { resolved, rejected })` follow-ups — rejected for the entry form
+
+The first shape put the follow-ups on `into` itself, spread as today. Rejected
+by a type prototype against `define().create()`: an object spread is not
+contextually typed by the reducer's `Reducer<…>` constraint, so `snapshot`
+fell back to the generic's own constraint (`{ state: TaskField }`) and had no
+`props` or `draft`. A call written as a property's value is contextually typed
+by that property, so `resolvedInto(key, then)` in the `${Name}Resolved`
+position infers `then`'s snapshot from the reducer and its whole return `N`
+from the body, and `ServicesOf` reads the real tuple off it. That is why the
+name is repeated as the entry's key: the key is where the type comes from.
 
 ### Data-first `Task.run(op, input)` — rejected
 

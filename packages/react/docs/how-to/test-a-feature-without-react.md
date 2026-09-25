@@ -29,13 +29,14 @@ class Payments extends Context.Service<
   { readonly charge: (total: number) => Effect.Effect<string, Error> }
 >()("Payments") {}
 
-const Added = Action("Added", { id: Schema.String, price: Schema.Number });
-const Submitted = Action("Submitted", {});
+const actions = Action({
+  Added: { id: Schema.String, price: Schema.Number },
+  Submitted: {},
+});
 const Ordered = Action.output("Ordered", { total: Schema.Number });
 
 const charge = Task("Charge", {
   success: Schema.String,
-  onError: Task.errorMessage,
   run: (total: number) =>
     Effect.gen(function* () {
       const api = yield* Payments;
@@ -50,10 +51,10 @@ const cart = define({
   props: Schema.Struct({}),
   state: Schema.Struct({
     items: Schema.Array(Item),
-    charge: Task.schema(Schema.String),
+    charge: charge.schema,
   }),
-  action: Action.of([Added, Submitted, ...charge.actions]),
-  output: Action.of([Ordered]),
+  action: [actions, charge],
+  output: Ordered,
 }).create({
   initialState: () => ({ items: [], charge: Task.idle }),
   reducer: {
@@ -62,20 +63,17 @@ const cart = define({
       return draft;
     },
     Submitted: (_payload, { draft }) => Task.start(draft, "charge", charge.run(total(draft.items))),
-    ChargeResolved: ({ value }, { draft, state }) => {
-      draft.charge = Task.resolved(value);
-      return [draft, Command.output(Ordered, { total: total(state.items) })];
-    },
-    ChargeRejected: ({ error }, { draft }) => {
-      draft.charge = Task.rejected(error);
-      return draft;
-    },
+    ...charge.into("charge"),
+    ChargeResolved: charge.resolvedInto("charge", (_receipt, { draft, state }) => [
+      draft,
+      Command.output(Ordered, { total: total(state.items) }),
+    ]),
   },
   render: () => null,
 });
 ```
 
-The payment provider is a service, so each test picks its own `Payments` layer. `render` returns `null`: nothing on this page mounts the feature, and the view is a separate concern.
+The payment provider is a service, so each test picks its own `Payments` layer. `...charge.into("charge")` writes both settle handlers; `ChargeResolved` after it replaces one of them with `charge.resolvedInto`, which writes the field into the draft and then announces the order beside it. `render` returns `null`: nothing on this page mounts the feature, and the view is a separate concern.
 
 ## One step with reduce
 
@@ -85,7 +83,7 @@ The payment provider is a service, so each test picks its own `Payments` layer. 
 const empty = { items: [], charge: Task.idle } as const;
 
 test("Added appends and issues no command", () => {
-  const next = cart.reduce(Added.make({ id: "a", price: 10 }), {
+  const next = cart.reduce(actions.Added.make({ id: "a", price: 10 }), {
     state: empty,
     props: {},
     hooks: {},
@@ -103,7 +101,7 @@ Pick `reduce` when the claim is about one transition. You supply the snapshot, s
 
 ```ts continue
 test("Submitted writes Pending and issues a command", () => {
-  const next = cart.reduce(Submitted.make({}), {
+  const next = cart.reduce(actions.Submitted.make(), {
     state: { items: [{ id: "a", price: 10 }], charge: Task.idle },
     props: {},
     hooks: {},
@@ -127,7 +125,7 @@ const paid = Layer.succeed(Payments)({
 
 test("a paid cart resolves the task and announces the order", async () => {
   const { state, emitted, outputs } = await Effect.runPromise(
-    cart.run([Added.make({ id: "a", price: 10 }), Submitted.make({})], {
+    cart.run([actions.Added.make({ id: "a", price: 10 }), actions.Submitted.make()], {
       props: {},
       hooks: {},
       layer: paid,
@@ -157,10 +155,10 @@ test("a second Submitted supersedes the charge in flight", async () => {
   const { emitted, outputs } = await Effect.runPromise(
     cart.run(
       [
-        Added.make({ id: "a", price: 10 }),
-        Submitted.make({}),
-        Added.make({ id: "b", price: 5 }),
-        Submitted.make({}),
+        actions.Added.make({ id: "a", price: 10 }),
+        actions.Submitted.make(),
+        actions.Added.make({ id: "b", price: 5 }),
+        actions.Submitted.make(),
       ],
       { props: {}, hooks: {}, layer: slow },
     ),
@@ -182,11 +180,11 @@ A command can die: a bug in the effect, or a layer that fails to build. `run` re
 ```ts continue
 const dying = Command.effect(() => Effect.die(new Error("card reader offline")));
 
-const Scanned = Action("Scanned", {});
+const Scanned = Action("Scanned");
 const scanner = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ status: Schema.String }),
-  action: Action.of([Scanned]),
+  action: [Scanned],
 }).create({
   initialState: () => ({ status: "idle" }),
   reducer: {
@@ -201,7 +199,7 @@ const scanner = define({
 
 test("a dying command recovers through Error and is recorded as a defect", async () => {
   const { state, defects } = await Effect.runPromise(
-    scanner.run([Scanned.make({})], { props: {}, hooks: {}, layer: Layer.empty }),
+    scanner.run([Scanned.make()], { props: {}, hooks: {}, layer: Layer.empty }),
   );
 
   expect(state).toEqual({ status: "failed" });
@@ -224,7 +222,7 @@ const declined = Layer.succeed(Payments)({
 
 test("a declined charge rejects the task and announces nothing", async () => {
   const { state, outputs } = await Effect.runPromise(
-    cart.run([Added.make({ id: "a", price: 10 }), Submitted.make({})], {
+    cart.run([actions.Added.make({ id: "a", price: 10 }), actions.Submitted.make()], {
       props: {},
       hooks: {},
       layer: declined,
@@ -236,7 +234,7 @@ test("a declined charge rejects the task and announces nothing", async () => {
 });
 ```
 
-`Task.errorMessage` mapped the `Cause` to its message. `onError` covers typed failures and defects, so a bug inside the effect lands in the field. The `Error` lifecycle handler never sees it.
+`charge` declares no `failure`, so its `onError` is the default, `Task.errorMessage`, which maps the `Cause` to its message. `onError` covers typed failures and defects, so a bug inside the effect lands in the field. The `Error` lifecycle handler never sees it.
 
 For a feature with no services, pass `Layer.empty`.
 

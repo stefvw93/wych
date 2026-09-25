@@ -52,7 +52,7 @@ const pagedApi = Layer.succeed(SearchApi)({
 
 test("more: the request reads the page the handler just wrote", async () => {
   const paged = await Effect.runPromise(
-    pagedSearch.run([Typed.make({ query: "a" }), MoreClicked.make({})], {
+    pagedSearch.run([Typed.make({ query: "a" }), MoreClicked.make()], {
       props: {},
       hooks: {},
       layer: pagedApi,

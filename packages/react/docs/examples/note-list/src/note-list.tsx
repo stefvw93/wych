@@ -8,7 +8,6 @@ const NoteSaved = Action("NoteSaved", { id: Schema.String, revision: Schema.Stri
 
 const loadNotes = Task("Load", {
   success: Schema.Array(Note),
-  onError: Task.errorMessage,
   run: () =>
     Effect.gen(function* () {
       const api = yield* NotesApi;
@@ -19,10 +18,10 @@ const loadNotes = Task("Load", {
 const List = define({
   props: Schema.Struct({ title: Schema.String, children: Schema.optionalKey(Children) }),
   state: Schema.Struct({
-    notes: Task.schema(Schema.Array(Note)),
+    notes: loadNotes.schema,
     lastSaved: Schema.String,
   }),
-  action: Action.of([NoteSaved, ...loadNotes.actions]),
+  action: [NoteSaved, loadNotes],
 });
 
 const listReducer = List.reducer({
@@ -31,14 +30,7 @@ const listReducer = List.reducer({
     draft.lastSaved = id;
     return draft;
   },
-  LoadResolved: ({ value }, { draft }) => {
-    draft.notes = Task.resolved(value);
-    return draft;
-  },
-  LoadRejected: ({ error }, { draft }) => {
-    draft.notes = Task.rejected(error);
-    return draft;
-  },
+  ...loadNotes.into("notes"),
 });
 
 const LastSaved = () => {
@@ -63,7 +55,7 @@ const noteList = List.create({
                 <NoteEditor
                   noteId={note.id}
                   initialText={note.text}
-                  onSaved={({ id, revision }) => dispatch(NoteSaved.make({ id, revision }))}
+                  onSaved={({ id, revision }) => dispatch(NoteSaved, { id, revision })}
                 />
               </li>
             ))}

@@ -28,14 +28,15 @@ subscriptions: ({ props }) => ({
   [`presence:${props.roomId}`]: Subscription.effect<typeof Changed.Type, PresenceApi>((dispatch) =>
     Effect.gen(function* () {
       const api = yield* PresenceApi;
-      yield* Stream.runForEach(api.events(props.roomId), (event) => dispatch(Changed.make(event)));
+      yield* Stream.runForEach(api.events(props.roomId), (event) => dispatch(Changed, event));
     }),
   ),
 }),
 ```
 
-The key carries everything the effect depends on: `` `presence:${props.roomId}` ``,
-not `presence`. A room switch changes the key, which stops the old room's
+The stream's element type is the action's payload, so `dispatch(Changed, event)`
+needs no mapping. The key carries everything the effect depends on:
+`` `presence:${props.roomId}` ``, not `presence`. A room switch changes the key, which stops the old room's
 fiber and starts the new one. `PropsChanged` only resets `online` to `[]` on a
 room change; no handler starts, rebooks or cancels the feed.
 

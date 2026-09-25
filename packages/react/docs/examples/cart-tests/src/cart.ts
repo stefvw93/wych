@@ -8,13 +8,14 @@ export class Payments extends Context.Service<
   { readonly charge: (total: number) => Effect.Effect<string, Error> }
 >()("Payments") {}
 
-export const Added = Action("Added", { id: Schema.String, price: Schema.Number });
-export const Submitted = Action("Submitted", {});
+export const actions = Action({
+  Added: { id: Schema.String, price: Schema.Number },
+  Submitted: {},
+});
 const Ordered = Action.output("Ordered", { total: Schema.Number });
 
 const charge = Task("Charge", {
   success: Schema.String,
-  onError: Task.errorMessage,
   run: (total: number) =>
     Effect.gen(function* () {
       const api = yield* Payments;
@@ -29,10 +30,10 @@ export const cart = define({
   props: Schema.Struct({}),
   state: Schema.Struct({
     items: Schema.Array(Item),
-    charge: Task.schema(Schema.String),
+    charge: charge.schema,
   }),
-  action: Action.of([Added, Submitted, ...charge.actions]),
-  output: Action.of([Ordered]),
+  action: [actions, charge],
+  output: Ordered,
 }).create({
   initialState: () => ({ items: [], charge: Task.idle }),
   reducer: {
@@ -41,14 +42,11 @@ export const cart = define({
       return draft;
     },
     Submitted: (_payload, { draft }) => Task.start(draft, "charge", charge.run(total(draft.items))),
-    ChargeResolved: ({ value }, { draft, state }) => {
-      draft.charge = Task.resolved(value);
-      return [draft, Command.output(Ordered, { total: total(state.items) })];
-    },
-    ChargeRejected: ({ error }, { draft }) => {
-      draft.charge = Task.rejected(error);
-      return draft;
-    },
+    ...charge.into("charge"),
+    ChargeResolved: charge.resolvedInto("charge", (_receipt, { draft, state }) => [
+      draft,
+      Command.output(Ordered, { total: total(state.items) }),
+    ]),
   },
   render: () => null,
 });

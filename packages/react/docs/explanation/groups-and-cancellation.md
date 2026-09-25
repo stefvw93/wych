@@ -22,26 +22,28 @@ class Metrics extends Context.Service<Metrics, { readonly sample: Effect.Effect<
   "Metrics",
 ) {}
 
-const Sampled = Action("Sampled", { value: Schema.Number });
-const Paused = Action("Paused", {});
-const Resumed = Action("Resumed", {});
-const RefreshedNow = Action("RefreshedNow", {});
+const actions = Action({
+  Sampled: { value: Schema.Number },
+  Paused: {},
+  Resumed: {},
+  RefreshedNow: {},
+});
 
 const Dashboard = define({
   props: Schema.Struct({ intervalMs: Schema.Number }),
   state: Schema.Struct({ latest: Schema.Number, paused: Schema.Boolean }),
-  action: Action.of([Sampled, Paused, Resumed, RefreshedNow]),
+  action: actions,
 });
 
 const poll = (intervalMs: number) =>
   Command.keyed(
     "poll",
-    Command.effect<typeof Sampled.Type, Metrics>((dispatch) =>
+    Command.effect<typeof actions.Sampled.Type, Metrics>((dispatch) =>
       Effect.forever(
         Effect.gen(function* () {
           const metrics = yield* Metrics;
           const value = yield* metrics.sample;
-          yield* dispatch(Sampled.make({ value }));
+          yield* dispatch(actions.Sampled, { value });
           yield* Effect.sleep(intervalMs);
         }),
       ),
@@ -82,7 +84,7 @@ const dashboard = Dashboard.create({
         Effect.gen(function* () {
           const metrics = yield* Metrics;
           const value = yield* metrics.sample;
-          yield* dispatch(Sampled.make({ value }));
+          yield* dispatch(actions.Sampled, { value });
         }),
       ),
     ],
@@ -125,7 +127,7 @@ finishes.
 const metrics = Layer.succeed(Metrics)({ sample: Effect.succeed(42) });
 
 const paused = await Effect.runPromise(
-  dashboard.run([{ _tag: "Mounted" }, Paused.make({})], {
+  dashboard.run([{ _tag: "Mounted" }, actions.Paused.make()], {
     props: { intervalMs: 1000 },
     hooks: {},
     layer: metrics,
@@ -148,7 +150,7 @@ const stopRefresh = Command.cancel("RefreshedNow");
 ```
 
 The narrowing follows from the flat namespace. A key replaces the address,
-so the tag is no longer part of it. Naming a group is therefore a decision
+so the tag is not part of it. Naming a group is therefore a decision
 about who may cancel it: keep a command unkeyed and only its own tag
 addresses it, or name it and every handler can.
 
@@ -178,7 +180,6 @@ each other on every fold.
 ```ts continue
 const loadHistory = Task("History", {
   success: Schema.Array(Schema.Number),
-  onError: Task.errorMessage,
 });
 
 console.log(summarizeCommand(loadHistory.cancel));
@@ -204,11 +205,11 @@ does it. That keeps both in one fiber, under one address, with one
 interruption point.
 
 ```ts continue
-const twoSamples = Command.effect<typeof Sampled.Type, Metrics>((dispatch) =>
+const twoSamples = Command.effect<typeof actions.Sampled.Type, Metrics>((dispatch) =>
   Effect.gen(function* () {
     const metrics = yield* Metrics;
     const [first, second] = yield* Effect.all([metrics.sample, metrics.sample]);
-    yield* dispatch(Sampled.make({ value: (first + second) / 2 }));
+    yield* dispatch(actions.Sampled, { value: (first + second) / 2 });
   }),
 );
 ```

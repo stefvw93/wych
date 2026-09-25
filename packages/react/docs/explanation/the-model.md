@@ -73,8 +73,8 @@ the fold returns. Wych is that answer on React, with
 ## The reducer describes, the runtime does
 
 A feature is declared from values. Props and state are `Schema.Struct`s, and
-the actions are a tagged union. A `Task` declares the request as two actions
-and a command.
+the actions are messages, one per tag. A `Task` declares the request as two
+actions, a command, and the schema of the field that holds the result.
 
 ```tsx
 import { Context, Effect, Layer, Schema } from "effect";
@@ -85,14 +85,15 @@ class Auth extends Context.Service<
   { readonly signIn: (email: string, password: string) => Effect.Effect<string, Error> }
 >()("Auth") {}
 
-const EmailTyped = Action("EmailTyped", { email: Schema.String });
-const PasswordTyped = Action("PasswordTyped", { password: Schema.String });
-const Submitted = Action("Submitted", {});
+const actions = Action({
+  EmailTyped: { email: Schema.String },
+  PasswordTyped: { password: Schema.String },
+  Submitted: {},
+});
 const SignedIn = Action.output("SignedIn", { userId: Schema.String });
 
 const login = Task("Login", {
   success: Schema.String,
-  onError: Task.errorMessage,
   run: (credentials: { readonly email: string; readonly password: string }) =>
     Effect.gen(function* () {
       const auth = yield* Auth;
@@ -105,10 +106,10 @@ const Login = define({
   state: Schema.Struct({
     email: Schema.String,
     password: Schema.String,
-    session: Task.schema(Schema.String),
+    session: login.schema,
   }),
-  action: Action.of([EmailTyped, PasswordTyped, Submitted, ...login.actions]),
-  output: Action.of([SignedIn]),
+  action: [actions, login],
+  output: SignedIn,
 });
 ```
 
@@ -141,29 +142,26 @@ const loginForm = Login.create({
       Task.isPending(state.session)
         ? draft
         : Task.start(draft, "session", login.run({ email: state.email, password: state.password })),
-    LoginResolved: ({ value }, { draft }) => {
-      draft.session = Task.resolved(value);
-      return [draft, Command.output(SignedIn, { userId: value })];
-    },
-    LoginRejected: ({ error }, { draft }) => {
-      draft.session = Task.rejected(error);
-      return draft;
-    },
+    ...login.into("session"),
+    LoginResolved: login.resolvedInto("session", (userId, { draft }) => [
+      draft,
+      Command.output(SignedIn, { userId }),
+    ]),
   },
   render: ({ state, dispatch }) => (
     <form
       onSubmit={(event) => {
         event.preventDefault();
-        dispatch(Submitted.make({}));
+        dispatch(actions.Submitted);
       }}
     >
       <input
         value={state.email}
-        onChange={(event) => dispatch(EmailTyped.make({ email: event.target.value }))}
+        onChange={(event) => dispatch(actions.EmailTyped, { email: event.target.value })}
       />
       <input
         value={state.password}
-        onChange={(event) => dispatch(PasswordTyped.make({ password: event.target.value }))}
+        onChange={(event) => dispatch(actions.PasswordTyped, { password: event.target.value })}
       />
       <button disabled={Task.isPending(state.session)}>Sign in</button>
       {Task.isRejected(state.session) && <p role="alert">{state.session.error}</p>}
@@ -181,7 +179,10 @@ instead of calling `setState` on a component that is gone.
 
 The `Submitted` handler does not sign in. It returns a description of signing
 in, and `Task.start` writes `Pending` beside it on the same fold. Who runs
-the description is the runtime's business.
+the description is the runtime's business. `...login.into("session")` writes
+the two settle handlers; `LoginResolved` after it does one more thing, so it
+is `login.resolvedInto`: the field is written into the draft, then the
+follow-up announces `SignedIn` beside it.
 
 ## One reducer, three readers
 
@@ -196,7 +197,7 @@ const pending = {
   hooks: {},
 };
 
-const ignored = loginForm.reduce(Submitted.make({}), pending);
+const ignored = loginForm.reduce(actions.Submitted.make(), pending);
 
 console.log(Next.state(ignored) === pending.state);
 // => true
@@ -217,9 +218,9 @@ const auth = Layer.succeed(Auth)({
 const signedIn = await Effect.runPromise(
   loginForm.run(
     [
-      EmailTyped.make({ email: "ada@example.com" }),
-      PasswordTyped.make({ password: "hunter2" }),
-      Submitted.make({}),
+      actions.EmailTyped.make({ email: "ada@example.com" }),
+      actions.PasswordTyped.make({ password: "hunter2" }),
+      actions.Submitted.make(),
     ],
     { props: {}, hooks: {}, layer: auth },
   ),
@@ -261,7 +262,7 @@ same snapshot through `LoginView.useFeature()`.
 const SubmitButton = () => {
   const { state, dispatch } = LoginView.useFeature();
   return (
-    <button disabled={Task.isPending(state.session)} onClick={() => dispatch(Submitted.make({}))}>
+    <button disabled={Task.isPending(state.session)} onClick={() => dispatch(actions.Submitted)}>
       Sign in
     </button>
   );
@@ -289,7 +290,7 @@ const EmailTyped = Action("EmailTyped", { email: Schema.String });
 const Login = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ email: Schema.String, offline: Schema.Boolean }),
-  action: Action.of([EmailTyped]),
+  action: [EmailTyped],
   useUnsafeHooks: () => ({ online: useOnlineStatus() }),
 });
 

@@ -2,13 +2,12 @@ import { Schema } from "effect";
 import { Action, define } from "@wych/react";
 import { component } from "./runtime";
 
-export const TextChanged = Action("TextChanged", { text: Schema.String });
-const Reverted = Action("Reverted", {});
+export const actions = Action({ TextChanged: { text: Schema.String }, Reverted: {} });
 
 const Editor = define({
   props: Schema.Struct({ noteId: Schema.String, initialText: Schema.String }),
   state: Schema.Struct({ text: Schema.String, dirty: Schema.Boolean }),
-  action: Action.of([TextChanged, Reverted]),
+  action: actions,
 });
 
 const initialState = Editor.initialState((props) => ({
@@ -33,9 +32,9 @@ const render = Editor.render(({ state, dispatch }) => (
   <form>
     <textarea
       value={state.text}
-      onChange={(event) => dispatch(TextChanged.make({ text: event.target.value }))}
+      onChange={(event) => dispatch(actions.TextChanged, { text: event.target.value })}
     />
-    <button type="button" disabled={!state.dirty} onClick={() => dispatch(Reverted.make({}))}>
+    <button type="button" disabled={!state.dirty} onClick={() => dispatch(actions.Reverted)}>
       Revert
     </button>
   </form>

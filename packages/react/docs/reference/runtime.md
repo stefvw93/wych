@@ -1,6 +1,6 @@
 ---
 title: Runtime
-description: createRuntime, Provider, component, useRuntime, useFeature, output props and props validation.
+description: createRuntime, Provider, component, useRuntime, useFeature, the view's dispatch, output props and props validation.
 order: 1
 ---
 
@@ -25,15 +25,18 @@ const CheckoutLayer = Layer.succeed(Checkout)({
   place: (customerId) => Effect.succeed(`order_for_${customerId}`),
 });
 
-const Added = Action("Added", { sku: Schema.String });
-const Ordered = Action("Ordered", { orderId: Schema.String });
+const actions = Action({
+  Added: { sku: Schema.String },
+  Ordered: { orderId: Schema.String },
+  Emptied: {},
+});
 const OrderPlaced = Action.output("OrderPlaced", { orderId: Schema.String });
 
 const Cart = define({
   props: Schema.Struct({ customerId: Schema.String }),
   state: Schema.Struct({ items: Schema.Array(Schema.String) }),
-  action: Action.of([Added, Ordered]),
-  output: Action.of([OrderPlaced]),
+  action: actions,
+  output: OrderPlaced,
 });
 
 export const cart = Cart.create({
@@ -47,15 +50,19 @@ export const cart = Cart.create({
           Effect.gen(function* () {
             const checkout = yield* Checkout;
             const orderId = yield* checkout.place(props.customerId);
-            yield* dispatch({ _tag: "Ordered", orderId });
+            yield* dispatch(actions.Ordered, { orderId });
           }),
         ),
       ];
     },
     Ordered: ({ orderId }, { state }) => [state, Command.output(OrderPlaced, { orderId })],
+    Emptied: (_payload, { draft }) => {
+      draft.items = [];
+      return draft;
+    },
   }),
   render: Cart.render(({ state, dispatch }) => (
-    <button onClick={() => dispatch({ _tag: "Added", sku: "sku_1" })}>
+    <button onClick={() => dispatch(actions.Added, { sku: "sku_1" })}>
       Add ({state.items.length})
     </button>
   )),
@@ -136,6 +143,10 @@ const tracked = Cart.create({
       ];
     },
     Ordered: ({ orderId }, { state }) => [state, Command.output(OrderPlaced, { orderId })],
+    Emptied: (_payload, { draft }) => {
+      draft.items = [];
+      return draft;
+    },
   }),
   render: Cart.render(() => null),
 });
@@ -234,25 +245,15 @@ the feature's view and lives in its own file.
 const ItemCount = () => {
   const { state, dispatch } = CartView.useFeature();
   return (
-    <button onClick={() => dispatch({ _tag: "Added", sku: "sku_2" })}>
+    <button onClick={() => dispatch(actions.Added, { sku: "sku_2" })}>
       {state.items.length} items
     </button>
   );
 };
 ```
 
-`dispatch` accepts declared actions and declared outputs. It is reference-stable
-for the life of the mount.
-
-```tsx continue
-const AnnounceButton = () => {
-  const { dispatch } = CartView.useFeature();
-  // An output dispatched from the view leaves through onOrderPlaced.
-  return <button onClick={() => dispatch({ _tag: "OrderPlaced", orderId: "o_1" })}>Ship</button>;
-};
-```
-
-Called outside a mount of a component with that name, `useFeature` throws.
+`dispatch` is reference-stable for the life of the mount. Called outside a
+mount of a component with that name, `useFeature` throws.
 
 ```tsx continue
 renderToString(<ItemCount />);
@@ -261,6 +262,54 @@ renderToString(<ItemCount />);
 
 Do not call `useFeature` inside `render`; `render` already has the snapshot
 as its argument.
+
+## `dispatch`
+
+```ts fragment
+interface Dispatch<Action> {
+  <M extends MessageOf<Action>>(message: M, ...payload: PayloadArgs<M>): void;
+  (action: Action): void;
+}
+```
+
+The `dispatch` that `render` and `useFeature` receive takes a message schema
+and its payload, or a built message. The payload argument is optional when
+every field of the message is optional. `dispatch` accepts the declared
+actions and the declared outputs; an output dispatched from the view leaves
+through its `on<Tag>` prop.
+
+```tsx continue
+const Controls = () => {
+  const { dispatch } = CartView.useFeature();
+  return (
+    <>
+      <button onClick={() => dispatch(actions.Added, { sku: "sku_3" })}>Add</button>
+      <button onClick={() => dispatch(actions.Emptied)}>Empty</button>
+      <button onClick={() => dispatch(actions.Added.make({ sku: "sku_4" }))}>Add again</button>
+      <button onClick={() => dispatch(OrderPlaced, { orderId: "o_1" })}>Ship</button>
+    </>
+  );
+};
+```
+
+An undeclared tag, a missing required payload and a wrong payload are compile
+errors.
+
+```tsx continue
+const Wrong = () => {
+  const { dispatch } = CartView.useFeature();
+  // @ts-expect-error Added has a required field
+  dispatch(actions.Added);
+  // @ts-expect-error sku is a string
+  dispatch(actions.Added, { sku: 1 });
+  return null;
+};
+```
+
+`make` validates the payload, so a payload the schema rejects at runtime
+throws out of the event handler that called `dispatch`. The `Dispatcher` a
+command's effect receives has the same two forms; see
+[Commands](/docs/reference/commands#dispatcher-and-dispatch).
 
 ## `useRuntime`
 

@@ -1,6 +1,14 @@
 import { Cause, Effect, Option, Schema } from "effect";
 import { isLiveDraft, type Draft } from "../draft";
-import { Action, Command, type LazyCommand, type Message, type MessageConstructor } from "../lib";
+import {
+  Action,
+  carryMembers,
+  Command,
+  type LazyCommand,
+  type MemberCarrier,
+  type Message,
+  type MessageConstructor,
+} from "../lib";
 
 // ---------------------------------------------------------------------------
 // Layer 1 — the vocabulary
@@ -80,8 +88,8 @@ type TaskKeys<State> = {
 // ---------------------------------------------------------------------------
 
 /**
- * The four cases, each handed its whole member — the shape `Vocabulary.match`
- * and `Match.tag` already establish, so `Resolved: (r) => r.value` reads the
+ * The four cases, each handed its whole member — the shape `Match.tag`
+ * already establishes, so `Resolved: (r) => r.value` reads the
  * same here as it does there.
  *
  * Exhaustive, with no `orElse`: the point of four cases is that a render
@@ -113,17 +121,27 @@ export type TaskMatched<Cases> = {
 /**
  * The `_tag` a `TaggedStruct` demonstrably has, stated rather than derived.
  *
- * `Action.of` wants `AnyMessage`, whose `Type` must carry a `_tag`, and a
- * generically-fielded `Message` cannot show one — `Struct<F>["Type"]` will not
- * reduce while `F` is a type parameter. The intersection hands TypeScript the
- * proof it cannot compute, so a generated action spreads into `Action.of([...])`
- * alongside hand-written ones.
+ * A slot reads each member's `Type` for its `_tag`, and a generically-fielded
+ * `Message` cannot show one — `Struct<F>["Type"]` will not reduce while `F`
+ * is a type parameter. The intersection hands TypeScript the proof it cannot
+ * compute, so a generated action sits in a slot beside hand-written ones.
  */
 type TaskMessage<
   Tag extends Capitalize<string>,
   Fields extends Schema.Struct.Fields,
   Ch extends "internal" | "outbound",
 > = Message<Tag, Fields, Ch> & { readonly Type: { readonly _tag: Tag } };
+
+/** An operation's two actions, `Resolved` first. */
+type TaskActions<
+  Name extends string,
+  Success extends Schema.Top,
+  Failure extends Schema.Top,
+  Ch extends "internal" | "outbound",
+> = readonly [
+  TaskMessage<ResolvedTag<Name>, { readonly value: Success }, Ch>,
+  TaskMessage<RejectedTag<Name>, { readonly error: Failure }, Ch>,
+];
 
 /**
  * `` `${Name}Resolved` `` is `` `${string}Resolved` ``, which does not satisfy
@@ -265,9 +283,12 @@ const errorMessage: TaskOnError<string> = (cause) => {
  *     ...search.into("search"),
  *
  *     // or, to derive something else from the result — select the first
- *     // item, clear a filter — write the entry yourself; after the spread,
- *     // the explicit key wins:
- *     SearchResolved: (action, { state }) => ({ ...state, search: Task.resolved(action.value) }),
+ *     // item, clear a filter — write the entry; after the spread, the
+ *     // explicit key wins, and `resolvedInto` still writes the field:
+ *     SearchResolved: search.resolvedInto("search", (value, { draft }) => {
+ *       draft.selected = value[0]
+ *       return draft
+ *     }),
  *
  * Internal and announced operations are the same shape. The only difference is
  * the channel the two actions are declared on, which is what `Task.output`
@@ -280,15 +301,13 @@ export interface TaskOperationBase<
   Input = never,
   R = never,
   Ch extends "internal" | "outbound" = "internal",
-> {
+> extends MemberCarrier<TaskActions<Name, Success, Failure, Ch>> {
   /**
-   * Spread into `Action.of([...])` alongside the feature's own actions — or,
-   * for `Task.output`, into the vocabulary passed as `output`.
+   * The two actions. The operation itself goes into `define`'s `action` slot
+   * beside the feature's own (`action: [actions, search]`), or into `output`
+   * for `Task.output`; this is the same pair, for reading.
    */
-  readonly actions: readonly [
-    TaskMessage<ResolvedTag<Name>, { readonly value: Success }, Ch>,
-    TaskMessage<RejectedTag<Name>, { readonly error: Failure }, Ch>,
-  ];
+  readonly actions: TaskActions<Name, Success, Failure, Ch>;
 
   /**
    * Issue the work, as a `Command`. Pair it with whatever state the handler
@@ -357,6 +376,42 @@ export interface TaskInto<
   readonly into: <Key extends string>(
     key: Key,
   ) => TaskHandlers<Name, Key, Success["Type"], Failure["Type"]>;
+
+  /**
+   * The `Resolved` handler for a field, followed by the rest of what the
+   * result means. It writes `Task.resolved(value)` into `snapshot.draft[key]`,
+   * then hands `then` the value and the same snapshot, so `then` writes into
+   * the draft beside it and returns it, alone or with a command:
+   *
+   *     ...save.into("save"),
+   *     SaveResolved: save.resolvedInto("save", (revision, { draft, props }) => {
+   *       draft.dirty = false;
+   *       return [draft, Command.output(Saved, { id: props.noteId, revision })];
+   *     }),
+   *
+   * Written as the handler, in its key's position, which is what gives
+   * `snapshot` and a command's `dispatch` the feature's own types. Return the
+   * draft: the field is already written into it, so returning another state
+   * is the fold's `TypeError`.
+   */
+  readonly resolvedInto: <
+    Key extends string,
+    Snap extends { readonly state: TaskField<Key, Success["Type"], Failure["Type"]> },
+    N,
+  >(
+    key: Key,
+    then: (value: Success["Type"], snapshot: Snap) => N,
+  ) => (payload: { readonly value: Success["Type"] }, snapshot: Snap) => N;
+
+  /** The `Rejected` handler on the same terms: `Task.rejected(error)`, then `then`. */
+  readonly rejectedInto: <
+    Key extends string,
+    Snap extends { readonly state: TaskField<Key, Success["Type"], Failure["Type"]> },
+    N,
+  >(
+    key: Key,
+    then: (error: Failure["Type"], snapshot: Snap) => N,
+  ) => (payload: { readonly error: Failure["Type"] }, snapshot: Snap) => N;
 }
 
 /**
@@ -635,13 +690,33 @@ const make = <Ch extends "internal" | "outbound">(ch: Ch) =>
       }),
     });
 
-    const operation = {
-      actions: [Resolved, Rejected],
-      run: (input: unknown) => scheduled(effectOf(input)),
-      cancel: Command.cancel(group),
-      schema: buildSchema(schemas.success, failure),
-    };
-    return ch === "internal" ? { ...operation, into } : operation;
+    // Written into the draft, so what `then` writes lands beside it and a
+    // returned draft is the one finished state.
+    const settleInto =
+      (field: "value" | "error", write: (x: unknown) => unknown) =>
+      (key: string, then: (x: unknown, snapshot: unknown) => unknown) =>
+      (payload: Record<string, unknown>, snapshot: { readonly draft: Record<string, unknown> }) => {
+        snapshot.draft[key] = write(payload[field]);
+        return then(payload[field], snapshot);
+      };
+
+    const operation = carryMembers(
+      {
+        actions: [Resolved, Rejected],
+        run: (input: unknown) => scheduled(effectOf(input)),
+        cancel: Command.cancel(group),
+        schema: buildSchema(schemas.success, failure),
+      },
+      [Resolved, Rejected],
+    );
+    return ch === "internal"
+      ? {
+          ...operation,
+          into,
+          resolvedInto: settleInto("value", helpers.resolved),
+          rejectedInto: settleInto("error", helpers.rejected),
+        }
+      : operation;
   } as unknown as TaskConstructor<Ch>;
 
 /**
@@ -687,13 +762,12 @@ const helpers: Omit<TaskConstructors, "output"> = {
  *
  *     const wallhavenSearch = Task("WallhavenSearch", {
  *       success: WallhavenSearchPayload,
- *       onError: Task.errorMessage,
  *       run: (params: typeof WallhavenSearchParams.Type) =>
  *         Effect.flatMap(WallhavenService, (service) => service.search(params)),
  *     })
  *
- *     const State = Schema.Struct({ search: Task.schema(WallhavenSearchPayload) })
- *     const SeedAction = Action.of([ClickedSearch, ...wallhavenSearch.actions])
+ *     const State = Schema.Struct({ search: wallhavenSearch.schema })
+ *     const Seed = define({ props, state: State, action: [ClickedSearch, wallhavenSearch] })
  *
  *     const initialState = FeatureDefinition.initialState(() => ({ search: Task.idle }))
  *
@@ -704,7 +778,8 @@ const helpers: Omit<TaskConstructors, "output"> = {
  *     })
  *
  * `into` writes the two settle handlers. To derive more from the result, write
- * `WallhavenSearchResolved:` yourself after the spread; the explicit key wins.
+ * `WallhavenSearchResolved: wallhavenSearch.resolvedInto("search", then)`
+ * after the spread; the explicit key wins.
  *
  *     // render
  *     Task.match(state.search, {

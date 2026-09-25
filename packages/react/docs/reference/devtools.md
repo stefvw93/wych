@@ -41,14 +41,14 @@ import type {
   DevtoolsTransition,
 } from "@wych/react";
 
-const Bumped = Action("Bumped", {});
+const Bumped = Action("Bumped");
 const Reached = Action.output("Reached", { at: Schema.Number });
 
 const Counter = define({
   props: Schema.Struct({ step: Schema.Number }),
   state: Schema.Struct({ count: Schema.Number }),
-  action: Action.of([Bumped]),
-  output: Action.of([Reached]),
+  action: Bumped,
+  output: Reached,
 });
 
 export const counter = Counter.create({

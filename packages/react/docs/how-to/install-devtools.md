@@ -32,18 +32,16 @@ The `name` you give `component` is in every event, so pick one that tells two fe
 import { Action, define } from "@wych/react";
 import { Schema } from "effect";
 
-const Bumped = Action("Bumped", {});
+const Bumped = Action("Bumped");
 
 const counter = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ count: Schema.Number }),
-  action: Action.of([Bumped]),
+  action: [Bumped],
 }).create({
   initialState: () => ({ count: 0 }),
   reducer: { Bumped: (_payload, { state }) => ({ count: state.count + 1 }) },
-  render: ({ state, dispatch }) => (
-    <button onClick={() => dispatch(Bumped.make({}))}>{state.count}</button>
-  ),
+  render: ({ state, dispatch }) => <button onClick={() => dispatch(Bumped)}>{state.count}</button>,
 });
 
 const Counter = component(counter, { name: "Counter" });

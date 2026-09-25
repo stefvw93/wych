@@ -20,21 +20,20 @@ class Metrics extends Context.Service<Metrics, { readonly snapshot: Effect.Effec
 ) {}
 
 const Loaded = Action("Loaded", { value: Schema.Number });
-const Retry = Action("Retry", {});
+const Retry = Action("Retry");
 
-const loadMetrics = Command.effect<{ readonly _tag: "Loaded"; readonly value: number }, Metrics>(
-  (dispatch) =>
-    Effect.gen(function* () {
-      const metrics = yield* Metrics;
-      const value = yield* metrics.snapshot;
-      yield* dispatch({ _tag: "Loaded", value });
-    }),
+const loadMetrics = Command.effect<typeof Loaded.Type, Metrics>((dispatch) =>
+  Effect.gen(function* () {
+    const metrics = yield* Metrics;
+    const value = yield* metrics.snapshot;
+    yield* dispatch(Loaded, { value });
+  }),
 );
 
 const Dashboard = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ status: Schema.String, attempts: Schema.Number, value: Schema.Number }),
-  action: Action.of([Loaded, Retry]),
+  action: [Loaded, Retry],
 });
 
 export const dashboard = Dashboard.create({
@@ -60,9 +59,7 @@ export const dashboard = Dashboard.create({
   render: Dashboard.render(({ state, dispatch }) => (
     <div>
       <span data-testid="status">{state.status}</span>
-      {state.status === "failed" ? (
-        <button onClick={() => dispatch({ _tag: "Retry" })}>Retry</button>
-      ) : null}
+      {state.status === "failed" ? <button onClick={() => dispatch(Retry)}>Retry</button> : null}
       {state.status === "gaveUp" ? <p>Could not connect. Reload the page.</p> : null}
       {state.status === "loaded" ? <p>{state.value}</p> : null}
     </div>
@@ -126,7 +123,7 @@ Retry click would not change its outcome.
 ## Retry rebuilds the layer
 
 Only a dispatch that did not originate from a lifecycle action or a running
-command rebuilds a dead mount. A click handler's `dispatch({ _tag: "Retry" })`
+command rebuilds a dead mount. A click handler's `dispatch(Retry)`
 qualifies, so the button in the snippet above is the trigger, not `loadMetrics`
 calling `dispatch` from inside itself, and not `Mounted`'s own command on the
 rebuilt mount. That is what stops a permanently failing layer from spinning:

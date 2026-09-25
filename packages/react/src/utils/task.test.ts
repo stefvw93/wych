@@ -31,7 +31,7 @@ const folded = (options?: {
   });
 
   const State = Schema.Struct({ colorValue: Schema.String, search: Task.schema(Schema.String) });
-  const Vocab = Action.of([Clicked, Cancelled, ...search.actions]);
+  const Vocab = [Clicked, Cancelled, ...search.actions];
   const F = define({ props: Props, state: State, action: Vocab });
 
   return {
@@ -80,7 +80,15 @@ describe("Task", () => {
       "WallhavenSearchRejected",
     ]);
 
-    expect(Object.keys(search).sort()).toEqual(["actions", "cancel", "into", "run", "schema"]);
+    expect(Object.keys(search).sort()).toEqual([
+      "actions",
+      "cancel",
+      "into",
+      "rejectedInto",
+      "resolvedInto",
+      "run",
+      "schema",
+    ]);
   });
 
   it("into(key) folds both actions into the field", async () => {
@@ -115,7 +123,7 @@ describe("Task", () => {
     const F = define({
       props: Props,
       state: State,
-      action: Action.of([Clicked, ...search.actions]),
+      action: [Clicked, ...search.actions],
     });
     const feature = F.create({
       initialState: F.initialState(() => ({ colorValue: "#000", search: Task.idle })),
@@ -227,7 +235,7 @@ describe("Task", () => {
     const F = define({
       props: Props,
       state: Schema.Struct({ quiet: quiet.schema }),
-      action: Action.of([Clicked, ...quiet.actions]),
+      action: [Clicked, ...quiet.actions],
     });
     const feature = F.create({
       initialState: () => ({ quiet: Task.idle }),
@@ -328,6 +336,91 @@ describe("Task", () => {
 
 // --- bound work --------------------------------------------------------------
 
+describe("resolvedInto / rejectedInto", () => {
+  const Saved = Action.output("Saved", { revision: Schema.String });
+  const save = Task("Save", { success: Schema.String, run: () => load });
+
+  const build = (then: {
+    readonly resolved?: (value: string, snapshot: any) => any;
+    readonly rejected?: (error: string, snapshot: any) => any;
+  }) => {
+    const F = define({
+      props: Props,
+      state: Schema.Struct({ dirty: Schema.Boolean, save: save.schema, seen: Schema.String }),
+      action: [Clicked, save],
+      output: Saved,
+    });
+    // Built outside the literal and spread as `object`: the fixture varies
+    // which entries exist, which the reducer's own types cannot express.
+    const extra = {
+      ...(then.resolved ? { SaveResolved: save.resolvedInto("save", then.resolved) } : {}),
+      ...(then.rejected ? { SaveRejected: save.rejectedInto("save", then.rejected) } : {}),
+    };
+    return F.create({
+      initialState: () => ({ dirty: true, save: Task.idle, seen: "" }),
+      reducer: {
+        Clicked: (_a, { draft }) => Task.start(draft, "save", save.run()),
+        ...save.into("save"),
+        ...(extra as object),
+      },
+      render: () => null,
+    });
+  };
+
+  it("writes the field into the draft, then hands the follow-up that draft", async () => {
+    const feature = build({
+      resolved: (value, { draft }) => {
+        draft.seen = draft.save._tag;
+        draft.dirty = false;
+        return [draft, Command.output(Saved, { revision: value })];
+      },
+    });
+    const out = await run(feature, Effect.succeed("r1"));
+    expect(out.state).toEqual({
+      dirty: false,
+      save: { _tag: "Resolved", value: "r1" },
+      seen: "Resolved",
+    });
+    expect(out.outputs).toEqual([{ _tag: "Saved", revision: "r1" }]);
+  });
+
+  it("the side without a follow-up is the plain `into` handler", async () => {
+    const feature = build({ resolved: (_v, { draft }) => draft });
+    const out = await run(feature, Effect.fail(new Error("boom")));
+    expect(out.state.save).toEqual({ _tag: "Rejected", error: "boom" });
+    expect(out.state.dirty).toBe(true);
+  });
+
+  it("rejectedInto writes `Rejected` first", async () => {
+    const feature = build({
+      rejected: (error, { draft }) => {
+        draft.seen = `${draft.save._tag}:${error}`;
+        return draft;
+      },
+    });
+    const out = await run(feature, Effect.fail(new Error("boom")));
+    expect(out.state.save).toEqual({ _tag: "Rejected", error: "boom" });
+    expect(out.state.seen).toBe("Rejected:boom");
+  });
+
+  it("a lazy command beside the draft sees the finished state", async () => {
+    const seen: Array<unknown> = [];
+    const feature = build({
+      resolved: (_v, { draft }) => [
+        draft,
+        (next: any) => Command.effect(() => Effect.sync(() => void seen.push(next.save))),
+      ],
+    });
+    await run(feature, Effect.succeed("r1"));
+    expect(seen).toEqual([{ _tag: "Resolved", value: "r1" }]);
+  });
+
+  it("returning another state than the draft is the fold's TypeError", async () => {
+    const feature = build({ resolved: (_v, { state }) => ({ ...state }) });
+    await expect(run(feature, Effect.succeed("r1"))).rejects.toThrow(/wrote into snapshot.draft/);
+  });
+});
+
 describe("Task with `run`", () => {
   const search = Task("Search", {
     success: Schema.String,
@@ -336,7 +429,7 @@ describe("Task with `run`", () => {
   });
 
   const State = Schema.Struct({ search: Task.schema(Schema.String) });
-  const Vocab = Action.of([Clicked, ...search.actions]);
+  const Vocab = [Clicked, ...search.actions];
   const F = define({ props: Props, state: State, action: Vocab });
 
   const feature = F.create({
@@ -367,7 +460,7 @@ describe("Task.start on a draft", () => {
     const F = define({
       props: Props,
       state: State,
-      action: Action.of([Clicked, ...search.actions]),
+      action: [Clicked, ...search.actions],
     });
     let handed: unknown;
     let returned: unknown;
@@ -409,8 +502,8 @@ describe("Task.start on a draft", () => {
 describe("Task.output", () => {
   const search = Task.output("Search", { success: Schema.String, onError: Task.errorMessage });
   const State = Schema.Struct({ colorValue: Schema.String });
-  const Vocab = Action.of([Clicked]);
-  const Outputs = Action.of([...search.actions]);
+  const Vocab = [Clicked];
+  const Outputs = [...search.actions];
   const F = define({ props: Props, state: State, action: Vocab, output: Outputs });
 
   const feature = F.create({

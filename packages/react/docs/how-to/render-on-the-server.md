@@ -21,12 +21,12 @@ import { renderToString } from "react-dom/server";
 let folds = 0;
 let commandsRun = 0;
 
-const Bumped = Action("Bumped", {});
+const Bumped = Action("Bumped");
 
 const counter = define({
   props: Schema.Struct({ start: Schema.Number }),
   state: Schema.Struct({ count: Schema.Number }),
-  action: Action.of([Bumped]),
+  action: [Bumped],
 }).create({
   initialState: (props) => ({ count: props.start }),
   reducer: {
@@ -38,7 +38,7 @@ const counter = define({
         Command.effect((dispatch) =>
           Effect.gen(function* () {
             commandsRun += 1;
-            yield* dispatch(Bumped.make({}));
+            yield* dispatch(Bumped);
           }),
         ),
       ];
@@ -47,7 +47,7 @@ const counter = define({
   render: ({ state, dispatch }) => (
     <div>
       <span>{state.count}</span>
-      <button onClick={() => dispatch(Bumped.make({}))}>bump</button>
+      <button onClick={() => dispatch(Bumped)}>bump</button>
       <Total />
     </div>
   ),

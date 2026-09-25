@@ -31,11 +31,11 @@ const { tagged, transitions } = query(recorder);
 const Presence = define({
   props: Schema.Struct({ room: Schema.String }),
   state: Schema.Struct({ seen: Schema.Array(Schema.String) }),
-  action: Action.of([
+  action: [
     Action("Tick", { id: Schema.String }),
     Action("Go", {}),
     Action("Late", { id: Schema.String }),
-  ]),
+  ],
 });
 
 let log: Array<string> = [];

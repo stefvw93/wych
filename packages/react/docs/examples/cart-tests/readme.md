@@ -18,14 +18,14 @@ wired into the module the component imports.
 
 ## Solution
 
-`cart.ts` defines `cart` like any other feature: `Added`, `Submitted`, a
-`Charge` task, and an `Ordered` output. The test file never imports React.
-`cart.reduce` folds one action against a hand-written state and props
-snapshot:
+`cart.ts` defines `cart` like any other feature: `actions` (`Added` and
+`Submitted`, declared as one record), a `Charge` task, and an `Ordered`
+output. The test file never imports React. `cart.reduce` folds one action
+against a hand-written state and props snapshot:
 
 ```ts fragment
 test("Added appends and issues no command", () => {
-  const next = cart.reduce(Added.make({ id: "a", price: 10 }), {
+  const next = cart.reduce(actions.Added.make({ id: "a", price: 10 }), {
     state: empty,
     props: {},
     hooks: {},
@@ -43,9 +43,13 @@ resolved and rejected paths without touching the feature.
 
 ## How It Works
 
-The last two tests build a runtime with `devtoolsLayer(recorder.sink)` from
-`createRecorder`, giving `recorder.events` to assert against directly,
-filtered by `_tag` for `"Transition"` events.
+`charge` declares no `failure`, so a declined card lands in the field as the
+error's message. `...charge.into("charge")` writes both settle handlers, and
+`ChargeResolved` after it is `charge.resolvedInto`: the receipt is written
+into the draft, then the order is announced beside it. The last two tests
+build a runtime with `devtoolsLayer(recorder.sink)` from `createRecorder`,
+giving `recorder.events` to assert against directly, filtered by `_tag` for
+`"Transition"` events.
 
 Run the tests standalone or in StackBlitz: `npm install`, then `npm test`.
 Inside this monorepo, run `vp -C packages/react/docs/examples/cart-tests run test`

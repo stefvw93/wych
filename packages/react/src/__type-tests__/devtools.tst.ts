@@ -122,7 +122,7 @@ declare const fooLayer: Layer.Layer<FooService>;
 const needsFoo = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ count: Schema.Number }),
-  action: Action.of([Action("A", {})]),
+  action: [Action("A", {})],
 }).create({
   initialState: () => ({ count: 0 }),
   reducer: { A: () => [{ count: 1 }, Command.effect(() => fooEffect)] as const },

@@ -30,7 +30,6 @@ const Typed = Action("Typed", { query: Schema.String });
 
 const search = Task("Search", {
   success: Hits,
-  onError: Task.errorMessage,
   run: (query: string) =>
     Effect.gen(function* () {
       const api = yield* SearchApi;
@@ -40,8 +39,8 @@ const search = Task("Search", {
 
 const Search = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({ query: Schema.String, results: Task.schema(Hits) }),
-  action: Action.of([Typed, ...search.actions]),
+  state: Schema.Struct({ query: Schema.String, results: search.schema }),
+  action: [Typed, search],
 });
 
 const searchFeature = Search.create({
@@ -51,19 +50,12 @@ const searchFeature = Search.create({
       draft.query = query;
       return Task.start(draft, "results", search.run(query));
     },
-    SearchResolved: ({ value }, { draft }) => {
-      draft.results = Task.resolved(value);
-      return draft;
-    },
-    SearchRejected: ({ error }, { draft }) => {
-      draft.results = Task.rejected(error);
-      return draft;
-    },
+    ...search.into("results"),
   },
   render: ({ state, dispatch }) => (
     <input
       value={state.query}
-      onChange={(event) => dispatch(Typed.make({ query: event.target.value }))}
+      onChange={(event) => dispatch(Typed, { query: event.target.value })}
     />
   ),
 });

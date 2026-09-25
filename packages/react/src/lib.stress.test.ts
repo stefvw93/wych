@@ -152,8 +152,8 @@ describe("high-frequency sources", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Emit, Bump]),
-      output: Action.of([Out]),
+      action: [Emit, Bump],
+      output: [Out],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -255,7 +255,7 @@ describe("high-frequency sources", () => {
     const feature = define({
       props: Props,
       state: Schema.Struct({ changes: Schema.Number }),
-      action: Action.of([Tock]),
+      action: [Tock],
     }).create({
       initialState: () => ({ changes: 0 }),
       reducer: {
@@ -352,7 +352,7 @@ describe("deep async churn", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ n: Schema.Number }),
-      action: Action.of([Slow]),
+      action: [Slow],
     }).create({
       initialState: () => ({ n: 0 }),
       reducer: {
@@ -417,8 +417,8 @@ describe("deep async churn", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ n: Schema.Number }),
-      action: Action.of([Late, Follow]),
-      output: Action.of([Out]),
+      action: [Late, Follow],
+      output: [Out],
     }).create({
       initialState: () => ({ n: 0 }),
       reducer: {
@@ -460,7 +460,7 @@ describe("deep async churn", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ errors: Schema.Number }),
-      action: Action.of([Boom]),
+      action: [Boom],
     }).create({
       initialState: () => ({ errors: 0 }),
       reducer: {
@@ -498,7 +498,7 @@ describe("deep async churn", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ hits: Schema.Number, errors: Schema.Number }),
-      action: Action.of([Both, Hit]),
+      action: [Both, Hit],
     }).create({
       initialState: () => ({ hits: 0, errors: 0 }),
       reducer: {
@@ -542,7 +542,7 @@ describe("deep async churn", () => {
       const feature = define({
         props: Schema.Struct({}),
         state: Schema.Struct({ value: Task.schema(Schema.Number), resolved: Schema.Number }),
-        action: Action.of([Issue, ...load.actions]),
+        action: [Issue, ...load.actions],
       }).create({
         initialState: () => ({ value: Task.idle, resolved: 0 }),
         reducer: {
@@ -588,7 +588,7 @@ describe("deep async churn", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ n: Schema.Number }),
-      action: Action.of([Hang, Kill, Ping]),
+      action: [Hang, Kill, Ping],
     }).create({
       initialState: () => ({ n: 0 }),
       reducer: {
@@ -632,7 +632,7 @@ describe("deep async churn", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ n: Schema.Number }),
-      action: Action.of([Hold]),
+      action: [Hold],
     }).create({
       initialState: () => ({ n: 0 }),
       reducer: { Hold: (_a, { state }) => [state, Command.effect(() => Effect.never)] },
@@ -733,7 +733,7 @@ describe("long sessions", () => {
     const feature = define({
       props: Props,
       state: Schema.Struct({ items: Schema.Array(Schema.Number) }),
-      action: Action.of([Push, Trim]),
+      action: [Push, Trim],
     }).create({
       initialState: () => ({ items: [] }),
       reducer: {

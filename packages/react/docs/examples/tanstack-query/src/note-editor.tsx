@@ -6,8 +6,7 @@ import { Queries } from "./queries";
 
 export const noteKey = (id: string) => ["note", id] as const;
 
-export const Typed = Action("Typed", { text: Schema.String });
-export const Submitted = Action("Submitted", {});
+export const actions = Action({ Typed: { text: Schema.String }, Submitted: {} });
 export const Saved = Action.output("Saved", { id: Schema.String });
 
 /**
@@ -16,7 +15,6 @@ export const Saved = Action.output("Saved", { id: Schema.String });
  */
 export const save = Task("Save", {
   success: Schema.String,
-  onError: Task.errorMessage,
   run: ({ id, text }: { id: string; text: string }) =>
     Effect.gen(function* () {
       const client = yield* Queries;
@@ -31,9 +29,9 @@ export const save = Task("Save", {
 
 export const noteEditor = define({
   props: Schema.Struct({ noteId: Schema.String }),
-  state: Schema.Struct({ draft: Schema.String, save: Task.schema(Schema.String) }),
-  action: Action.of([Typed, Submitted, ...save.actions]),
-  output: Action.of([Saved]),
+  state: Schema.Struct({ draft: Schema.String, save: save.schema }),
+  action: [actions, save],
+  output: Saved,
   /**
    * Read path: `useQuery` runs in render position. Only primitives are
    * returned, because hooks are compared per key with `Object.is`; the result
@@ -61,21 +59,19 @@ export const noteEditor = define({
     },
     Submitted: (_payload, { draft, props }) =>
       Task.start(draft, "save", save.run({ id: props.noteId, text: draft.draft })),
-    SaveResolved: ({ value }, { draft, props }) => {
-      draft.draft = value;
-      draft.save = Task.resolved(value);
+    ...save.into("save"),
+    // Written after the spread, so it replaces the generated `SaveResolved`:
+    // the field is written into the draft, then the parent hears about it.
+    SaveResolved: save.resolvedInto("save", (text, { draft, props }) => {
+      draft.draft = text;
       return [draft, Command.output(Saved, { id: props.noteId })];
-    },
-    SaveRejected: ({ error }, { draft }) => {
-      draft.save = Task.rejected(error);
-      return draft;
-    },
+    }),
   },
   render: ({ state, hooks, dispatch }) => (
     <form
       onSubmit={(event) => {
         event.preventDefault();
-        dispatch(Submitted.make({}));
+        dispatch(actions.Submitted);
       }}
     >
       {hooks.status === "pending" && <p>Loading</p>}
@@ -83,7 +79,7 @@ export const noteEditor = define({
       <textarea
         value={state.draft}
         disabled={hooks.status !== "success"}
-        onChange={(event) => dispatch(Typed.make({ text: event.target.value }))}
+        onChange={(event) => dispatch(actions.Typed, { text: event.target.value })}
       />
       <button type="submit" disabled={Task.isPending(state.save)}>
         {Task.isPending(state.save) ? "Saving" : "Save"}

@@ -68,9 +68,10 @@ HookChanged: ({ previous }, { draft, hooks }) => {
 },
 ```
 
-`Submitted` starts the `save` task. On success it invalidates the note's
-query key, so `main.tsx`'s `Preview` component, a plain `useQuery` consumer
-on the same key with no Wych involved, refetches too:
+`Submitted` starts the `save` task. `save` declares no `failure`, so a
+rejection carries the error's message and needs no `onError`. On success the
+task invalidates the note's query key, so `main.tsx`'s `Preview` component, a
+plain `useQuery` consumer on the same key with no Wych involved, refetches too:
 
 ```ts
 run: ({ id, text }) =>
@@ -83,6 +84,17 @@ run: ({ id, text }) =>
     yield* Effect.promise(() => client.invalidateQueries({ queryKey: noteKey(id) }));
     return note.text;
   }),
+```
+
+`...save.into("save")` writes both settle handlers. `SaveResolved` after it
+is `save.resolvedInto`: the field is written into the draft first, then the
+follow-up adopts the saved text and announces `Saved` to the parent:
+
+```ts
+SaveResolved: save.resolvedInto("save", (text, { draft, props }) => {
+  draft.draft = text;
+  return [draft, Command.output(Saved, { id: props.noteId })];
+}),
 ```
 
 `src/note-editor.test.ts` proves both paths need no React. The read path

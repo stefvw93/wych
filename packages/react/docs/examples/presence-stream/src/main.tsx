@@ -30,7 +30,7 @@ const Room = component(presence, { name: "Presence" });
 
 // The room switcher is plain React state. A changed `roomId` reaches the
 // feature as a new key from `subscriptions`, which stops the old room's
-// fiber and starts the new one — no lifecycle handler involved.
+// fiber and starts the new one. No lifecycle handler is involved.
 const App = () => {
   const [roomId, setRoomId] = useState("general");
   return (

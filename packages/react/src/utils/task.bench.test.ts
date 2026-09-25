@@ -21,7 +21,7 @@ const storeFor = (mode: TaskMode) => {
   const feature = define({
     props: Schema.Struct({}),
     state: Schema.Struct({ value: Task.schema(Schema.Number) }),
-    action: Action.of([Issue, ...load.actions]),
+    action: [Issue, ...load.actions],
   }).create({
     initialState: () => ({ value: Task.idle }),
     reducer: {

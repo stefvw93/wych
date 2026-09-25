@@ -30,7 +30,7 @@ Command.restart(
       yield* Effect.sleep("300 millis");
       const api = yield* SearchApi;
       const hits = yield* api.hits(query);
-      yield* dispatch(Loaded.make({ hits }));
+      yield* dispatch(Loaded, { hits });
     }),
   ),
 ),
@@ -54,9 +54,11 @@ MoreClicked: (_payload, { draft }) => {
 
 ## How It Works
 
-`taskSearch`'s two settle handlers come from `search.into("results")`,
-spread into its reducer; writing `SearchResolved` after the spread would
-replace the generated handler. `search-api.ts` declares `SearchApi` as a
+Each feature's `results` field is declared with its operation's own schema
+(`search.schema`, `searchEvery.schema`, `searchPage.schema`). `taskSearch`'s
+two settle handlers come from `search.into("results")`, spread into its
+reducer; writing `SearchResolved` after the spread would replace the
+generated handler. `search-api.ts` declares `SearchApi` as a
 service with one `hits` method that takes a query and an optional page.
 `main.tsx` supplies a layer where
 `hits` sleeps 500 ms and mounts `DebouncedSearch`, `Search` and `PagedSearch`

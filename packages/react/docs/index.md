@@ -34,13 +34,11 @@ class SearchApi extends Context.Service<
   { readonly hits: (query: string) => Effect.Effect<ReadonlyArray<string>> }
 >()("SearchApi") {}
 
-const Typed = Action("Typed", { query: Schema.String });
-const Cleared = Action("Cleared", {});
+const actions = Action({ Typed: { query: Schema.String }, Cleared: {} });
 
-// Two actions (SearchResolved, SearchRejected) and one cancellable command.
+// Two actions (SearchResolved, SearchRejected), one cancellable command, one field schema.
 const search = Task("Search", {
   success: Hits,
-  onError: Task.errorMessage,
   run: (query: string) =>
     Effect.gen(function* () {
       const api = yield* SearchApi;
@@ -50,8 +48,8 @@ const search = Task("Search", {
 
 const taskSearch = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({ query: Schema.String, results: Task.schema(Hits) }),
-  action: Action.of([Typed, Cleared, ...search.actions]),
+  state: Schema.Struct({ query: Schema.String, results: search.schema }),
+  action: [actions, search],
 }).create({
   initialState: () => ({ query: "", results: Task.idle }),
   reducer: {
@@ -71,9 +69,9 @@ const taskSearch = define({
     <div>
       <input
         value={state.query}
-        onChange={(event) => dispatch(Typed.make({ query: event.target.value }))}
+        onChange={(event) => dispatch(actions.Typed, { query: event.target.value })}
       />
-      <button onClick={() => dispatch(Cleared.make({}))}>clear</button>
+      <button onClick={() => dispatch(actions.Cleared)}>clear</button>
       {Task.match(state.results, {
         Idle: () => null,
         Pending: () => <p>Searching</p>,
@@ -115,7 +113,7 @@ const slowApi = Layer.succeed(SearchApi)({
 });
 
 const result = await Effect.runPromise(
-  taskSearch.run([Typed.make({ query: "a" }), Typed.make({ query: "ab" })], {
+  taskSearch.run([actions.Typed.make({ query: "a" }), actions.Typed.make({ query: "ab" })], {
     props: {},
     hooks: {},
     layer: slowApi,
@@ -173,7 +171,7 @@ One app, three chapters. Start here.
 
 - [Runtime](/docs/reference/runtime): `createRuntime`, `component`, `useFeature`, output props, props validation.
 - [Features](/docs/reference/features): `define`, `create`, `reduce`, `run`, `Next`, `Children`.
-- [Actions and outputs](/docs/reference/actions): `Action`, `Action.output`, `Action.of`, the two channels.
+- [Actions and outputs](/docs/reference/actions): `Action`, `Action.output`, the record form, the two channels.
 - [Commands](/docs/reference/commands): every constructor, groups, the contextual typing rule.
 - [Subscriptions](/docs/reference/subscriptions): `Subscription.effect`, the `subscriptions` hook, the key rule, `run` and `subscriptions`.
 - [Lifecycle](/docs/reference/lifecycle): the five runtime actions and change detection.

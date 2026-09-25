@@ -18,31 +18,39 @@ into it.
 
 ## Solution
 
-`note-editor.tsx` defines the feature once with `define`, then builds each
-piece separately: `Editor.initialState`, `Editor.reducer`, and `Editor.render`.
-The `TextChanged` handler recomputes `dirty` by comparing against
+`note-editor.tsx` declares the two actions as one record,
+`Action({ TextChanged: { text: Schema.String }, Reverted: {} })`, defines the
+feature once with `define`, then builds each piece separately:
+`Editor.initialState`, `Editor.reducer`, and `Editor.render`. The
+`TextChanged` handler recomputes `dirty` by comparing against
 `props.initialText`, and `Reverted` restores it:
 
 ```tsx fragment
 const reducer = Editor.reducer({
-  TextChanged: (payload, snapshot) => ({
-    text: payload.text,
-    dirty: payload.text !== snapshot.props.initialText,
-  }),
-  Reverted: (_payload, snapshot) => ({ text: snapshot.props.initialText, dirty: false }),
+  TextChanged: (payload, snapshot) => {
+    snapshot.draft.text = payload.text;
+    snapshot.draft.dirty = payload.text !== snapshot.props.initialText;
+    return snapshot.draft;
+  },
+  Reverted: (_payload, snapshot) => {
+    snapshot.draft.text = snapshot.props.initialText;
+    snapshot.draft.dirty = false;
+    return snapshot.draft;
+  },
 });
 ```
 
-`dispatch` takes a whole message, built with `TextChanged.make({ text })` or
-`Reverted.make({})`.
+`dispatch` takes a message and its payload: `dispatch(actions.TextChanged, { text })`,
+and `dispatch(actions.Reverted)` for a message with no fields.
 
 ## How It Works
 
 `runtime.ts` calls `createRuntime(Layer.empty)` and exports `component`, which
 `note-editor.tsx` uses to build `NoteEditor`. `main.tsx` mounts
 `<NoteEditor noteId="n1" initialText="Buy milk" />`. `note-editor.test.ts`
-calls `editor.reduce` with a `TextChanged` action and a hand-written
-`state`/`props` snapshot, and asserts on `Next.state` and `Next.command`.
+calls `editor.reduce` with a built `actions.TextChanged.make({ text })` and a
+hand-written `state`/`props` snapshot, and asserts on `Next.state` and
+`Next.command`.
 
 Run it standalone or in StackBlitz: `npm install`, then `npm run dev` for the
 app and `npm test` for the test. Inside this monorepo, run

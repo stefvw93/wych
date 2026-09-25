@@ -9,7 +9,7 @@ const Loaded = Action("Loaded", { hits: Hits });
 export const searchFeature = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ query: Schema.String, hits: Hits }),
-  action: Action.of([Typed, Loaded]),
+  action: [Typed, Loaded],
 }).create({
   initialState: () => ({ query: "", hits: [] }),
   reducer: {
@@ -24,7 +24,7 @@ export const searchFeature = define({
               yield* Effect.sleep("300 millis");
               const api = yield* SearchApi;
               const hits = yield* api.hits(query);
-              yield* dispatch(Loaded.make({ hits }));
+              yield* dispatch(Loaded, { hits });
             }),
           ),
         ),
@@ -39,7 +39,7 @@ export const searchFeature = define({
     <div>
       <input
         value={state.query}
-        onChange={(event) => dispatch(Typed.make({ query: event.target.value }))}
+        onChange={(event) => dispatch(Typed, { query: event.target.value })}
       />
       <ul>
         {state.hits.map((hit) => (
@@ -53,7 +53,6 @@ export const searchFeature = define({
 /** Take latest with a task: the default `mode: "latest"` books under `Command.restart`. */
 const search = Task("Search", {
   success: Hits,
-  onError: Task.errorMessage,
   run: (query: string) =>
     Effect.gen(function* () {
       const api = yield* SearchApi;
@@ -61,12 +60,12 @@ const search = Task("Search", {
     }),
 });
 
-const Cleared = Action("Cleared", {});
+const Cleared = Action("Cleared");
 
 export const taskSearch = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({ query: Schema.String, results: Task.schema(Hits) }),
-  action: Action.of([Typed, Cleared, ...search.actions]),
+  state: Schema.Struct({ query: Schema.String, results: search.schema }),
+  action: [Typed, Cleared, search],
 }).create({
   initialState: () => ({ query: "", results: Task.idle }),
   reducer: {
@@ -85,9 +84,9 @@ export const taskSearch = define({
     <div>
       <input
         value={state.query}
-        onChange={(event) => dispatch(Typed.make({ query: event.target.value }))}
+        onChange={(event) => dispatch(Typed, { query: event.target.value })}
       />
-      <button onClick={() => dispatch(Cleared.make({}))}>clear</button>
+      <button onClick={() => dispatch(Cleared)}>clear</button>
       {Task.match(state.results, {
         Idle: () => null,
         Pending: () => <p>Searching</p>,
@@ -107,7 +106,6 @@ export const taskSearch = define({
 /** `mode: "every"` books with `Command.keyed` and never interrupts. */
 const searchEvery = Task("SearchEvery", {
   success: Hits,
-  onError: Task.errorMessage,
   mode: "every",
   run: (query: string) =>
     Effect.gen(function* () {
@@ -118,8 +116,8 @@ const searchEvery = Task("SearchEvery", {
 
 export const everySearch = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({ results: Task.schema(Hits) }),
-  action: Action.of([Typed, ...searchEvery.actions]),
+  state: Schema.Struct({ results: searchEvery.schema }),
+  action: [Typed, searchEvery],
 }).create({
   initialState: () => ({ results: Task.idle }),
   reducer: {
@@ -139,7 +137,6 @@ export const everySearch = define({
 /** Load the next page: `Task.start` takes a thunk that reads the state the handler built. */
 const searchPage = Task("SearchPage", {
   success: Hits,
-  onError: Task.errorMessage,
   run: ({ query, page }: { readonly query: string; readonly page: number }) =>
     Effect.gen(function* () {
       const api = yield* SearchApi;
@@ -147,12 +144,12 @@ const searchPage = Task("SearchPage", {
     }),
 });
 
-export const MoreClicked = Action("MoreClicked", {});
+export const MoreClicked = Action("MoreClicked");
 
 export const pagedSearch = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({ query: Schema.String, page: Schema.Number, results: Task.schema(Hits) }),
-  action: Action.of([Typed, MoreClicked, ...searchPage.actions]),
+  state: Schema.Struct({ query: Schema.String, page: Schema.Number, results: searchPage.schema }),
+  action: [Typed, MoreClicked, searchPage],
 }).create({
   initialState: () => ({ query: "", page: 1, results: Task.idle }),
   reducer: {
@@ -178,9 +175,9 @@ export const pagedSearch = define({
     <div>
       <input
         value={state.query}
-        onChange={(event) => dispatch(Typed.make({ query: event.target.value }))}
+        onChange={(event) => dispatch(Typed, { query: event.target.value })}
       />
-      <button onClick={() => dispatch(MoreClicked.make({}))}>more</button>
+      <button onClick={() => dispatch(MoreClicked)}>more</button>
       {Task.match(state.results, {
         Idle: () => null,
         Pending: () => <p>Loading page {state.page}</p>,

@@ -55,7 +55,7 @@ const State = Schema.Struct({ n: Schema.Number, log: Schema.Array(Schema.Number)
 const differential = define({
   props: Schema.Struct({}),
   state: State,
-  action: Action.of([Inc, Dec, Echo, Echoed, Twice, Restart, Cancel]),
+  action: [Inc, Dec, Echo, Echoed, Twice, Restart, Cancel],
 }).create({
   initialState: () => ({ n: 0, log: [] }),
   reducer: {
@@ -236,7 +236,7 @@ describe("invariants", () => {
     const feature = define({
       props: Props,
       state: Schema.Struct({ changes: Schema.Number }),
-      action: Action.of([Tock]),
+      action: [Tock],
     }).create({
       initialState: () => ({ changes: 0 }),
       reducer: {

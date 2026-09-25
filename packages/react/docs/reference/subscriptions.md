@@ -29,7 +29,7 @@ const Changed = Action("Changed", { userId: Schema.String });
 const Presence = define({
   props: Schema.Struct({ roomId: Schema.String }),
   state: Schema.Struct({ online: Schema.Array(Schema.String) }),
-  action: Action.of([Changed]),
+  action: Changed,
 });
 ```
 
@@ -42,9 +42,11 @@ Subscription.effect<A = never, R = never>(
 ```
 
 The one constructor. `effect` is the same leaf `Command.effect` takes:
-`dispatch` emits actions and outputs, and the effect's error channel is
-`never`, so the effect handles its own failures before it dies (see
-[Failure](#failure)).
+`dispatch` emits actions and outputs, as a message schema and its payload or
+as a built message (see
+[`Dispatcher`](/docs/reference/commands#dispatcher-and-dispatch)), and the
+effect's error channel is `never`, so the effect handles its own failures
+before it dies (see [Failure](#failure)).
 
 ```ts continue
 const presence = Presence.create({
@@ -59,9 +61,7 @@ const presence = Presence.create({
     [`presence:${props.roomId}`]: Subscription.effect((dispatch) =>
       Effect.gen(function* () {
         const api = yield* PresenceApi;
-        yield* Stream.runForEach(api.events(props.roomId), (event) =>
-          dispatch(Changed.make(event)),
-        );
+        yield* Stream.runForEach(api.events(props.roomId), (event) => dispatch(Changed, event));
       }),
     ),
   }),
@@ -89,9 +89,7 @@ const declareConditionally = Presence.subscriptions(({ props }) => ({
     ? Subscription.effect((dispatch) =>
         Effect.gen(function* () {
           const api = yield* PresenceApi;
-          yield* Stream.runForEach(api.events(props.roomId), (event) =>
-            dispatch(Changed.make(event)),
-          );
+          yield* Stream.runForEach(api.events(props.roomId), (event) => dispatch(Changed, event));
         }),
       )
     : undefined,
@@ -140,7 +138,7 @@ const subscriptions = Presence.subscriptions(({ props }) => ({
   [`presence:${props.roomId}`]: Subscription.effect((dispatch) =>
     Effect.gen(function* () {
       const api = yield* PresenceApi;
-      yield* Stream.runForEach(api.events(props.roomId), (event) => dispatch(Changed.make(event)));
+      yield* Stream.runForEach(api.events(props.roomId), (event) => dispatch(Changed, event));
     }),
   ),
 }));
@@ -264,7 +262,7 @@ it; the key stays declared as died.
 const Room = define({
   props: Schema.Struct({ roomId: Schema.String }),
   state: Schema.Struct({ online: Schema.Array(Schema.String), failed: Schema.Boolean }),
-  action: Action.of([Changed]),
+  action: Changed,
 });
 
 const flaky = Room.create({
@@ -301,7 +299,7 @@ attempt counter and put it in the key, or reconnect inside the effect.
 const reconnecting = Subscription.effect<typeof Changed.Type, PresenceApi>((dispatch) =>
   Effect.gen(function* () {
     const api = yield* PresenceApi;
-    yield* Stream.runForEach(api.events("general"), (event) => dispatch(Changed.make(event)));
+    yield* Stream.runForEach(api.events("general"), (event) => dispatch(Changed, event));
   }).pipe(Effect.retry(Schedule.exponential("1 second"))),
 );
 ```
@@ -335,7 +333,7 @@ const inferred = Presence.subscriptions(({ props }) => ({
   [`presence:${props.roomId}`]: Subscription.effect((dispatch) =>
     Effect.gen(function* () {
       const api = yield* PresenceApi;
-      yield* Stream.runForEach(api.events(props.roomId), (event) => dispatch(Changed.make(event)));
+      yield* Stream.runForEach(api.events(props.roomId), (event) => dispatch(Changed, event));
     }),
   ),
 }));
@@ -358,9 +356,7 @@ const presenceWithSubscriptions = Presence.create({
     [`presence:${props.roomId}`]: Subscription.effect((dispatch) =>
       Effect.gen(function* () {
         const api = yield* PresenceApi;
-        yield* Stream.runForEach(api.events(props.roomId), (event) =>
-          dispatch(Changed.make(event)),
-        );
+        yield* Stream.runForEach(api.events(props.roomId), (event) => dispatch(Changed, event));
       }),
     ),
   }),
@@ -374,7 +370,7 @@ falls back to `never` unless a type argument names it, the same way a bare
 
 ```ts continue
 // @ts-expect-error dispatch is typed never without a type argument
-const bare = Subscription.effect((dispatch) => dispatch(Changed.make({ userId: "ada" })));
+const bare = Subscription.effect((dispatch) => dispatch(Changed, { userId: "ada" }));
 ```
 
 Naming `R` too is the exception, not the rule: reach for it only when a
@@ -385,7 +381,7 @@ const standalone: Subscriptions<typeof Changed.Type, PresenceApi> = {
   presence: Subscription.effect((dispatch) =>
     Effect.gen(function* () {
       const api = yield* PresenceApi;
-      yield* Stream.runForEach(api.events("general"), (event) => dispatch(Changed.make(event)));
+      yield* Stream.runForEach(api.events("general"), (event) => dispatch(Changed, event));
     }),
   ),
 };
@@ -398,7 +394,7 @@ way a command does.
 ```ts continue
 const severed: Subscriptions<typeof Changed.Type, PresenceApi> = {
   // @ts-expect-error a .pipe receiver has no contextual type, so dispatch is never
-  presence: Subscription.effect((dispatch) => dispatch(Changed.make({ userId: "ada" }))).pipe(
+  presence: Subscription.effect((dispatch) => dispatch(Changed, { userId: "ada" })).pipe(
     (self) => self,
   ),
 };

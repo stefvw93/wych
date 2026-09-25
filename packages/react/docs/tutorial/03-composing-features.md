@@ -49,22 +49,23 @@ export const { component } = createRuntime(notesApiLayer);
 
 ## 2. Announce the save
 
-`Action.output` declares an outbound message. `Command.output` emits one. The
-editor is the chapter 2 file with those two lines added and the cancel button
-left out.
+`Action.output` declares outbound messages, as a record like `Action`.
+`Command.output` emits one. The editor is the chapter 2 file with those two
+additions and the cancel button left out.
 
 ```tsx continue
 // note-editor.tsx
 import { Action, Command, Task, define } from "@wych/react";
 
-const TextChanged = Action("TextChanged", { text: Schema.String });
-const Reverted = Action("Reverted", {});
-const SaveClicked = Action("SaveClicked", {});
-const Saved = Action.output("Saved", { id: Schema.String, revision: Schema.String });
+const actions = Action({
+  TextChanged: { text: Schema.String },
+  Reverted: {},
+  SaveClicked: {},
+});
+const outputs = Action.output({ Saved: { id: Schema.String, revision: Schema.String } });
 
 const saveNote = Task("Save", {
   success: Schema.String,
-  onError: Task.errorMessage,
   run: (note: { readonly id: string; readonly text: string }) =>
     Effect.gen(function* () {
       const api = yield* NotesApi;
@@ -77,10 +78,10 @@ const Editor = define({
   state: Schema.Struct({
     text: Schema.String,
     dirty: Schema.Boolean,
-    save: Task.schema(Schema.String),
+    save: saveNote.schema,
   }),
-  action: Action.of([TextChanged, Reverted, SaveClicked, ...saveNote.actions]),
-  output: Action.of([Saved]),
+  action: [actions, saveNote],
+  output: outputs,
 });
 
 const editor = Editor.create({
@@ -102,26 +103,22 @@ const editor = Editor.create({
       Task.isPending(state.save)
         ? draft
         : Task.start(draft, "save", saveNote.run({ id: props.noteId, text: state.text })),
-    SaveResolved: ({ value }, { draft, props }) => {
+    ...saveNote.into("save"),
+    SaveResolved: saveNote.resolvedInto("save", (revision, { draft, props }) => {
       draft.dirty = false;
-      draft.save = Task.resolved(value);
-      return [draft, Command.output(Saved, { id: props.noteId, revision: value })];
-    },
-    SaveRejected: ({ error }, { draft }) => {
-      draft.save = Task.rejected(error);
-      return draft;
-    },
+      return [draft, Command.output(outputs.Saved, { id: props.noteId, revision })];
+    }),
   },
   render: ({ state, dispatch }) => (
     <form>
       <textarea
         value={state.text}
-        onChange={(event) => dispatch(TextChanged.make({ text: event.target.value }))}
+        onChange={(event) => dispatch(actions.TextChanged, { text: event.target.value })}
       />
-      <button type="button" disabled={!state.dirty} onClick={() => dispatch(Reverted.make({}))}>
+      <button type="button" disabled={!state.dirty} onClick={() => dispatch(actions.Reverted)}>
         Revert
       </button>
-      <button type="button" onClick={() => dispatch(SaveClicked.make({}))}>
+      <button type="button" onClick={() => dispatch(actions.SaveClicked)}>
         Save
       </button>
     </form>
@@ -131,9 +128,12 @@ const editor = Editor.create({
 export const NoteEditor = component(editor, { name: "NoteEditor" });
 ```
 
-`Saved` has no reducer handler, and writing one is a compile error. An output
-leaves the feature and never comes back. `NoteEditor` now takes a required
-`onSaved` prop, derived from the tag, with the payload minus `_tag`.
+`Command.output` takes the message and its payload, the same shape as
+`dispatch`. It rides beside the draft that `resolvedInto` already wrote the
+field into. `Saved` has no reducer handler, and writing one is a compile
+error. An output leaves the feature and never comes back. `NoteEditor` now
+takes a required `onSaved` prop, derived from the tag, with the payload minus
+`_tag`.
 
 ```tsx continue
 const one = <NoteEditor noteId="n1" initialText="Buy milk" onSaved={({ id }) => console.log(id)} />;
@@ -155,7 +155,6 @@ const NoteSaved = Action("NoteSaved", { id: Schema.String, revision: Schema.Stri
 
 const loadNotes = Task("Load", {
   success: Schema.Array(Note),
-  onError: Task.errorMessage,
   run: () =>
     Effect.gen(function* () {
       const api = yield* NotesApi;
@@ -166,17 +165,18 @@ const loadNotes = Task("Load", {
 const List = define({
   props: Schema.Struct({ title: Schema.String, children: Schema.optionalKey(Children) }),
   state: Schema.Struct({
-    notes: Task.schema(Schema.Array(Note)),
+    notes: loadNotes.schema,
     lastSaved: Schema.String,
   }),
-  action: Action.of([NoteSaved, ...loadNotes.actions]),
+  action: [NoteSaved, loadNotes],
 });
 ```
 
-`loadNotes` takes no input, so `run` declares none and the handler calls
-`loadNotes.run()`.
-`Children` validates any node and is invisible to change detection. A parent
-that passes a fresh node on every render raises no `PropsChanged`.
+`NoteSaved` is the list's one action, so `Action("Tag", fields)` declares it
+alone. `loadNotes` takes no input, so `run` declares none and the handler
+calls `loadNotes.run()`. `Children` validates any node and is invisible to
+change detection. A parent that passes a fresh node on every render raises
+no `PropsChanged`.
 
 ## 4. Load the notes on Mounted
 
@@ -190,17 +190,12 @@ const listReducer = List.reducer({
     draft.lastSaved = id;
     return draft;
   },
-  LoadResolved: ({ value }, { draft }) => {
-    draft.notes = Task.resolved(value);
-    return draft;
-  },
-  LoadRejected: ({ error }, { draft }) => {
-    draft.notes = Task.rejected(error);
-    return draft;
-  },
+  ...loadNotes.into("notes"),
 });
 ```
 
+A loaded list has nothing to do beyond landing in its field, so
+`...loadNotes.into("notes")` is both settle handlers.
 Lifecycle handlers are optional and take the same shape as any other handler.
 The five tags are `Mounted`, `PropsChanged`, `HookChanged`, `Error` and
 `Unmounted`. Their payloads and firing order are in the
@@ -249,7 +244,7 @@ const noteList = List.create({
                 <NoteEditor
                   noteId={note.id}
                   initialText={note.text}
-                  onSaved={({ id, revision }) => dispatch(NoteSaved.make({ id, revision }))}
+                  onSaved={({ id, revision }) => dispatch(NoteSaved, { id, revision })}
                 />
               </li>
             ))}
@@ -294,7 +289,7 @@ into the reducer.
 
 ```ts continue
 const saved = await Effect.runPromise(
-  editor.run([SaveClicked.make({})], {
+  editor.run([actions.SaveClicked.make()], {
     props: { noteId: "n1", initialText: "Buy milk" },
     hooks: {},
     layer: notesApiLayer,
@@ -331,6 +326,7 @@ import { Note, NotesApi } from "./notes-api"; // note-editor.tsx and note-list.t
 import { component } from "./runtime"; // note-editor.tsx and note-list.tsx
 import { NoteEditor } from "./note-editor"; // note-list.tsx
 import { NoteList } from "./note-list"; // main.tsx
+import { actions, editor } from "./note-editor"; // main.tsx, for the run in step 8
 ```
 
 ## Next

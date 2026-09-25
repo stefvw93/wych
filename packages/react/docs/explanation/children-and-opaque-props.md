@@ -22,8 +22,7 @@ import type { ReactNode } from "react";
 
 const Row = Schema.Struct({ id: Schema.String, name: Schema.String, size: Schema.Number });
 
-const Sorted = Action("Sorted", { by: Schema.String });
-const Selected = Action("Selected", { id: Schema.String });
+const actions = Action({ Sorted: { by: Schema.String }, Selected: { id: Schema.String } });
 
 const Table = define({
   props: Schema.Struct({
@@ -32,7 +31,7 @@ const Table = define({
     empty: Schema.optionalKey(Children),
   }),
   state: Schema.Struct({ sortBy: Schema.String, selected: Schema.String }),
-  action: Action.of([Sorted, Selected]),
+  action: actions,
 });
 ```
 
@@ -72,8 +71,8 @@ const table = Table.create({
       <table>
         <thead>
           <tr>
-            <th onClick={() => dispatch(Sorted.make({ by: "name" }))}>Name</th>
-            <th onClick={() => dispatch(Sorted.make({ by: "size" }))}>Size</th>
+            <th onClick={() => dispatch(actions.Sorted, { by: "name" })}>Name</th>
+            <th onClick={() => dispatch(actions.Sorted, { by: "size" })}>Size</th>
           </tr>
         </thead>
         <tbody>
@@ -82,7 +81,7 @@ const table = Table.create({
               state.sortBy === "size" ? a.size - b.size : a.name.localeCompare(b.name),
             )
             .map((row) => (
-              <tr key={row.id} onClick={() => dispatch(Selected.make({ id: row.id }))}>
+              <tr key={row.id} onClick={() => dispatch(actions.Selected, { id: row.id })}>
                 {props.children(row, row.id === state.selected)}
               </tr>
             ))}
@@ -139,7 +138,7 @@ devtools output is unreadable.
 define({
   props: Schema.Struct({ rows: Schema.Array(Row) }),
   state: Schema.Struct({ slot: Children }),
-  action: Action.of([Sorted]),
+  action: actions.Sorted,
 });
 // throws TypeError: Opaque field "slot" declared in the state schema
 ```
@@ -184,7 +183,7 @@ const FileList = () => (
 ```
 
 A **child feature** is a `Feature` of its own, built with `create` and
-mounted with `component`. It has its own state and vocabularies and talks
+mounted with `component`. It has its own state and messages and talks
 through validated props and `on<Tag>` callbacks. Reach for it when the part
 has a model of its own: a row editor with a pending save is a child feature,
 a row that only paints is a render prop.

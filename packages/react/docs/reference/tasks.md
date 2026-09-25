@@ -1,6 +1,6 @@
 ---
 title: Tasks
-description: Task, TaskOperation, TaskValue, and the constructors, matcher and guards around them.
+description: Task, TaskOperation (run, cancel, schema, into, resolvedInto, rejectedInto), TaskValue, and the constructors, matcher and guards around them.
 order: 7
 ---
 
@@ -17,7 +17,7 @@ can be cancelled.
 ```tsx
 import { Cause, Context, Effect, Layer, Option, Schema } from "effect";
 import { Action, Command, define, Next, Task } from "@wych/react";
-import type { TaskMode, TaskOnError, TaskOperation, TaskValue } from "@wych/react";
+import type { TagsOf, TaskMode, TaskOnError, TaskOperation, TaskValue } from "@wych/react";
 
 class MailApi extends Context.Service<
   MailApi,
@@ -30,7 +30,6 @@ const Subjects = Schema.Array(Schema.String);
 
 const loadMail = Task("LoadMail", {
   success: Subjects,
-  onError: Task.errorMessage,
   run: (folder: string) =>
     Effect.gen(function* () {
       const api = yield* MailApi;
@@ -38,17 +37,16 @@ const loadMail = Task("LoadMail", {
     }),
 });
 
-const Opened = Action("Opened", { folder: Schema.String });
-const Cancelled = Action("Cancelled", {});
+const actions = Action({ Opened: { folder: Schema.String }, Cancelled: {} });
 
 const Mailbox = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({ folder: Schema.String, subjects: Task.schema(Subjects) }),
-  action: Action.of([Opened, Cancelled, ...loadMail.actions]),
+  state: Schema.Struct({ folder: Schema.String, subjects: loadMail.schema, count: Schema.Number }),
+  action: [actions, loadMail],
 });
 
 export const mailbox = Mailbox.create({
-  initialState: Mailbox.initialState(() => ({ folder: "", subjects: Task.idle })),
+  initialState: Mailbox.initialState(() => ({ folder: "", subjects: Task.idle, count: 0 })),
   reducer: Mailbox.reducer({
     Opened: ({ folder }, { draft }) => {
       draft.folder = folder;
@@ -58,14 +56,11 @@ export const mailbox = Mailbox.create({
       draft.subjects = Task.idle;
       return [draft, loadMail.cancel];
     },
-    LoadMailResolved: ({ value }, { draft }) => {
-      draft.subjects = Task.resolved(value);
+    ...loadMail.into("subjects"),
+    LoadMailResolved: loadMail.resolvedInto("subjects", (value, { draft }) => {
+      draft.count = value.length;
       return draft;
-    },
-    LoadMailRejected: ({ error }, { draft }) => {
-      draft.subjects = Task.rejected(error);
-      return draft;
-    },
+    }),
   }),
   render: Mailbox.render(({ state }) =>
     Task.match(state.subjects, {
@@ -91,7 +86,8 @@ Task<Name extends Capitalize<string>, Success extends Schema.Top, Input, R>(
   name: Name,
   config: {
     readonly success: Success;
-    readonly onError: TaskOnError<string>;
+    readonly failure?: undefined;
+    readonly onError?: TaskOnError<string>;
     readonly mode?: TaskMode;
     readonly run?: (input: Input) => Effect.Effect<Success["Type"], unknown, R>;
   },
@@ -99,13 +95,19 @@ Task<Name extends Capitalize<string>, Success extends Schema.Top, Input, R>(
 
 Task<Name, Success, Failure extends Schema.Top, Input, R>(
   name: Name,
-  config: { success; failure: Failure; onError: TaskOnError<Failure["Type"]>; mode?; run? },
+  config: {
+    readonly success: Success;
+    readonly failure: Failure;
+    readonly onError: TaskOnError<Failure["Type"]>;
+    readonly mode?: TaskMode;
+    readonly run?: (input: Input) => Effect.Effect<Success["Type"], unknown, R>;
+  },
 ): TaskOperation<Name, Success, Failure, Input, R>
 ```
 
-The first overload defaults `failure` to `Schema.String` and pairs with
-`Task.errorMessage`. The second takes a `failure` schema and an `onError` that
-produces its type.
+Without `failure`, the field's error is a string and `onError` defaults to
+`Task.errorMessage`; `loadMail` above declares neither. With a `failure`
+schema, `onError` is required and produces its type.
 
 ```ts continue
 const NotFound = Schema.Struct({ status: Schema.Number, message: Schema.String });
@@ -125,11 +127,19 @@ const typedLoad = Task("TypedLoad", {
 });
 ```
 
+A `failure` schema without `onError` is a compile error, `Schema.String`
+included: the default mapping pairs with the default schema only.
+
+```ts continue
+// @ts-expect-error onError is required with a failure schema
+const missingOnError = Task("MissingOnError", { success: Subjects, failure: Schema.String });
+```
+
 `name` must be capitalized, because it prefixes two action tags.
 
 ```ts continue
 // @ts-expect-error "loadMail" is not Capitalize<string>
-const lowercase = Task("loadMail", { success: Subjects, onError: Task.errorMessage });
+const lowercase = Task("loadMail", { success: Subjects });
 ```
 
 ## `TaskOperation`
@@ -139,30 +149,67 @@ interface TaskOperation<Name, Success, Failure, Input, R, Ch> {
   readonly actions: readonly [ResolvedMessage, RejectedMessage];
   readonly run: (input: Input) => Command<TaskAction<...>, R>;
   readonly cancel: Command<TaskAction<...>>;
+  readonly schema: TaskSchema<Success, Failure>;
+
+  // internal operations only
   readonly into: <Key extends string>(key: Key) => TaskHandlers<Name, Key, Success, Failure>;
+  readonly resolvedInto: <Key, Snap, N>(
+    key: Key,
+    then: (value: Success["Type"], snapshot: Snap) => N,
+  ) => (payload: { readonly value: Success["Type"] }, snapshot: Snap) => N;
+  readonly rejectedInto: <Key, Snap, N>(
+    key: Key,
+    then: (error: Failure["Type"], snapshot: Snap) => N,
+  ) => (payload: { readonly error: Failure["Type"] }, snapshot: Snap) => N;
 }
 ```
 
-Four members. The operation holds no state; the feature's reducer writes the
-result into a state field. `into` is absent on `Task.output`: an announced
-operation has no reducer handler to write.
+The operation holds no state; the feature's reducer writes the result into a
+state field. `into`, `resolvedInto` and `rejectedInto` are absent on
+`Task.output`: an announced operation has no reducer handler to write.
+
+```ts continue
+const operation: TaskOperation<"LoadMail", typeof Subjects, Schema.String, string, MailApi> =
+  loadMail;
+
+console.log(Object.keys(operation).sort());
+// => ["actions", "cancel", "into", "rejectedInto", "resolvedInto", "run", "schema"]
+```
 
 ### `actions`
 
 Two messages, tagged `${Name}Resolved` with `{ value }` and `${Name}Rejected`
-with `{ error }`. Spread them into the feature's vocabulary.
+with `{ error }`. The operation itself goes into `define`'s `action` slot
+(`action: [actions, loadMail]` above) and contributes both tags; `actions`
+is the same pair, for reading.
 
 ```ts continue
 console.log(loadMail.actions.map((message) => message.make({ value: [], error: "" })._tag));
 // => ["LoadMailResolved", "LoadMailRejected"]
 
-const vocabulary = Action.of([Opened, Cancelled, ...loadMail.actions]);
-console.log(Object.keys(vocabulary.cases).sort());
-// => ["Cancelled", "LoadMailRejected", "LoadMailResolved", "Opened"]
+type MailboxTag = TagsOf<[typeof actions, typeof loadMail]>;
+const settled: MailboxTag = "LoadMailResolved";
 ```
 
-The `Resolved` and `Rejected` handlers write the result, so a handler can also
-derive other state from it.
+### `schema`
+
+```ts fragment
+schema: TaskSchema<Success, Failure>;
+```
+
+The schema of a state field holding this operation's `TaskValue`, built from
+the operation's own `success` and `failure`, so the field cannot drift from
+the work that fills it. `Mailbox` declares `subjects: loadMail.schema`.
+
+```ts continue
+console.log(Schema.is(loadMail.schema)(Task.resolved(["Hello"])));
+// => true
+
+const Uploads = Schema.Struct({ upload: typedLoad.schema });
+
+// @ts-expect-error the field's error is NotFound
+const stringError: typeof Uploads.Type = { upload: Task.rejected("offline") };
+```
 
 ### `into`
 
@@ -194,14 +241,8 @@ The spread site checks `key` against the feature's `State`: `key` must name a
 success and failure types. An optional field is accepted, the same as
 `Task.start`.
 
-A hand-written handler placed after the spread replaces the generated one for
-that tag, the same way a later key wins in any object literal. That handler is
-the extension point: `into` only ever writes the field, so deriving anything
-else from the result, a count, a first item, a cleared filter, is written by
-hand.
-
 ```ts continue
-const overridden = Mailbox.reducer({
+const byHand = Mailbox.reducer({
   Opened: ({ folder }, { draft }) => {
     draft.folder = folder;
     return Task.start(draft, "subjects", loadMail.run(folder));
@@ -210,35 +251,129 @@ const overridden = Mailbox.reducer({
     draft.subjects = Task.idle;
     return [draft, loadMail.cancel];
   },
-  ...loadMail.into("subjects"),
-  LoadMailResolved: (action, { draft }) => {
-    console.log(action.value.length);
-    // => 1
-    draft.subjects = Task.resolved(action.value);
+  LoadMailResolved: ({ value }, { draft }) => {
+    draft.subjects = Task.resolved(value);
+    return draft;
+  },
+  LoadMailRejected: ({ error }, { draft }) => {
+    draft.subjects = Task.rejected(error);
     return draft;
   },
 });
+```
 
-const mailboxWithCount = Mailbox.create({
-  initialState: Mailbox.initialState(() => ({ folder: "", subjects: Task.idle })),
-  reducer: overridden,
-  render: Mailbox.render(() => null),
-});
+`byHand` and `viaInto` fold the same. A handler written after the spread
+replaces the generated one for that tag, the same way a later key wins in any
+object literal; the other generated handler still stands.
 
+### `resolvedInto` and `rejectedInto`
+
+```ts fragment
+resolvedInto: <Key extends string, Snap extends { readonly state: TaskField<Key, ...> }, N>(
+  key: Key,
+  then: (value: Success["Type"], snapshot: Snap) => N,
+) => (payload: { readonly value: Success["Type"] }, snapshot: Snap) => N;
+
+rejectedInto: <Key extends string, Snap extends { readonly state: TaskField<Key, ...> }, N>(
+  key: Key,
+  then: (error: Failure["Type"], snapshot: Snap) => N,
+) => (payload: { readonly error: Failure["Type"] }, snapshot: Snap) => N;
+```
+
+The settle handler for a result that means more than the field write.
+`resolvedInto(key, then)` is a `${Name}Resolved` handler: it writes
+`Task.resolved(value)` into `snapshot.draft[key]`, then calls `then` with the
+value and the same snapshot. `then` returns the draft, alone or beside a
+command. `rejectedInto` is the same for `${Name}Rejected` with
+`Task.rejected(error)`.
+
+The entry is written in its key's position, after `...into(key)` for the
+other side, which is what gives `snapshot` and a command's `dispatch` the
+feature's own types. `mailbox` counts the subjects this way.
+
+```ts continue
 const counted = await Effect.runPromise(
-  mailboxWithCount.run([Opened.make({ folder: "inbox" })], {
+  mailbox.run([actions.Opened.make({ folder: "inbox" })], {
     props: {},
     hooks: {},
     layer: MailApiLayer,
   }),
 );
 
-console.log(counted.state.subjects);
-// => { _tag: "Resolved", value: ["Hello"] }
+console.log(counted.state);
+// => { folder: "inbox", subjects: { _tag: "Resolved", value: ["Hello"] }, count: 1 }
 ```
 
-`Task.output` has no `into`: an announced operation's actions leave through
-`on<Tag>` props and never reach a reducer.
+The follow-up may return a command beside the draft.
+
+```ts continue
+const reported: Array<string> = [];
+
+const reporting = Mailbox.create({
+  initialState: Mailbox.initialState(() => ({ folder: "", subjects: Task.idle, count: 0 })),
+  reducer: Mailbox.reducer({
+    Opened: ({ folder }, { draft }) => {
+      draft.folder = folder;
+      return Task.start(draft, "subjects", loadMail.run(folder));
+    },
+    Cancelled: (_payload, { draft }) => {
+      draft.subjects = Task.idle;
+      return [draft, loadMail.cancel];
+    },
+    ...loadMail.into("subjects"),
+    LoadMailRejected: loadMail.rejectedInto("subjects", (error, { draft }) => {
+      draft.count = 0;
+      return [draft, Command.effect(() => Effect.sync(() => reported.push(error)))];
+    }),
+  }),
+  render: Mailbox.render(() => null),
+});
+
+const offline = await Effect.runPromise(
+  reporting.run([actions.Opened.make({ folder: "inbox" })], {
+    props: {},
+    hooks: {},
+    layer: Layer.succeed(MailApi)({ list: () => Effect.fail(new Error("offline")) }),
+  }),
+);
+
+console.log(offline.state.subjects);
+// => { _tag: "Rejected", error: "offline" }
+console.log(reported);
+// => ["offline"]
+```
+
+The field is already written into the draft when `then` runs, so returning
+another state is the fold's `TypeError`, on the
+[finishing rules](/docs/reference/features#finishing-rules).
+
+```ts continue
+const spreadAfterWrite = Mailbox.create({
+  initialState: Mailbox.initialState(() => ({ folder: "", subjects: Task.idle, count: 0 })),
+  reducer: Mailbox.reducer({
+    Opened: ({ folder }, { draft }) => {
+      draft.folder = folder;
+      return Task.start(draft, "subjects", loadMail.run(folder));
+    },
+    Cancelled: (_payload, { draft }) => {
+      draft.subjects = Task.idle;
+      return [draft, loadMail.cancel];
+    },
+    ...loadMail.into("subjects"),
+    LoadMailResolved: loadMail.resolvedInto("subjects", (value, { state }) => ({
+      ...state,
+      count: value.length,
+    })),
+  }),
+  render: Mailbox.render(() => null),
+});
+
+spreadAfterWrite.reduce(
+  { _tag: "LoadMailResolved", value: ["Hello"] },
+  { state: { folder: "inbox", subjects: Task.pending, count: 0 }, props: {}, hooks: {} },
+);
+// throws TypeError: handler wrote into snapshot.draft and returned a different state
+```
 
 ### `run`
 
@@ -246,7 +381,7 @@ With `run` declared in the config, `op.run(input)` takes that input. Without
 it, `op.run(effect)` takes the effect.
 
 ```ts continue
-const unbound = Task("Upload", { success: Schema.String, onError: Task.errorMessage });
+const unbound = Task("Upload", { success: Schema.String });
 
 const unboundCommand = unbound.run(Effect.succeed("receipt_1"));
 const boundCommand = loadMail.run("inbox");
@@ -258,7 +393,6 @@ with nothing.
 ```ts continue
 const refresh = Task("Refresh", {
   success: Subjects,
-  onError: Task.errorMessage,
   run: () =>
     Effect.gen(function* () {
       const api = yield* MailApi;
@@ -285,22 +419,23 @@ the `Cancelled` handler above does.
 ## `Task.output`
 
 ```ts continue
-const announceUpload = Task.output("Announce", {
-  success: Schema.String,
-  onError: Task.errorMessage,
-});
+const announceUpload = Task.output("Announce", { success: Schema.String });
 
 const Announcer = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ note: Schema.String }),
-  action: Action.of([Opened]),
-  output: Action.of([...announceUpload.actions]),
+  action: actions.Opened,
+  output: announceUpload,
 });
+
+console.log(Object.keys(announceUpload).sort());
+// => ["actions", "cancel", "run", "schema"]
 ```
 
-The same operation with both actions on the outbound channel. They leave
-through `onAnnounceResolved` and `onAnnounceRejected` and never reach the
-reducer.
+The same operation with both actions on the outbound channel, so it goes into
+the `output` slot. They leave through `onAnnounceResolved` and
+`onAnnounceRejected` and never reach the reducer, so the operation has no
+`into`, `resolvedInto` or `rejectedInto`.
 
 ## `TaskMode`
 
@@ -315,7 +450,6 @@ last to settle wins.
 ```ts continue
 const everyLoad = Task("EveryLoad", {
   success: Subjects,
-  onError: Task.errorMessage,
   mode: "every" satisfies TaskMode,
   run: (folder: string) =>
     Effect.gen(function* () {
@@ -339,14 +473,7 @@ const takeFirst = Mailbox.reducer({
     draft.subjects = Task.idle;
     return [draft, loadMail.cancel];
   },
-  LoadMailResolved: ({ value }, { draft }) => {
-    draft.subjects = Task.resolved(value);
-    return draft;
-  },
-  LoadMailRejected: ({ error }, { draft }) => {
-    draft.subjects = Task.rejected(error);
-    return draft;
-  },
+  ...loadMail.into("subjects"),
 });
 ```
 
@@ -369,12 +496,13 @@ type TaskOnError<Failure> = (cause: Cause.Cause<unknown>) => Failure;
 Task.errorMessage: TaskOnError<string>;
 ```
 
-`onError` is mandatory. It receives the whole `Cause`, so both a typed failure
-and a defect map to `Failure`.
+`onError` receives the whole `Cause`, so both a typed failure and a defect map
+to `Failure`. `loadMail` declares no `onError`, so `Task.errorMessage` maps
+both.
 
 ```ts continue
 const failed = await Effect.runPromise(
-  mailbox.run([Opened.make({ folder: "inbox" })], {
+  mailbox.run([actions.Opened.make({ folder: "inbox" })], {
     props: {},
     hooks: {},
     layer: Layer.succeed(MailApi)({ list: () => Effect.fail(new Error("offline")) }),
@@ -385,7 +513,7 @@ console.log(failed.state.subjects);
 // => { _tag: "Rejected", error: "offline" }
 
 const died = await Effect.runPromise(
-  mailbox.run([Opened.make({ folder: "inbox" })], {
+  mailbox.run([actions.Opened.make({ folder: "inbox" })], {
     props: {},
     hooks: {},
     layer: Layer.succeed(MailApi)({ list: () => Effect.die(new Error("bug")) }),
@@ -412,7 +540,7 @@ class MailApiError extends Schema.TaggedError<MailApiError>()("MailApiError", {
 }) {}
 
 const tagged = await Effect.runPromise(
-  mailbox.run([Opened.make({ folder: "inbox" })], {
+  mailbox.run([actions.Opened.make({ folder: "inbox" })], {
     props: {},
     hooks: {},
     layer: Layer.succeed(MailApi)({
@@ -444,7 +572,7 @@ const SlowApiLayer = Layer.succeed(MailApi)({
 });
 
 const cancelledRun = await Effect.runPromise(
-  mailbox.run([Opened.make({ folder: "inbox" }), Cancelled.make({})], {
+  mailbox.run([actions.Opened.make({ folder: "inbox" }), actions.Cancelled.make()], {
     props: {},
     hooks: {},
     layer: SlowApiLayer,
@@ -475,8 +603,9 @@ Task.schema(success: Schema.Top): TaskSchema<Success, Schema.String>
 Task.schema(success: Schema.Top, failure: Schema.Top): TaskSchema<Success, Failure>
 ```
 
-The schema of a state field holding a `TaskValue`. The failure defaults to
-`Schema.String`, to pair with `Task.errorMessage`.
+The schema of a `TaskValue` field that no operation owns. The failure defaults
+to `Schema.String`, to pair with `Task.errorMessage`. A field an operation
+fills is declared with that operation's [`schema`](#schema).
 
 ```ts continue
 const State = Schema.Struct({
@@ -535,14 +664,14 @@ fold finishes it like any other write. `mailbox`'s own `Opened` handler does
 this.
 
 ```ts continue
-const openedFromDraft = mailbox.reduce(Opened.make({ folder: "inbox" }), {
-  state: { folder: "", subjects: Task.idle },
+const openedFromDraft = mailbox.reduce(actions.Opened.make({ folder: "inbox" }), {
+  state: { folder: "", subjects: Task.idle, count: 0 },
   props: {},
   hooks: {},
 });
 
 console.log(Next.state(openedFromDraft));
-// => { folder: "inbox", subjects: { _tag: "Pending" } }
+// => { folder: "inbox", subjects: { _tag: "Pending" }, count: 0 }
 ```
 
 The command may be lazy. The thunk receives the state with `Pending` already
