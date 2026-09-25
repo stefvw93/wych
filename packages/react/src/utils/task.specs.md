@@ -5,7 +5,7 @@
 The generic form of "kick off some work, then fold what it produced", split
 into the two halves it actually has:
 
-- **The operation** — `Task(name, { success, failure?, onError, mode?, run? })`
+- **The operation** — `Task(name, { success, failure?, onError?, mode?, run? })`
   declares two actions (`${Name}Resolved`, `${Name}Rejected`) and the command
   that produces them. It owns the _work_: scheduling it, interrupting it,
   turning however it ended into one of two actions. It writes nothing into
@@ -113,11 +113,12 @@ so it is a `Task.isPending` guard in the handler that has the state in hand.
 **Failure is total.** `onError: (cause: Cause<unknown>) => Failure` receives
 the whole `Cause` — typed failures and defects alike — so a genuine bug inside
 the effect lands in the field as a rejection rather than reaching the `Error`
-lifecycle. A mapping that cares can tell `Cause.hasDies` from a 404. It is
-mandatory in both forms; the `Schema.String` default failure exists to spare a
-schema, not the decision, and `Task.errorMessage` is the mapping that pairs with it,
-spelled out at the call site so a defect quietly becoming a string is something
-that was chosen. One cause it never sees: **interruption**. Take-latest and
+lifecycle. A mapping that cares can tell `Cause.hasDies` from a 404. Without
+a `failure` schema the field's error is a string and `onError` defaults to
+`Task.errorMessage`, the mapping that pairs with it; nearly every task wrote
+that pairing out by hand. Declaring a `failure`, even `Schema.String`, is
+declaring a shape the default cannot be trusted to produce, so `onError` is
+required with it. One cause it never sees: **interruption**. Take-latest and
 `cancel` end work on purpose, and "you cancelled it" is not an error the UI has
 to render — a cancelled operation dispatches nothing at all.
 
@@ -158,7 +159,9 @@ the same return.
 
 ### The operation
 
-- [x] `Task(name, …)` returns exactly `{ actions, run, cancel, into }` — no `field`, `initial`, `handlers`, `idle`, `start`, `match`, `get` or `reset`. Nothing state-shaped.
+- [x] `Task(name, …)` returns exactly `{ actions, run, cancel, into, schema }` — no `field`, `initial`, `handlers`, `idle`, `start`, `match`, `get` or `reset`. It writes no state; `schema` only describes the field.
+- [x] `op.schema` is `Task.schema(success, failure)` of the operation's own schemas, `Schema.String` failure when none was declared.
+- [x] Without `failure`, `onError` may be omitted and is `Task.errorMessage`. With `failure`, `onError` is required, `Schema.String` included.
 - [x] `into(key)` returns `{ ${Name}Resolved, ${Name}Rejected }`, in that key order; `Resolved` returns `{ ...state, [key]: Task.resolved(value) }`, `Rejected` returns `{ ...state, [key]: Task.rejected(error) }`, and folded through `feature.run` the field lands exactly as with hand-written handlers.
 - [x] An explicit handler written after `...op.into(key)` replaces the generated one for that tag; the other generated handler still stands.
 - [x] `actions` is `[${Name}Resolved { value: Success }, ${Name}Rejected { error: Failure }]`, spreadable into `Action.of([...])` beside hand-written actions.
@@ -185,6 +188,8 @@ the same return.
 - [x] `Task.schema(Schema.String)`'s `Type` is the four-case union with `string` value and `string` error; with an explicit failure schema the error takes its `Type`.
 - [x] `match` result type is the union of the arms; three arms do not compile.
 - [x] `Task.value` / `error` / `getOrElse` are typed by the field; the guards narrow `value` / `error` inside the branch.
+- [x] `op.schema`'s `Type` is the field `Task.schema` of the same schemas declares.
+- [x] `Task(name, { success })` compiles with no `onError`, bound, unbound and zero-input alike; with `failure` (any schema) and no `onError` it does not.
 - [x] `Task.output(…)`'s `run` and `cancel` are `Command<TaskAction<…>>` — the same types as the folded form; it has no `into` property.
 - [x] `...op.into(key)` spread into `Definition.reducer` compiles, the reducer stays exhaustive, and `ServicesOf` of it is `never`.
 - [x] `into("notAField")`, `into` of a non-`TaskValue` field, and `into` of a `TaskValue` field whose success type differs from the operation's do not compile at the spread site; the matching key does.

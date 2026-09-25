@@ -320,6 +320,15 @@ export interface TaskOperationBase<
    *     ClickedCancel: (_action, { state }) => [{ ...state, search: Task.idle }, search.cancel]
    */
   readonly cancel: Command<TaskAction<Name, Success["Type"], Failure["Type"]>>;
+
+  /**
+   * The schema of a state field holding this operation's `TaskValue`, built
+   * from its own `success` and `failure`, so the field cannot drift from the
+   * work that fills it:
+   *
+   *     state: Schema.Struct({ results: search.schema })
+   */
+  readonly schema: TaskSchema<Success, Failure>;
 }
 
 /**
@@ -370,12 +379,11 @@ export type TaskOperation<
 // ---------------------------------------------------------------------------
 
 /**
- * `onError` is mandatory in both forms. The `Schema.String` default exists to
- * spare you a schema, not to spare you the decision — `Task.errorMessage` is the
- * mapping that pairs with it, spelled out at the call site so a defect quietly
- * becoming `"[object Object]"` is something you chose. `Failure` defaults to
- * `Schema.String` on the type side the same way, so `failure` is optional and
- * `onError` is typed by it either way.
+ * `failure` is optional and defaults to `Schema.String`; `onError` is optional
+ * exactly when `failure` is omitted, and defaults to `Task.errorMessage`, the
+ * mapping that pairs with a string failure. Declaring a `failure` schema is
+ * declaring a shape the default cannot produce, so `onError` is required
+ * with it, even when that schema is `Schema.String`.
  *
  * `run` is optional, and declaring it is what binds the work to the operation:
  * the effect is written once, next to the schemas that describe what it yields,
@@ -388,35 +396,61 @@ export type TaskOperation<
  * candidate, so it would fall back to `never` and the operation would read as
  * unbound: typed to take an effect the runtime then ignores. The overload pins
  * `Input` to `void`, which TypeScript lets a caller omit: `op.run()`.
+ *
+ * Four overloads: that pair, each without and with a `failure`. The general
+ * form with a `failure` is last, so a call that matches nothing reports its
+ * error, which names a missing `onError`.
  */
 export interface TaskConstructor<Ch extends "internal" | "outbound"> {
+  <const Name extends Capitalize<string>, Success extends Schema.Top, R = never>(
+    name: Name,
+    schemas: {
+      readonly success: Success;
+      readonly failure?: undefined;
+      readonly onError?: TaskOnError<string>;
+      readonly mode?: TaskMode;
+      readonly run: () => Effect.Effect<Success["Type"], unknown, R>;
+    },
+  ): TaskOperation<Name, Success, Schema.String, void, R, Ch>;
+
   <
     const Name extends Capitalize<string>,
     Success extends Schema.Top,
-    Failure extends Schema.Top = Schema.String,
+    Failure extends Schema.Top,
     R = never,
   >(
     name: Name,
     schemas: {
       readonly success: Success;
-      readonly failure?: Failure;
+      readonly failure: Failure;
       readonly onError: TaskOnError<Failure["Type"]>;
       readonly mode?: TaskMode;
       readonly run: () => Effect.Effect<Success["Type"], unknown, R>;
     },
   ): TaskOperation<Name, Success, Failure, void, R, Ch>;
 
+  <const Name extends Capitalize<string>, Success extends Schema.Top, Input = never, R = never>(
+    name: Name,
+    schemas: {
+      readonly success: Success;
+      readonly failure?: undefined;
+      readonly onError?: TaskOnError<string>;
+      readonly mode?: TaskMode;
+      readonly run?: (input: Input) => Effect.Effect<Success["Type"], unknown, R>;
+    },
+  ): TaskOperation<Name, Success, Schema.String, Input, R, Ch>;
+
   <
     const Name extends Capitalize<string>,
     Success extends Schema.Top,
-    Failure extends Schema.Top = Schema.String,
+    Failure extends Schema.Top,
     Input = never,
     R = never,
   >(
     name: Name,
     schemas: {
       readonly success: Success;
-      readonly failure?: Failure;
+      readonly failure: Failure;
       readonly onError: TaskOnError<Failure["Type"]>;
       readonly mode?: TaskMode;
       readonly run?: (input: Input) => Effect.Effect<Success["Type"], unknown, R>;
@@ -530,7 +564,7 @@ const make = <Ch extends "internal" | "outbound">(ch: Ch) =>
     schemas: {
       readonly success: Schema.Top;
       readonly failure?: Schema.Top;
-      readonly onError: TaskOnError<unknown>;
+      readonly onError?: TaskOnError<unknown>;
       readonly mode?: TaskMode;
       readonly run?: (input: unknown) => Effect.Effect<unknown, unknown, unknown>;
     },
@@ -538,6 +572,7 @@ const make = <Ch extends "internal" | "outbound">(ch: Ch) =>
     const resolvedTag = `${name}Resolved` as Capitalize<string>;
     const rejectedTag = `${name}Rejected` as Capitalize<string>;
     const failure = schemas.failure ?? Schema.String;
+    const onError = schemas.onError ?? errorMessage;
     const mode = schemas.mode ?? "latest";
 
     // Namespaced, because the name is generated: an unkeyed command books under
@@ -564,7 +599,7 @@ const make = <Ch extends "internal" | "outbound">(ch: Ch) =>
           Effect.catchCause((cause) =>
             Cause.hasInterruptsOnly(cause)
               ? Effect.void
-              : dispatch((Rejected as any).make({ error: schemas.onError(cause) })),
+              : dispatch((Rejected as any).make({ error: onError(cause) })),
           ),
         ),
       );
@@ -604,6 +639,7 @@ const make = <Ch extends "internal" | "outbound">(ch: Ch) =>
       actions: [Resolved, Rejected],
       run: (input: unknown) => scheduled(effectOf(input)),
       cancel: Command.cancel(group),
+      schema: buildSchema(schemas.success, failure),
     };
     return ch === "internal" ? { ...operation, into } : operation;
   } as unknown as TaskConstructor<Ch>;

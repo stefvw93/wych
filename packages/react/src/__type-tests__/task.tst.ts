@@ -159,6 +159,41 @@ test("an explicit failure schema types both `onError` and the field", () => {
     | { readonly _tag: "Resolved"; readonly value: string }
     | { readonly _tag: "Rejected"; readonly error: { readonly status: number } }
   >();
+
+  // `op.schema` is that same field, built from the operation's own schemas.
+  expect<(typeof search.schema)["Type"]>().type.toBe<(typeof State.Type)["search"]>();
+});
+
+test("`onError` is optional without `failure`, and required with one", () => {
+  const plain = Task("Plain", { success: Schema.String });
+  expect<(typeof plain.schema)["Type"]>().type.toBe<TaskValue<string, string>>();
+
+  const bound = Task("Bound", {
+    success: Schema.String,
+    run: (id: number) => Effect.succeed(`${id}`),
+  });
+  expect(bound.run).type.toBeCallableWith(1);
+  expect(bound.run).type.not.toBeCallableWith();
+
+  // Zero-input `run` without `onError` still pins `Input` to `void`.
+  const nullary = Task("Nullary", { success: Schema.String, run: () => Effect.succeed("x") });
+  expect(nullary.run).type.toBeCallableWith();
+
+  // A declared `failure` is a shape the default mapping cannot produce.
+  expect(Task).type.not.toBeCallableWith("Typed", {
+    success: Schema.String,
+    failure: Schema.Struct({ status: Schema.Number }),
+  });
+  // Even `Schema.String`, when declared: declaring it is the decision.
+  expect(Task).type.not.toBeCallableWith("Typed", {
+    success: Schema.String,
+    failure: Schema.String,
+  });
+  expect(Task).type.not.toBeCallableWith("Typed", {
+    success: Schema.String,
+    failure: Schema.String,
+    run: () => Effect.succeed("x"),
+  });
 });
 
 // ---------------------------------------------------------------------------

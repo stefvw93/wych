@@ -72,7 +72,7 @@ const run = (
 const clicks = (n: number) => Array.from({ length: n }, () => Clicked.make({}));
 
 describe("Task", () => {
-  it("declares the two tags from the name, and nothing state-shaped", () => {
+  it("declares the two tags from the name, the command, and the field schema, and writes no state", () => {
     const search = Task("WallhavenSearch", { success: Schema.String, onError: Task.errorMessage });
 
     expect(search.actions.map((a) => (a.make as any)({ value: "x", error: "x" })._tag)).toEqual([
@@ -80,7 +80,7 @@ describe("Task", () => {
       "WallhavenSearchRejected",
     ]);
 
-    expect(Object.keys(search).sort()).toEqual(["actions", "cancel", "into", "run"]);
+    expect(Object.keys(search).sort()).toEqual(["actions", "cancel", "into", "run", "schema"]);
   });
 
   it("into(key) folds both actions into the field", async () => {
@@ -220,6 +220,50 @@ describe("Task", () => {
     expect(Task.pending).toEqual({ _tag: "Pending" });
     expect(Task.resolved("v")).toEqual({ _tag: "Resolved", value: "v" });
     expect(Task.rejected("e")).toEqual({ _tag: "Rejected", error: "e" });
+  });
+
+  it("without `failure`, an omitted `onError` is Task.errorMessage", async () => {
+    const quiet = Task("Quiet", { success: Schema.String, run: () => load });
+    const F = define({
+      props: Props,
+      state: Schema.Struct({ quiet: quiet.schema }),
+      action: Action.of([Clicked, ...quiet.actions]),
+    });
+    const feature = F.create({
+      initialState: () => ({ quiet: Task.idle }),
+      reducer: {
+        Clicked: (_a, { state }) => Task.start(state, "quiet", quiet.run()),
+        ...quiet.into("quiet"),
+      },
+      render: () => null,
+    });
+    const out = await run(feature, Effect.fail(new Error("boom")));
+    expect(out.state.quiet).toEqual({ _tag: "Rejected", error: "boom" });
+  });
+
+  it("op.schema is the field schema of the operation's own success and failure", () => {
+    const search = Task("Search", { success: Schema.Number });
+    expect(Object.keys(search.schema.cases).sort()).toEqual([
+      "Idle",
+      "Pending",
+      "Rejected",
+      "Resolved",
+    ]);
+    expect(search.schema.cases.Resolved.make({ value: 1 })).toEqual({ _tag: "Resolved", value: 1 });
+    expect(search.schema.cases.Rejected.make({ error: "e" })).toEqual({
+      _tag: "Rejected",
+      error: "e",
+    });
+
+    const typed = Task("Typed", {
+      success: Schema.Number,
+      failure: Schema.Struct({ code: Schema.Number }),
+      onError: () => ({ code: 500 }),
+    });
+    expect(typed.schema.cases.Rejected.make({ error: { code: 1 } })).toEqual({
+      _tag: "Rejected",
+      error: { code: 1 },
+    });
   });
 
   it("schema carries the four cases, with Schema.String as the default failure", () => {
@@ -377,7 +421,7 @@ describe("Task.output", () => {
 
   it("has no into: an announced operation has no reducer handlers", () => {
     expect("into" in search).toBe(false);
-    expect(Object.keys(search).sort()).toEqual(["actions", "cancel", "run"]);
+    expect(Object.keys(search).sort()).toEqual(["actions", "cancel", "run", "schema"]);
   });
 
   it("announces the result instead of folding it", async () => {
