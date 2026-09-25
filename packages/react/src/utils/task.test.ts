@@ -1,6 +1,7 @@
-import { Context, Effect, Layer, Option, Schema } from "effect";
-import { describe, expect, it } from "vite-plus/test";
-import { Action, Children, Command, define } from "../lib";
+import { Context, Effect, Equivalence, Layer, ManagedRuntime, Option, Schema } from "effect";
+import { describe, expect, it, vi } from "vite-plus/test";
+import { probe } from "../__fixtures__/probe";
+import { Action, Children, Command, createFeatureStore, define } from "../lib";
 import { Task, type TaskCases, type TaskValue } from "./task";
 
 class Api extends Context.Service<Api, { readonly load: Effect.Effect<string, Error> }>()("Api") {}
@@ -16,12 +17,10 @@ const layerOf = (value: Effect.Effect<string, Error>) => Layer.succeed(Api)({ lo
 /**
  * The manual path: the operation in the `actions` slot, a field under a name
  * the feature chose, a `Pending` write on the fold that issues the command,
- * and two handlers that say where the result lands. Take-first here is a
- * guard the handler writes; the `tasks` slot has `mode: "first"` for it.
+ * and two handlers that say where the result lands.
  */
 const folded = (options?: {
-  readonly mode?: "every";
-  readonly takeFirst?: boolean;
+  readonly mode?: "every" | "first";
   /** Spread `search.into("search")` instead of writing the two handlers. */
   readonly into?: boolean;
 }) => {
@@ -40,10 +39,7 @@ const folded = (options?: {
     feature: F.create({
       initialState: F.initialState(() => ({ colorValue: "#000", search: Task.idle })),
       reducer: F.reducer({
-        Clicked: (_a, { state }) =>
-          options?.takeFirst && Task.isPending(state.search)
-            ? state
-            : [{ ...state, search: Task.pending }, search.run(load)],
+        Clicked: (_a, { state }) => [{ ...state, search: Task.pending }, search.run(load)],
         Cancelled: (_a, { state }) => [{ ...state, search: Task.idle }, search.cancel],
         ...(options?.into
           ? search.into("search")
@@ -201,13 +197,50 @@ describe("Task", () => {
     expect(out.emitted).toHaveLength(2);
   });
 
-  it("on the manual path, take-first is an `isPending` guard that drops the second run", async () => {
+  it("first: on the manual path, a run while one is in flight is dropped", async () => {
     const out = await run(
-      folded({ takeFirst: true }).feature,
+      folded({ mode: "first" }).feature,
       Effect.as(Effect.sleep(50), "first"),
       clicks(2),
     );
     expect(out.emitted).toHaveLength(1);
+    expect(out.state.search).toEqual({ _tag: "Resolved", value: "first" });
+  });
+
+  it("first: a run interrupted without settling does not block the next", async () => {
+    const search = Task("Search", { success: Schema.String, mode: "first", run: () => load });
+    const State = Schema.Struct({ search: search.schema });
+    const F = define({ props: Props, state: State, actions: [Clicked, Cancelled, search] });
+    // `Cancelled` interrupts and leaves the field `Pending`: nothing in the
+    // field says the run is gone, so only the fiber book can.
+    const feature = F.create({
+      initialState: () => ({ search: Task.idle }),
+      reducer: {
+        Clicked: (_a, { draft }) => Task.start(draft, "search", search.run()),
+        Cancelled: (_a, { state }) => [state, search.cancel],
+        ...search.into("search"),
+      },
+      render: () => null,
+    });
+    const out = await run(feature, Effect.as(Effect.sleep(20), "again"), [
+      Clicked.make(),
+      Cancelled.make(),
+      Clicked.make(),
+    ]);
+    expect(out.emitted).toHaveLength(1);
+    expect(out.state.search).toEqual({ _tag: "Resolved", value: "again" });
+  });
+
+  it("first: holds for a `Task.output` operation", async () => {
+    const saved = Task.output("Saved", { success: Schema.String, mode: "first", run: () => load });
+    const F = define({ props: Props, state: Schema.Struct({}), actions: Clicked, outputs: saved });
+    const feature = F.create({
+      initialState: () => ({}),
+      reducer: { Clicked: (_a, { state }) => [state, saved.run()] },
+      render: () => null,
+    });
+    const out = await run(feature, Effect.as(Effect.sleep(20), "once"), clicks(2));
+    expect(out.outputs).toEqual([saved.Resolved.make({ value: "once" })]);
   });
 
   it("cancel interrupts the work, and the handler clears the field", async () => {
@@ -416,6 +449,21 @@ describe("resolvedInto / rejectedInto", () => {
     });
     await run(feature, Effect.succeed("r1"));
     expect(seen).toEqual([{ _tag: "Resolved", value: "r1" }]);
+  });
+
+  it("returning `snapshot.state` finishes as the draft, with the field written", async () => {
+    const feature = build({
+      resolved: (value, { state }) => [state, Command.output(Saved, { revision: value })],
+      rejected: (_e, { state }) => state,
+    });
+    const resolved = await run(feature, Effect.succeed("r1"));
+    expect(resolved.state.save).toEqual({ _tag: "Resolved", value: "r1" });
+    expect(resolved.outputs).toEqual([{ _tag: "Saved", revision: "r1" }]);
+    expect(resolved.defects).toEqual([]);
+
+    const rejected = await run(feature, Effect.fail(new Error("boom")));
+    expect(rejected.state.save).toEqual({ _tag: "Rejected", error: "boom" });
+    expect(rejected.defects).toEqual([]);
   });
 
   it("returning another state than the draft is the fold's TypeError", async () => {
@@ -773,12 +821,18 @@ describe("the `tasks` slot", () => {
     expect(out.state.loose).toEqual(Task.resolved("loose"));
   });
 
-  it('under `mode: "first"`, start while `Pending` writes nothing and issues `Command.none`', async () => {
+  it('under `mode: "first"`, a start while a run is in flight is dropped where it is scheduled', async () => {
     const { feature } = editor({ mode: "first" });
     const pending = snapshotOf({ save: Task.pending });
     const next = feature.reduce(actions.SaveClicked.make(), pending);
-    expect(next).toEqual([pending.state, Command.none]);
+    // The fold cannot see the fiber book, so it issues the command and
+    // leaves an already-`Pending` field untouched.
     expect(Array.isArray(next) && next[0]).toBe(pending.state);
+    expect(Array.isArray(next) && next[1]).toMatchObject({
+      _tag: "Keyed",
+      key: "Task/Save",
+      first: true,
+    });
 
     const out = await runEditor(feature, Effect.as(Effect.sleep(20), "first"), [
       actions.SaveClicked.make(),
@@ -797,7 +851,7 @@ describe("the `tasks` slot", () => {
     expect(Array.isArray(next) && next[0].save).toEqual(Task.pending);
   });
 
-  it('`op.run` under `mode: "first"` is the raw command: it issues regardless, interrupting nothing', async () => {
+  it('`op.run` under `mode: "first"` drops a run while one is in flight', async () => {
     const saveNote = saveOf("first");
     const F = define({ props, state, actions: [actions, saveNote] });
     const feature = F.create({
@@ -817,7 +871,73 @@ describe("the `tasks` slot", () => {
         layer: layerOf(Effect.as(Effect.sleep(20), "raw")),
       }),
     );
-    expect(out.emitted).toHaveLength(2);
+    expect(out.emitted).toHaveLength(1);
+  });
+
+  it('under `mode: "first"`, a run cancelled without settling does not block the next start', async () => {
+    const saveNote = saveOf("first");
+    const F = define({ props, state, tasks: { save: saveNote }, actions });
+    // `Cancelled` returns the raw `cancel`, so the field stays `Pending`.
+    const feature = F.create({
+      initialState: () => ({ text: "", dirty: false }),
+      reducer: {
+        SaveClicked: (_p, { tasks }) => tasks.save.start({ id: "a", text: "" }),
+        Cancelled: (_p, { state }) => [state, saveNote.cancel],
+        Typed: (_p, { state }) => state,
+      },
+      render: () => null,
+    });
+    const out = await runEditor(feature, Effect.as(Effect.sleep(20), "again"), [
+      actions.SaveClicked.make(),
+      actions.Cancelled.make(),
+      actions.SaveClicked.make(),
+    ]);
+    expect(out.state.save).toEqual(Task.resolved("again:a:"));
+  });
+
+  it('under `mode: "first"`, a start from `Mounted` runs again after a remount', async () => {
+    // The StrictMode path: `start` folds `Mounted` again over the state the
+    // first mount left, still `Pending`. The first run belongs to the old
+    // mount, which drains it or, past its deadline, interrupts it unsettled;
+    // either way the new mount has nothing in flight, so it books its own.
+    const loadData = Task("Load", {
+      success: Schema.String,
+      mode: "first",
+      run: () => Effect.as(Effect.sleep(100), "loaded"),
+    });
+    const feature = define({
+      props: Schema.Struct({}),
+      state: Schema.Struct({}),
+      tasks: { data: loadData },
+      actions: [],
+    }).create({
+      initialState: () => ({}),
+      reducer: { Mounted: (_p, { tasks }) => tasks.data.start() },
+      render: () => null,
+    });
+    const store = createFeatureStore({
+      feature,
+      props: {},
+      equivalence: {
+        props: Equivalence.strictEqual(),
+        hooks: Equivalence.Record(Equivalence.strictEqual<unknown>()),
+      },
+      runtime: ManagedRuntime.make(Layer.empty),
+      layer: undefined,
+      emit: () => {},
+      defect: (error) => {
+        throw error;
+      },
+    });
+
+    store.start();
+    expect(store.getSnapshot().data).toEqual(Task.pending);
+    store.stop();
+    store.start();
+    await vi.waitFor(() => expect(probe(store).fibers).toBe(1));
+    await vi.waitFor(() => expect(store.getSnapshot().data).toEqual(Task.resolved("loaded")));
+    store.stop();
+    await vi.waitFor(() => expect(probe(store).fibers).toBe(0));
   });
 
   it("keeps the snapshot's own keys to `state`, `props` and `hooks`", () => {

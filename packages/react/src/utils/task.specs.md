@@ -130,8 +130,8 @@ state.
   `[draft, op.run(input)]`. Its command carries the operation's `R`, so
   `ServicesOf` reads it off the handler's return. An operation declared
   without `run` has a `start` that takes the effect.
-- Under `mode: "first"`, `start` while the field is `Pending` writes nothing
-  and returns `[draft, Command.none]`.
+- `start` leaves a field that is already `Pending` untouched, so a start
+  that writes nothing else finishes to `snapshot.state` itself.
 - `cancel()` writes `Idle` and returns `[draft, op.cancel]`.
 - A handler may write other draft fields before or after calling either;
   the handle returns the same draft.
@@ -215,11 +215,13 @@ the state with `Pending` already written.
 "latest"` (default — interrupt the running fiber, run the new one), `"every"`
 (run both; last to settle wins, which is usually a bug — declare it
 deliberately) or `"first"` (keep the running one, drop the new start).
-Dropping a start means reading whether the field is `Pending`, so `"first"`
-is enforced by the slot handle, which knows the field. `op.run` is the raw
-command and issues regardless of the mode; under `"first"` it books without
-interrupting, so it never ends the run in flight. On the manual path,
-take-first is a `Task.isPending` guard in the handler.
+`"first"` is decided where the work is scheduled, not in the fold: the
+command is a `Keyed` node flagged `first`, and the interpreter skips it while
+a fiber is booked under the operation's group on that mount. It therefore
+holds for every path (the slot's `start`, `op.run`, `Task.start`,
+`Task.output`), and a run that ended without settling (a raw `cancel`, an
+unmount, a teardown past its deadline) never blocks the next start. The
+field cannot tell that a run is gone; the fiber book can.
 
 **Failure is total.** `onError: (cause: Cause<unknown>) => Failure` receives
 the whole `Cause` — typed failures and defects alike — so a genuine bug inside
@@ -276,7 +278,7 @@ clears the field in the same return. The slot's `cancel()` is that return.
 - [x] Without `failure`, `onError` may be omitted and is `Task.errorMessage`. With `failure`, `onError` is required, `Schema.String` included.
 - [x] `into(key)` returns `{ ${Name}Resolved, ${Name}Rejected }`, in that key order; `Resolved` returns `{ ...state, [key]: Task.resolved(value) }`, `Rejected` returns `{ ...state, [key]: Task.rejected(error) }`, and folded through `feature.run` the field lands exactly as with hand-written handlers.
 - [x] An explicit handler written after `...op.into(key)` replaces the generated one for that tag; the other generated handler still stands.
-- [x] `op.resolvedInto(key, then)` is a `${Name}Resolved` handler: it writes `Task.resolved(value)` into `snapshot.draft[key]`, then returns `then(value, snapshot)` with the same snapshot, so what `then` writes lands beside the field and a returned draft is the one finished state. `op.rejectedInto` is the same for `Rejected`. A returned state other than the draft is the fold's draft `TypeError`; a lazy command beside the draft sees the finished state. An announced operation has neither.
+- [x] `op.resolvedInto(key, then)` is a `${Name}Resolved` handler: it writes `Task.resolved(value)` into `snapshot.draft[key]`, then returns `then(value, snapshot)` with the same snapshot, so what `then` writes lands beside the field and a returned draft is the one finished state. `op.rejectedInto` is the same for `Rejected`. `snapshot.state` returned alone or as a tuple's first element becomes the draft, so it finishes with the field written; any other returned state is the fold's draft `TypeError`; a lazy command beside the draft sees the finished state. An announced operation has neither.
 - [x] `actions` is `[${Name}Resolved { value: Success }, ${Name}Rejected { error: Failure }]`. The operation itself goes into `define`'s slot (`actions: [Clicked, search]`), and so does `...op.actions` inside an array.
 - [x] A lower-case `name` is a compile error, on the same terms as an action tag.
 - [x] The effect's success dispatches `${Name}Resolved` with the value, and lands in whatever field the handler writes.
@@ -284,8 +286,9 @@ clears the field in the same return. The slot's `cancel()` is that return.
 - [x] `Task.errorMessage` is the `Error`'s message, or its `name` when the message is empty — the tag, for a `Schema.TaggedError` declared without a `message` field. It does not read `cause`: which layer's text the UI wants is the app's decision, made in `onError`. A non-`Error` is `String(error)`.
 - [x] Interruption dispatches nothing: a second `run` under `"latest"` interrupts the first and yields exactly one `Resolved`, carrying the second's value.
 - [x] Under `"every"` both runs go to completion and both emit.
-- [x] On the manual path, take-first is a handler guard: `Task.isPending(state.x) ? state : Task.start(…)` drops the second run.
-- [x] Under `"first"`, `op.run` is the raw command: two runs both complete, neither interrupted.
+- [x] Under `"first"`, a second run while the first is in flight is dropped where it is scheduled: on the manual path, through `op.run`, and for a `Task.output` operation, each emits one settle.
+- [x] Under `"first"`, a run interrupted without settling (the raw `op.cancel`, leaving the field `Pending`) does not block the next start, on the manual path and in the slot.
+- [x] Under `"first"`, a start from `Mounted` after `stop` / `start` (the StrictMode remount) books a run on the new mount and settles the field.
 - [x] `cancel` is `Command.cancel("Task/${Name}")` — `_tag: "Cancel"`, a bare command — and interrupts the in-flight work without emitting.
 - [x] `Pending` is written synchronously on the fold that issues the command: `feature.reduce(Clicked, snapshot)` already shows `Pending` in the returned state.
 - [x] With `run` declared, the operation's `run` takes that input and only that input; the effect declared receives it.
@@ -302,7 +305,7 @@ clears the field in the same return. The slot's `cancel()` is that return.
 - [x] `tasks.<key>.cancel()` returns `[state with Idle, op.cancel]`; through `run`, a start then a cancel emits nothing and leaves `Idle`.
 - [x] A handler that writes other draft fields before and after a handle call returns one state holding all the writes.
 - [x] An unbound operation's `start` takes the effect.
-- [x] Under `mode: "first"`, `start` while the field is `Pending` returns `[snapshot.state, Command.none]`, by identity; through `run`, two starts emit one settle. A start after the settle runs again.
+- [x] Under `mode: "first"`, `start` while the field is `Pending` returns `snapshot.state` by identity beside the operation's `Keyed` command flagged `first`; through `run`, two starts emit one settle. A start after the settle runs again.
 - [x] A reducer snapshot's own keys stay `state`, `props`, `hooks`; a feature without `tasks` hands `snapshot.tasks` as `{}`.
 - [x] `define` throws a `TypeError` for a task key that is a state field, a task tag declared in `actions` or `outputs`, one operation under two keys, two operations of one name, one operation in both `tasks` and `actions`, a `Task.output` operation, and a value that is not a `Task` operation.
 - [x] In a browser, a click that starts a slot task paints `Pending`, a cancel paints `Idle`, and the settle paints `Resolved` (`lib.browser.test.tsx`).
@@ -337,7 +340,7 @@ clears the field in the same return. The slot's `cancel()` is that return.
 ## Technical Requirements
 
 - Depends on `lib.ts` only: `Action` / `Action.output` for the two messages, `Command.effect` / `keyed` / `restart` / `cancel` for the work, `LazyCommand` for `start`'s thunk form, `Message` for the action types, and `bindTask` / `TaskBinding` / `TaskCarrier` for the slot.
-- `lib.ts` does not import `task.ts`. Each operation carries a `TaskBinding` under a `lib.ts` symbol, attached by `bindTask` as `carryMembers` attaches the members: the two tags, `run`, `cancel`, whether the mode is `"first"`, `schema`, `idle` / `pending`, and the `resolved` / `rejected` constructors. Its type parameters carry the field type, the success type, the two actions, the input, `R` and the channel, which is everything `TaskFields`, `TaskActionsOf` and `TaskHandle` read.
+- `lib.ts` does not import `task.ts`. Each operation carries a `TaskBinding` under a `lib.ts` symbol, attached by `bindTask` as `carryMembers` attaches the members: the two tags, `run`, `cancel`, `idle` / `pending`, and the `resolved` / `rejected` constructors. Its type parameters carry the field type, the success type, the two actions, the input, `R` and the channel, which is everything `TaskFields`, `TaskActionsOf` and `TaskHandle` read.
 - `AnyTaskOperation` has `never` in the input position: a bound operation's `run` is `(input: I) => …`, and only a function over `never` is a supertype of all of them. The `infer` patterns over a binding use `never` there for the same reason.
 - `TaskActionsOf` reads the actions off the binding, not through `MembersOf`: `MemberOf` recurses, and over the generic `TS[keyof TS]` inside `define`'s parameter it does not bottom out.
 - An unbound `start` defaults `E` and `R2` to `never`, so an effect whose `R` is `never` infers `never` rather than falling back to `unknown`.
@@ -345,7 +348,7 @@ clears the field in the same return. The slot's `cancel()` is that return.
 - `TaskMessage` intersects `Message<…>` with `{ Type: { _tag: Tag } }` for the same reason: a slot reads each member's `Type` for its `_tag`, and the intersection hands TypeScript the proof it cannot compute.
 - `` `${Name}Resolved` `` is `` `${string}Resolved` ``, which does not satisfy `Capitalize<string>`; `ResolvedTag<Name>` re-applies `Capitalize` to the joined string.
 - The work is `effect.pipe(flatMap(dispatch Resolved), catchCause(hasInterruptsOnly ? void : dispatch Rejected(onError(cause))))`, so the command's error channel is `never` — which `Command.effect` requires anyway — and interruption is the one cause that dispatches nothing.
-- `"latest"` is `Command.restart(group, work)`; `"every"` and `"first"` are `Command.keyed(group, work)`. All book under the group, so `cancel` addresses them all; only `latest` also interrupts what is running.
+- `"latest"` is `Command.restart(group, work)`, `"every"` is `Command.keyed(group, work)`, and `"first"` is `keyedFirst(group, work)`: a `Keyed` node with `first: true`, which the interpreter skips while its address has a booked fiber. All book under the group, so `cancel` addresses them all; only `latest` also interrupts what is running.
 - Internally the command is built as `Command.effect<any, unknown>`; the operation's declared `run` type restores `R` — from the bound effect's declaration, or from the effect passed to an unbound `run`.
 - `Task.errorMessage` is `Cause.squash` then `error instanceof Error ? error.message : String(error)`.
 - The guards and partial reads take `TaskValue<A, unknown>` / `TaskValue<unknown, E>`, which every concrete field is assignable to under readonly covariance.
@@ -357,8 +360,9 @@ clears the field in the same return. The slot's `cancel()` is that return.
 - A user `Command.keyed("Task/Search", …)` books under the operation's group deliberately, and the operation's `cancel` reaches it. Same rule.
 - `"every"` has no ordering: two runs that resolve out of order write the field in arrival order, and the last write wins. That is what "declare it deliberately" means.
 - `op.cancel` leaves `Pending` in place; on the manual path the handler that returns it clears the field in the same return, or the button stays disabled. The slot's `cancel()` clears it.
-- `mode: "first"` reads the field through the draft, so a handler that wrote `Pending` itself before calling `start` gets the no-op.
-- A cancel under `"first"` writes `Idle`, so the next `start` runs.
+- `mode: "first"` reads the fiber book, not the field: a handler that wrote `Pending` itself before calling `start` still starts the work when nothing is in flight.
+- Under `"first"`, a fiber interrupted but still winding down in an uninterruptible region is booked until it exits, so a start in that window is dropped.
+- Under `"first"`, a remount books on a new mount with an empty book, so the new mount starts its own run while the old one drains or is interrupted. Both may settle the field; the later settle wins.
 - A settle for a task whose field the handler of another action has since overwritten still writes the field: the fold does not compare the settle against what the field holds.
 - The default `Task.errorMessage` turns a defect into its message string, indistinguishable in the field from a typed failure. Pass a failure schema and an `onError` that reads `Cause.hasDies` when the UI should tell them apart.
 - `Task.start` through a raw tuple (`[state, thunk]` written by hand, without `start`) types the thunk's parameter as the feature's `State`, not the narrowed literal — the contextual type is the handler's return. `Task.start` infers from its first argument and does narrow. Pinned in `core.tst.ts`.

@@ -189,13 +189,19 @@ already express is left to Effect.
 type Command<A, R> =
   | { _tag: "None" }
   | { _tag: "Effect"; effect: (dispatch: Dispatcher<A>) => Effect<unknown, never, R> }
-  | { _tag: "Keyed"; key: string; command: Command<A, R> }
+  // `first` is set only by a `Task` declared `mode: "first"`: the node is
+  // skipped while a fiber is booked at its address.
+  | { _tag: "Keyed"; key: string; command: Command<A, R>; first?: true }
   | { _tag: "Batch"; commands: ReadonlyArray<Command<A, R>> }
   | { _tag: "Cancel"; target: Group };
 
 // `Dispatcher`, not `Dispatch`: the latter is the React-facing dispatch handed
 // to `render`, which returns void because it is called from an event handler.
-type Dispatcher<A> = (action: A) => Effect<void>;
+// A message schema and its payload, or a built message.
+interface Dispatcher<A> {
+  <M extends MessageOf<A>>(message: M, ...payload: PayloadArgs<M>): Effect<void>;
+  (action: A): Effect<void>;
+}
 type Group = string;
 ```
 
@@ -367,9 +373,10 @@ clash rules. What it changes here:
 
 - **`define`.** `State` is `StateOf<StateSchema> & TaskFields<TS>`
   (simplified; the schema's own type when the slot is empty), and the action
-  union gains `TaskActionsOf<TS>`. The runtime extends the state schema with
-  each `op.schema`, checks the slot, and builds a settle map from each
-  operation's two tags to its key.
+  union gains `TaskActionsOf<TS>`. The runtime checks the slot and builds a
+  settle map from each operation's two tags to its key. Nothing validates
+  state against a schema, the task fields included: `op.schema` types the
+  field.
 - **`FeatureDefinition` / `Reducer` / `LifecycleHandlers`** take a trailing
   `TS = {}`. The task tags are optional reducer keys; `Exhaustive` allows
   them because they are in `A`. `initialState` returns
@@ -462,7 +469,7 @@ landed with every box checked again.
 
 - [x] `define({ tasks })` adds one `TaskValue` field per key and fills it with `Task.idle` under the feature's initial state, which is spread on top.
 - [x] `reduce` writes a settle tag's field before the handler runs, and with no handler returns the written state; a handler returning `snapshot.state` returns the field write alone.
-- [x] `snapshot.tasks.<key>.start` / `.cancel()` write `Pending` / `Idle` into the draft and return `[draft, command]`; under `mode: "first"` a start while `Pending` returns `[snapshot.state, Command.none]`.
+- [x] `snapshot.tasks.<key>.start` / `.cancel()` write `Pending` / `Idle` into the draft and return `[draft, command]`; a start while the field is already `Pending` leaves it untouched. `mode: "first"` is not decided here: the command is a `Keyed` node flagged `first`, skipped by the interpreter while its address has a booked fiber.
 - [x] `snapshot.tasks` is on the prototype: the snapshot's own keys stay `state`, `props`, `hooks`, and a feature without a slot hands `{}`.
 - [x] `define` throws a `TypeError` for each clash rule in `task.specs.md`.
 - [x] `reduce` drafts with its optional third argument, `run` with the `Drafter` in `options.layer`, the store with the `Drafter` in the root runtime; each defaults to `mutativeDrafter`.

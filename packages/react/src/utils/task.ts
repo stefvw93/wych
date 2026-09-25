@@ -5,6 +5,7 @@ import {
   bindTask,
   carryMembers,
   Command,
+  keyedFirst,
   type LazyCommand,
   type MemberCarrier,
   type Message,
@@ -222,11 +223,11 @@ export type TaskMode =
   /** Run both. Last to settle wins, which is usually a bug — declare it deliberately. */
   | "every"
   /**
-   * Keep the running one, drop the new start. Dropping a start means reading
-   * whether the field is `Pending`, so it is the slot handle that enforces
-   * it: `snapshot.tasks.<key>.start` does nothing while its field is
-   * `Pending`. `op.run` itself is the raw command and issues regardless; it
-   * books without interrupting, so it never ends the run in flight.
+   * Keep the running one, drop the new start. Decided where the work is
+   * scheduled, by whether a run of this operation is in flight on the mount,
+   * so it holds for every path: the slot's `start`, `op.run`, `Task.start`
+   * and `Task.output`. A run that was interrupted without settling (a
+   * `cancel`, an unmount) is not in flight, so the next start runs.
    */
   | "first";
 
@@ -344,10 +345,9 @@ export interface TaskOperationBase<
    *     ClickedSearch: (_action, { state }) =>
    *       [{ ...state, search: Task.pending }, search.run(state.searchParams)]
    *
-   * This is the raw command: it writes nothing, and under `mode: "first"`
-   * it issues regardless. For a task in `define`'s `tasks` slot,
-   * `snapshot.tasks.<key>.start` is the call that writes `Pending` and
-   * applies the mode.
+   * This is the raw command: it writes nothing. For a task in `define`'s
+   * `tasks` slot, `snapshot.tasks.<key>.start` is the call that writes
+   * `Pending` beside it.
    *
    * Returned from the *triggering* action's handler, which is what keeps the
    * effect's `R` visible to `ServicesOf` — the services a command needs are
@@ -427,8 +427,8 @@ export interface TaskInto<
    *
    * Written as the handler, in its key's position, which is what gives
    * `snapshot` and a command's `dispatch` the feature's own types. Return the
-   * draft: the field is already written into it, so returning another state
-   * is the fold's `TypeError`.
+   * draft or `snapshot.state`: either finishes as the draft, with the field
+   * written. Any other state is the fold's `TypeError`.
    */
   readonly resolvedInto: <
     Key extends string,
@@ -696,14 +696,16 @@ const make = <Ch extends "internal" | "outbound">(ch: Ch) =>
         ),
       );
 
-    // Both modes book under the operation's group, so `cancel` addresses them
-    // all — the book is one `Set` of fibers per name. Only `latest` also
-    // interrupts what is already running.
-    // `first` books without interrupting: the slot handle drops a start
-    // while the field is `Pending`, and a raw `run` past it must not end the
-    // run in flight either.
+    // Every mode books under the operation's group, so `cancel` addresses
+    // them all — the book is one `Set` of fibers per name. `latest` also
+    // interrupts what is already running; `first` is dropped while anything
+    // is.
     const scheduled = (effect: Effect.Effect<unknown, unknown, unknown>) =>
-      mode === "latest" ? Command.restart(group, work(effect)) : Command.keyed(group, work(effect));
+      mode === "latest"
+        ? Command.restart(group, work(effect))
+        : mode === "first"
+          ? keyedFirst(group, work(effect))
+          : Command.keyed(group, work(effect));
 
     // Bound or not, `run` ends up here: with the config's `run` declared the
     // argument is its input, without it the argument is the effect itself.
@@ -731,13 +733,21 @@ const make = <Ch extends "internal" | "outbound">(ch: Ch) =>
     });
 
     // Written into the draft, so what `then` writes lands beside it and a
-    // returned draft is the one finished state.
+    // returned draft is the one finished state. `snapshot.state` returned in
+    // its place means "nothing more than the field", so it becomes the draft
+    // rather than a second next state.
     const settleInto =
       (field: "value" | "error", write: (x: unknown) => unknown) =>
       (key: string, then: (x: unknown, snapshot: unknown) => unknown) =>
-      (payload: Record<string, unknown>, snapshot: { readonly draft: Record<string, unknown> }) => {
+      (
+        payload: Record<string, unknown>,
+        snapshot: { readonly state: unknown; readonly draft: Record<string, unknown> },
+      ) => {
         snapshot.draft[key] = write(payload[field]);
-        return then(payload[field], snapshot);
+        const next = then(payload[field], snapshot);
+        if (next === snapshot.state) return snapshot.draft;
+        if (Array.isArray(next) && next[0] === snapshot.state) return [snapshot.draft, next[1]];
+        return next;
       };
 
     const run = (input: unknown) => scheduled(effectOf(input));
@@ -752,8 +762,6 @@ const make = <Ch extends "internal" | "outbound">(ch: Ch) =>
         channel: ch,
         resolvedTag,
         rejectedTag,
-        first: mode === "first",
-        schema,
         run,
         cancel,
         idle,

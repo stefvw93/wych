@@ -189,7 +189,13 @@ export type CommandSummary =
   | { readonly _tag: "None" }
   /** The leaf. The effect itself is gone; only the fact of it remains. */
   | { readonly _tag: "Effect" }
-  | { readonly _tag: "Keyed"; readonly key: string; readonly command: CommandSummary }
+  | {
+      readonly _tag: "Keyed";
+      readonly key: string;
+      readonly command: CommandSummary;
+      /** Take-first: skipped while a fiber is booked at the address. */
+      readonly first?: true;
+    }
   | { readonly _tag: "Batch"; readonly commands: ReadonlyArray<CommandSummary> }
   | { readonly _tag: "Cancel"; readonly target: Group };
 
@@ -216,7 +222,14 @@ export const summarizeCommand = (command: Command<any, any>): CommandSummary => 
     case "Effect":
       return { _tag: "Effect" };
     case "Keyed":
-      return { _tag: "Keyed", key: command.key, command: summarizeCommand(command.command) };
+      return command.first === true
+        ? {
+            _tag: "Keyed",
+            key: command.key,
+            command: summarizeCommand(command.command),
+            first: true,
+          }
+        : { _tag: "Keyed", key: command.key, command: summarizeCommand(command.command) };
     case "Batch":
       return { _tag: "Batch", commands: command.commands.map(summarizeCommand) };
     case "Cancel":
@@ -688,7 +701,7 @@ const formatCommand = (summary: CommandSummary): string => {
     case "Effect":
       return "effect";
     case "Keyed":
-      return `keyed(${summary.key}, ${formatCommand(summary.command)})`;
+      return `${summary.first === true ? "keyedFirst" : "keyed"}(${summary.key}, ${formatCommand(summary.command)})`;
     case "Batch":
       return `batch(${summary.commands.map(formatCommand).join(", ")})`;
     case "Cancel":

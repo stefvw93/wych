@@ -423,10 +423,19 @@ const commandSummary: CommandSummary = {
   ],
 };
 
+const firstSummary: CommandSummary = {
+  _tag: "Keyed",
+  key: "Task/Save",
+  command: { _tag: "Effect" },
+  first: true,
+};
+
 const defectSummary: DefectSummary = { name: "Error", message: "network down", stack: "..." };
 ```
 
 `CommandSummary` has the shape of the command with the leaf's callback removed.
+A `Keyed` node from a task declared `mode: "first"` carries `first: true`,
+and the console logger prints it as `keyedFirst(Task/Save, effect)`.
 `DefectSummary` flattens an unknown thrown value to `{ name?, message, stack? }`,
 because an `Error` serialises to `{}`.
 

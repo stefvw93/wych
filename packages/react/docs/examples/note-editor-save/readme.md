@@ -37,9 +37,9 @@ SaveResolved: (_payload, { draft }) => {
 ```
 
 `tasks.save.start` writes `Pending` and returns the draft beside the command;
-`mode: "first"` is the double-click guard, so a start while the field is
-`Pending` does nothing. `tasks.save.cancel()` writes `Idle` and interrupts
-the save. The runtime writes `Resolved` or `Rejected` into the field before
+`mode: "first"` is the double-click guard: the runtime drops a start while a
+save is in flight. `tasks.save.cancel()` writes `Idle` and interrupts the
+save. The runtime writes `Resolved` or `Rejected` into the field before
 a settle handler runs, so both are optional: `SaveResolved` is written here
 only to clear `dirty`. `render` reads the field with `Task.match`, which is
 exhaustive: a missing case does not compile, and "pending with an error" is

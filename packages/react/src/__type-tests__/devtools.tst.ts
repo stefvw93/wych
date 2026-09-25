@@ -179,6 +179,7 @@ test("`CommandSummary` preserves the structure and drops only the effect", () =>
     readonly _tag: "Keyed";
     readonly key: string;
     readonly command: CommandSummary;
+    readonly first?: true;
   }>();
   expect<Extract<CommandSummary, { readonly _tag: "Batch" }>>().type.toBe<{
     readonly _tag: "Batch";

@@ -284,8 +284,8 @@ Each piece replaces something from step 3 or 4:
 - `saveNote.run(note)` is the `Command.effect` with `catchCause` inside.
 - The `catchCause` body is `Task.errorMessage`, the message off the cause. It
   is the default; a `failure` schema of your own takes an `onError` beside it.
-- `mode: "first"` is the guard from step 4: while a save is pending, a new
-  start does nothing.
+- `mode: "first"` is the guard from step 4: while a save is in flight, the
+  runtime drops a new start.
 - `saveNote.cancel` interrupts the save in flight. By hand that needs a named
   group; see [groups and cancellation](/docs/explanation/groups-and-cancellation).
 
@@ -346,10 +346,11 @@ const reducer = Editor.reducer({
 The snapshot carries one handle per key of the slot, under `tasks`.
 `tasks.save.start(note)` writes `Pending` into `save` and returns the draft
 beside the command, the same two lines `SaveClicked` wrote by hand. Under
-`mode: "first"`, a start while the field is `Pending` writes nothing and
-issues `Command.none`. `tasks.save.cancel()` writes `Idle` and interrupts the
-save. `TextChanged` and `Reverted` return it too: an edit makes the save in
-flight stale, so it stops before its result can mark the new text as saved.
+`mode: "first"`, the runtime drops the command while a save is in flight, so
+the second click sends no request. `tasks.save.cancel()` writes `Idle` and
+interrupts the save. `TextChanged` and `Reverted` return it too: an edit
+makes the save in flight stale, so it stops before its result can mark the
+new text as saved.
 
 When the save settles, the runtime writes `Resolved { value }` or
 `Rejected { error }` into `save` before any handler runs. So the reducer

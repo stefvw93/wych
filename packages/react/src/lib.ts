@@ -171,9 +171,6 @@ export interface TaskBinding<Field, Success, A, Input, R, Ch extends Channel> {
   readonly channel: Ch;
   readonly resolvedTag: string;
   readonly rejectedTag: string;
-  /** `mode: "first"`: a `start` while the field is `Pending` does nothing. */
-  readonly first: boolean;
-  readonly schema: Schema.Top;
   readonly run: (input: Input) => Command<A, R>;
   readonly cancel: Command<A>;
   readonly idle: Field;
@@ -242,9 +239,10 @@ export type TaskHandle<B, D> =
   B extends TaskBinding<any, infer S, infer A, infer I, infer R, Channel>
     ? {
         /**
-         * Write `Pending` and issue the work. Under `mode: "first"`, a start
-         * while the field is `Pending` writes nothing and issues
-         * `Command.none`.
+         * Write `Pending` and issue the work. Under `mode: "first"`, the
+         * work is dropped when it is scheduled while a run is in flight;
+         * the field is already `Pending` then, and the run in flight
+         * settles it.
          */
         readonly start: [I] extends [never]
           ? <V extends S, E = never, R2 = never>(
@@ -705,8 +703,16 @@ export type Command<A, R = never> = Pipeable.Pipeable & {
      * Names the fiber this command forks, so `Cancel` can address it. Nothing
      * else: it does not interrupt, defer, or serialise anything. Nesting
      * resolves outermost-first, matching the wrapper it replaced.
+     *
+     * `first` is set only by a `Task` operation declared `mode: "first"`:
+     * the node is skipped whole while a fiber is booked at its address.
      */
-    | { readonly _tag: "Keyed"; readonly key: string; readonly command: Command<A, R> }
+    | {
+        readonly _tag: "Keyed";
+        readonly key: string;
+        readonly command: Command<A, R>;
+        readonly first?: true;
+      }
 
     /**
      * Several commands, interpreted in order under one group.
@@ -737,6 +743,15 @@ const pipeable = <T extends object>(value: T): T & Pipeable.Pipeable =>
       return Pipeable.pipeArguments(this, arguments);
     },
   });
+
+/**
+ * @internal `keyed(key, command)` that is skipped while a fiber is booked at
+ * its address: take-first, for a `Task` operation's `mode: "first"`. Decided
+ * where the work is scheduled, against the mount's own fiber book, so a run
+ * that was interrupted without settling does not block the next one.
+ */
+export const keyedFirst = <A, R>(key: string, command: Command<A, R>): Command<A, R> =>
+  pipeable({ _tag: "Keyed", key, command, first: true });
 
 /**
  * Discharges only the `R` channel of an effect, keeping its success type
@@ -1121,6 +1136,9 @@ const commandInterpreter = (deps: {
             ),
           );
         case "Keyed":
+          // Take-first: a fiber still booked at the address keeps the work
+          // it is doing, and this node is dropped whole.
+          if (command.first === true && book.has(ctx.key ?? command.key)) return;
           // Outermost wins: an inner `Keyed` under an outer one keeps `ctx` whole.
           return yield* interpret(
             command.command,
@@ -1312,8 +1330,9 @@ class FoldSnapshot<Props, State, H extends AnyHooks> implements ReducerSnapshot<
         start: (input: unknown) => {
           const draft = field();
           const current = draft[key] as { readonly _tag?: unknown } | undefined;
-          if (binding.first && current?._tag === "Pending") return [draft, Command.none];
-          draft[key] = binding.pending;
+          // Skipped when already `Pending`, so an untouched draft finishes
+          // to the state itself.
+          if (current?._tag !== "Pending") draft[key] = binding.pending;
           return [draft, binding.run(input)];
         },
         cancel: () => {
@@ -1783,8 +1802,8 @@ const settled = (
  *     export const cart = Cart.create({ initialState, reducer, render })
  *
  * `tasks` binds each `Task` operation to a state field of its own, under
- * its key. The key adds a `TaskValue` field to `State`, typed and
- * validated by the operation's `schema`, and the operation's two actions to
+ * its key. The key adds a `TaskValue` field to `State`, typed by the
+ * operation's `schema`, and the operation's two actions to
  * the action union. The field starts `Idle`, so `initialState` leaves it
  * out. Settling writes `Resolved` or `Rejected` into the field before the
  * reducer's settle handler runs, which makes that handler optional. A
@@ -1840,18 +1859,12 @@ export const define: <
     spec.outputs === undefined ? [] : tagsIn(spec.outputs, "outbound", "outputs", seen);
 
   const slots = slotTasks(spec, seen);
-  const state =
-    slots.length === 0
-      ? spec.state
-      : Schema.Struct({
-          ...spec.state.fields,
-          ...Object.fromEntries(slots.map(({ key, binding }) => [key, binding.schema])),
-        });
 
   // Opaque declarations (`Children`) are redacted only in `PropsChanged`
   // events; state reaches devtools transitions verbatim. Refusing them here
-  // keeps the "every event is encodable" contract honest.
-  const opaqueState = opaqueProps(state);
+  // keeps the "every event is encodable" contract honest. A task field is a
+  // `TaskSchema`, never opaque, so the declared schema is the whole check.
+  const opaqueState = opaqueProps(spec.state);
   if (opaqueState.length > 0) {
     throw new TypeError(
       `Opaque field "${opaqueState[0][0]}" declared in the state schema; ` +

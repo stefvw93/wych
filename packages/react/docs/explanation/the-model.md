@@ -167,8 +167,9 @@ const loginForm = Login.create({
 
 Every rule from the React version is in the reducer. `pending` and `error`
 are one field with four cases, so they cannot disagree. The double-submit
-guard is `mode: "first"` on the task: `start` reads the field the fold was
-handed, never a stale closure, and does nothing while it is `Pending`. The
+guard is `mode: "first"` on the task: the runtime knows which request it
+started and drops a start while that request is in flight, so no closure is
+read and none can go stale. The
 `alive` ref is gone: state lives at the store, not the component, so a
 login that resolves after unmount folds safely into state nothing renders,
 instead of calling `setState` on a component that is gone.
@@ -194,13 +195,17 @@ const pending = {
   hooks: {},
 };
 
-const ignored = loginForm.reduce(actions.Submitted.make(), pending);
+const resubmitted = loginForm.reduce(actions.Submitted.make(), pending);
 
-console.log(Next.state(ignored) === pending.state);
+console.log(Next.state(resubmitted) === pending.state);
 // => true
-console.log(Next.command(ignored)?._tag);
-// => "None"
+console.log(Next.command(resubmitted)?._tag);
+// => "Keyed"
 ```
+
+The field is already `Pending`, so the state comes back untouched. The
+command still comes back: whether it runs is the runtime's decision, made
+against the request in flight.
 
 `feature.run` folds a sequence, runs each command against a `Layer`, feeds
 what a command dispatches back in, and resolves when nothing is left

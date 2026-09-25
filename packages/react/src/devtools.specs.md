@@ -122,7 +122,12 @@ export type DevtoolsEvent =
 export type CommandSummary =
   | { readonly _tag: "None" }
   | { readonly _tag: "Effect" } // the effect itself is erased
-  | { readonly _tag: "Keyed"; readonly key: string; readonly command: CommandSummary }
+  | {
+      readonly _tag: "Keyed";
+      readonly key: string;
+      readonly command: CommandSummary;
+      readonly first?: true;
+    }
   | { readonly _tag: "Batch"; readonly commands: ReadonlyArray<CommandSummary> }
   | { readonly _tag: "Cancel"; readonly target: Group };
 export interface DefectSummary {
@@ -199,7 +204,7 @@ untouched — no existing `component(bp)` call changes.
 - [x] `DevtoolsEvent` is a six-member tagged union (`Transition`, `Command`, `Output`, `Defect`, `SubscriptionStarted`, `SubscriptionStopped`) and narrows by `_tag`.
 - [x] `cause` is **required** on every member; every emission site knows its cause.
 - [x] `DevtoolsCause` has exactly five variants: `Dispatch`, `Command` (with `action` and optional `key`), `Lifecycle`, `Defect` (with `from`), `Subscription` (with `key`). The old `cause: { _tag: "Output" }` variant is **deleted, not made optional** — see Expected Behavior.
-- [x] `summarizeCommand` erases the effect (`{ _tag: "Effect" }` carries no function), preserves `Keyed` nesting and `Batch` order, and passes `Cancel`'s target through.
+- [x] `summarizeCommand` erases the effect (`{ _tag: "Effect" }` carries no function), preserves `Keyed` nesting and `Batch` order, and passes `Cancel`'s target through. A `Keyed` node flagged `first` keeps `first: true`, and the console prints it as `keyedFirst(key, …)`.
 - [x] `summarizeCommand(Command.restart(name, cmd))` is the desugared batch summary — `Batch [ Cancel name, Keyed name … ]` — identical to summarizing the hand-written pair. The sugar adds no `CommandSummary` member.
 - [x] `summarizeDefect` produces `{ message }` plus optional `name`/`stack` from an `Error`, from a string, from a symbol, and from `undefined`, and never throws.
 - [x] Every event is **JSON round-trippable**: `JSON.parse(JSON.stringify(event))` deep-equals the event, given encodable state and actions.

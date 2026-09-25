@@ -155,10 +155,10 @@ define({
 ```
 
 `tasks` takes a record of internal operations. Each key adds a
-`TaskValue<Success, Failure>` field to `State`, typed and validated by the
-operation's [`schema`](#schema), and the operation's two actions to the action
-union. `Mailbox` declares `subjects` this way, so `state.subjects` exists
-without a line in the state schema.
+`TaskValue<Success, Failure>` field to `State`, typed by the operation's
+[`schema`](#schema), and the operation's two actions to the action union.
+`Mailbox` declares `subjects` this way, so `state.subjects` exists without a
+line in the state schema.
 
 The field starts `Idle`: `initialState` is typed without the task keys, and
 the runtime fills each key with `Task.idle` under what `initialState` returns.
@@ -396,8 +396,10 @@ type TaskMode = "latest" | "every" | "first";
 Concurrency is a property of the operation, declared once. `"latest"` is the
 default and uses `Command.restart`: a second start interrupts the first.
 `"every"` uses `Command.keyed`: both runs go to completion and the last to
-settle wins. `"first"` keeps the running one: the slot's `start` writes
-nothing and returns `[draft, Command.none]` while the field is `Pending`.
+settle wins. `"first"` keeps the running one: its command is a `Keyed` node
+flagged `first`, and the runtime drops that node while a run of the operation
+is in flight on the mount. The rule holds on every path: the slot's `start`,
+[`op.run`](#run), `Task.start` and `Task.output`.
 
 `SlowApiLayer` resolves each folder to itself after a delay, so the folder in
 the field names the run that settled.
@@ -482,7 +484,7 @@ const dropped = firstMailbox.reduce(actions.Opened.make({ folder: "sent" }), alr
 console.log(Next.state(dropped) === alreadyPending.state);
 // => true
 console.log(Next.command(dropped)?._tag);
-// => "None"
+// => "Keyed"
 
 const first = await Effect.runPromise(
   firstMailbox.run(twoFolders, { props: {}, hooks: {}, layer: SlowApiLayer }),
@@ -490,12 +492,16 @@ const first = await Effect.runPromise(
 
 console.log(first.state.subjects);
 // => { _tag: "Resolved", value: ["inbox"] }
+console.log(first.emitted.length);
+// => 1
 ```
 
-A start after the settle runs again, and a `cancel()` writes `Idle`, so the
-next start runs. The mode reads the field through the draft, so a handler
-that wrote `Pending` itself before calling `start` gets the no-op too.
-[`op.run`](#run) is the raw command and issues under every mode.
+`start` leaves a field that is already `Pending` untouched, so the fold
+returns `snapshot.state` itself, and the command still issues. The runtime
+decides whether the work runs from the fibers it holds for the operation, so
+a run that ended without settling (a raw [`cancel`](#cancel) that left the
+field `Pending`, an unmount) does not block the next start. A start after
+the settle runs again, and a `cancel()` writes `Idle`.
 
 ### Clash rules
 
@@ -731,9 +737,10 @@ const refresh = Task("Refresh", {
 const refreshCommand = refresh.run();
 ```
 
-`op.run` is the raw command: it writes nothing to the field and issues under
-every mode, `"first"` included. The handler of the triggering action returns
-it, so the effect's `R` reaches the feature's service requirements.
+`op.run` is the raw command: it writes nothing to the field. Under `"first"`
+the runtime drops it while a run of the operation is in flight, the same as
+the slot's `start`. The handler of the triggering action returns it, so the
+effect's `R` reaches the feature's service requirements.
 
 ### `cancel`
 
@@ -743,7 +750,9 @@ const stop = loadMail.cancel; // Command.cancel("Task/LoadMail")
 
 `cancel` writes nothing to the field. A field left `Pending` after a cancel
 stays `Pending`, so on the manual path the handler that returns `cancel` also
-resets the field, as `ManualMailbox`'s `Cancelled` handler does.
+resets the field, as `ManualMailbox`'s `Cancelled` handler does. Under
+`"first"` a stale `Pending` does not block the next start: the cancelled run
+is not in flight.
 
 ### `into`
 
@@ -817,8 +826,9 @@ rejectedInto: <Key extends string, Snap extends { readonly state: TaskField<Key,
 The manual-path settle handler for a result that means more than the field
 write. `resolvedInto(key, then)` is a `${Name}Resolved` handler: it writes
 `Task.resolved(value)` into `snapshot.draft[key]`, then calls `then` with the
-value and the same snapshot. `then` returns the draft, alone or beside a
-command. `rejectedInto` is the same for `${Name}Rejected` with
+value and the same snapshot. `then` returns the draft or `snapshot.state`,
+alone or beside a command; either finishes as the draft, with the field
+written. `rejectedInto` is the same for `${Name}Rejected` with
 `Task.rejected(error)`.
 
 The entry is written in its key's position, after `...into(key)` for the
@@ -865,8 +875,38 @@ console.log(reported);
 // => ["offline"]
 ```
 
+A `then` that has nothing to add returns `snapshot.state`, and the field
+write still lands.
+
+```ts continue
+const stateAfterWrite = ManualMailbox.create({
+  initialState: ManualMailbox.initialState(() => ({ folder: "", subjects: Task.idle, count: 0 })),
+  reducer: ManualMailbox.reducer({
+    Opened: ({ folder }, { draft }) => {
+      draft.folder = folder;
+      return Task.start(draft, "subjects", loadMail.run(folder));
+    },
+    Cancelled: (_payload, { draft }) => {
+      draft.subjects = Task.idle;
+      return [draft, loadMail.cancel];
+    },
+    ...loadMail.into("subjects"),
+    LoadMailResolved: loadMail.resolvedInto("subjects", (_value, { state }) => state),
+  }),
+  render: ManualMailbox.render(() => null),
+});
+
+const kept = stateAfterWrite.reduce(
+  { _tag: "LoadMailResolved", value: ["Hello"] },
+  { state: { folder: "inbox", subjects: Task.pending, count: 0 }, props: {}, hooks: {} },
+);
+
+console.log(Next.state(kept).subjects);
+// => { _tag: "Resolved", value: ["Hello"] }
+```
+
 The field is already written into the draft when `then` runs, so returning
-another state is the fold's `TypeError`, on the
+any other state (a spread of `state`, here) is the fold's `TypeError`, on the
 [finishing rules](/docs/reference/features#finishing-rules).
 
 ```ts continue
