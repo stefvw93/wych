@@ -500,6 +500,50 @@ test("an output dispatched straight from render leaves through its prop", async 
   await vi.waitFor(() => expect(got).toEqual([{ q: "hi" }]));
 });
 
+test("`render`'s dispatch takes a message schema and its payload", async () => {
+  const actions = Action({ Bumped: {}, Added: { by: Schema.Number } });
+  const outputs = Action.output({ Sent: { total: Schema.Number } });
+
+  const tally = define({
+    props: Schema.Struct({}),
+    state: Schema.Struct({ total: Schema.Number }),
+    action: Action.of([actions.Bumped, actions.Added]),
+    output: Action.of([outputs.Sent]),
+  }).create({
+    initialState: () => ({ total: 0 }),
+    reducer: {
+      Bumped: (_payload, { state }) => ({ total: state.total + 1 }),
+      Added: ({ by }, { state }) => ({ total: state.total + by }),
+    },
+    render: ({ state, dispatch }) => (
+      <div>
+        <span data-testid="total">{state.total}</span>
+        <button data-testid="bump" onClick={() => dispatch(actions.Bumped)}>
+          bump
+        </button>
+        <button data-testid="add" onClick={() => dispatch(actions.Added, { by: 10 })}>
+          add
+        </button>
+        <button data-testid="send" onClick={() => dispatch(outputs.Sent, { total: state.total })}>
+          send
+        </button>
+      </div>
+    ),
+  });
+
+  const Tally = component(tally, { name: "Tally" });
+  const got: Array<unknown> = [];
+  await mount(<Tally onSent={(payload: { total: number }) => void got.push(payload)} />);
+  await vi.waitFor(() => expect(text("total")).toBe("0"));
+
+  await click("bump");
+  await click("add");
+  await vi.waitFor(() => expect(text("total")).toBe("11"));
+
+  await click("send");
+  await vi.waitFor(() => expect(got).toEqual([{ total: 11 }]));
+});
+
 test("an output with no matching prop throws rather than vanishing", async () => {
   // `OutputProps` makes every `on<Tag>` required, so reaching this means the
   // typed surface was bypassed — the same precedent as a missing reducer

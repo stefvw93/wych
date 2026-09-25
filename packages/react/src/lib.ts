@@ -213,7 +213,7 @@ export interface Vocabularies extends MessageConstructor<"internal"> {
 
 const message = (ch: Channel, tag: string, fields: Schema.Struct.Fields = {}) => {
   const schema = Schema.TaggedStruct(tag, fields);
-  const make = schema.make;
+  const make = schema.make.bind(schema);
   return Object.assign(schema, {
     [channel]: ch,
     make: (input?: object, options?: Schema.MakeOptions) => make((input ?? {}) as never, options),
@@ -390,9 +390,54 @@ export type ServicesOf<U> = {
 // ---------------------------------------------------------------------------
 
 /**
- * Where a command's emissions go.
+ * A message schema whose values `A` admits: what `dispatch(Message, payload)`
+ * takes in place of a built message. `MessageOf<never>` admits nothing.
  */
-export type Dispatcher<A> = (action: A) => Effect.Effect<void>;
+export type MessageOf<A> = AnyMessage<Channel> & { readonly Type: A };
+
+/** What `M.make` takes, without `_tag`: the payload of a message schema. */
+export type PayloadOf<M extends Schema.Top> = Simplify<Omit<M["~type.make.in"], "_tag">>;
+
+/** The payload argument, optional exactly when every field is. */
+export type PayloadArgs<M extends Schema.Top> =
+  {} extends PayloadOf<M> ? [payload?: PayloadOf<M>] : [payload: PayloadOf<M>];
+
+/**
+ * Where a command's emissions go. Takes a built message, or a message schema
+ * and its payload: `dispatch(Loaded, { hits })` is `dispatch(Loaded.make({ hits }))`,
+ * and `dispatch(Cleared)` needs no payload.
+ *
+ * The value form is the last overload, so an inference that reads one
+ * signature off `dispatch` passed as a callback (`Stream.runForEach(s, dispatch)`)
+ * reads that one.
+ */
+export interface Dispatcher<A> {
+  <M extends MessageOf<A>>(message: M, ...payload: PayloadArgs<M>): Effect.Effect<void>;
+  (action: A): Effect.Effect<void>;
+}
+
+/** Whether `value` is a message schema rather than a built message. */
+const isMessage = (value: unknown): value is AnyMessage<Channel> =>
+  typeof value === "function" && Object.hasOwn(value, channel);
+
+/**
+ * Build the message a two-argument call names. `make` validates, so a bad
+ * payload throws here: a defect of the command or subscription that sent it,
+ * or out of the event handler that called `render`'s `dispatch`.
+ */
+const toMessage = (message: unknown, payload: unknown): { readonly _tag: string } =>
+  isMessage(message)
+    ? (message as unknown as { make: (input: unknown) => { readonly _tag: string } }).make(payload)
+    : (message as { readonly _tag: string });
+
+/** A `Dispatcher` over `emit`, taking either form. */
+const toDispatcher = (
+  emit: (message: { readonly _tag: string }) => Effect.Effect<void>,
+): Dispatcher<any> =>
+  ((message: unknown, payload?: unknown) =>
+    isMessage(message)
+      ? Effect.suspend(() => emit(toMessage(message, payload)))
+      : emit(message as { readonly _tag: string })) as Dispatcher<any>;
 
 /**
  * The nominal marker that keeps a {@link Subscription} out of a `Next` tuple
@@ -518,10 +563,10 @@ export const Command: {
   /**
    * Outbound announcement.
    */
-  readonly output: <Tag extends Capitalize<string>, Fields extends Schema.Struct.Fields>(
-    message: Message<Tag, Fields, "outbound">,
-    payload: Simplify<Omit<Schema.Struct<Fields>["Type"], "_tag">>,
-  ) => Command<{ readonly _tag: Tag } & Schema.Struct<Fields>["Type"]>;
+  readonly output: <M extends AnyMessage<"outbound">>(
+    message: M,
+    ...payload: PayloadArgs<M>
+  ) => Command<M["Type"]>;
 } = {
   none: pipeable({ _tag: "None" }),
 
@@ -544,10 +589,8 @@ export const Command: {
     return command === undefined ? sugar : sugar(command);
   }) as (typeof Command)["restart"],
 
-  output: (message, payload) =>
-    Command.effect<{ readonly _tag: string }>((dispatch) =>
-      dispatch((message as any).make(payload)),
-    ) as any,
+  output: (message, ...payload) =>
+    Command.effect<any>((dispatch) => dispatch(toMessage(message, payload[0]))),
 };
 
 // ---------------------------------------------------------------------------
@@ -665,7 +708,9 @@ const subscriptionBook = (deps: {
   const fork = (key: string, sub: Subscription<any, any>) =>
     Effect.map(
       Effect.forkChild(
-        Effect.asVoid(Effect.suspend(() => sub.effect((message) => deps.emit(key, message)))),
+        Effect.asVoid(
+          Effect.suspend(() => sub.effect(toDispatcher((message) => deps.emit(key, message)))),
+        ),
       ),
       (fiber: Fiber.Fiber<void>) => {
         book.set(key, fiber);
@@ -814,7 +859,11 @@ const commandInterpreter = (deps: {
           // escaping into the fold that called `interpret`.
           return yield* forkLeaf(
             ctx,
-            Effect.asVoid(Effect.suspend(() => command.effect((action) => deps.emit(action, ctx)))),
+            Effect.asVoid(
+              Effect.suspend(() =>
+                command.effect(toDispatcher((action) => deps.emit(action, ctx))),
+              ),
+            ),
           );
         case "Keyed":
           // Outermost wins: an inner `Keyed` under an outer one keeps `ctx` whole.
@@ -997,7 +1046,15 @@ class FoldSnapshot<Props, State, H extends AnyHooks> implements ReducerSnapshot<
   }
 }
 
-export type Dispatch<Action> = (action: Action) => void;
+/**
+ * The view's dispatch, called from an event handler. The same two forms as
+ * `Dispatcher`: `dispatch(Typed, { query })`, `dispatch(Cleared)`, or a built
+ * message.
+ */
+export interface Dispatch<Action> {
+  <M extends MessageOf<Action>>(message: M, ...payload: PayloadArgs<M>): void;
+  (action: Action): void;
+}
 
 export interface RenderSnapshot<Props, State, Action, H extends AnyHooks> extends Snapshot<
   Props,
@@ -2238,7 +2295,8 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
 
     getSnapshot: () => state,
 
-    dispatch: (action) => fold(action as { readonly _tag: string }, DISPATCH),
+    dispatch: ((message: unknown, payload?: unknown) =>
+      fold(toMessage(message, payload), DISPATCH)) as Dispatch<any>,
 
     sync: (nextProps, nextHooks) => {
       const previousProps = props;

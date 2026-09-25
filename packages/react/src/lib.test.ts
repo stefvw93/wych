@@ -32,7 +32,16 @@ import {
 import { createElement, type ReactNode } from "react";
 import { probe } from "./__fixtures__/stress";
 import { drafterLayer, mutativeDrafter, type DrafterService } from "./draft";
-import { Action, Children, Command, createFeatureStore, define, Next, Subscription } from "./lib";
+import {
+  Action,
+  Children,
+  Command,
+  createFeatureStore,
+  define,
+  Next,
+  Subscription,
+  type Dispatcher,
+} from "./lib";
 import { Task } from "./utils/task";
 
 // ---------------------------------------------------------------------------
@@ -3357,10 +3366,119 @@ describe("Command — the effect leaf", () => {
 
     const seen: Array<unknown> = [];
     await Effect.runPromise(
-      cmd.effect((message) => Effect.sync(() => void seen.push(message)) as Effect.Effect<void>),
+      cmd.effect(((message: unknown) =>
+        Effect.sync(() => void seen.push(message))) as Dispatcher<any>),
     );
 
     expect(seen).toEqual([{ _tag: "OrderPlaced", orderId: "o1" }]);
+  });
+});
+
+describe("dispatch(Message, payload)", () => {
+  const Go = Action("Go");
+  const Bump = Action("Bump", { by: Schema.Number });
+  const Out = Action.output("Out", { n: Schema.Number });
+  const Counter = define({
+    props: Schema.Struct({}),
+    state: Schema.Struct({ n: Schema.Number }),
+    action: Action.of([Go, Bump]),
+    output: Action.of([Out]),
+  });
+
+  it("a command's schema-form dispatch folds the message `make` builds", async () => {
+    const feature = Counter.create({
+      initialState: () => ({ n: 0 }),
+      reducer: {
+        Go: (_payload, { state }) => [
+          state,
+          Command.effect((dispatch) =>
+            Effect.gen(function* () {
+              yield* dispatch(Bump, { by: 2 });
+              yield* dispatch(Out, { n: 7 });
+            }),
+          ),
+        ],
+        Bump: ({ by }, { state }) => ({ n: state.n + by }),
+      },
+      render: () => null,
+    });
+    const { state, emitted, outputs } = await Effect.runPromise(
+      feature.run([Go.make()], { props: {}, hooks: {}, layer: Layer.empty }),
+    );
+    expect(state).toEqual({ n: 2 });
+    expect(emitted).toEqual([{ _tag: "Bump", by: 2 }]);
+    expect(outputs).toEqual([{ _tag: "Out", n: 7 }]);
+  });
+
+  it("a payload `make` rejects is a defect of the command that sent it", async () => {
+    const feature = Counter.create({
+      initialState: () => ({ n: 0 }),
+      reducer: {
+        Go: (_payload, { state }) => [
+          state,
+          Command.effect((dispatch) => dispatch(Bump, { by: "x" as never })),
+        ],
+        Bump: ({ by }, { state }) => ({ n: state.n + by }),
+      },
+      render: () => null,
+    });
+    const { state, defects } = await Effect.runPromise(
+      feature.run([Go.make()], { props: {}, hooks: {}, layer: Layer.empty }),
+    );
+    expect(state).toEqual({ n: 0 });
+    expect(defects).toEqual([{ from: "Go", error: expect.anything(), handled: false }]);
+  });
+
+  it("a subscription's schema-form dispatch folds", async () => {
+    const feature = Counter.create({
+      initialState: () => ({ n: 0 }),
+      reducer: {
+        Go: (_payload, { state }) => state,
+        Bump: ({ by }, { state }) => ({ n: state.n + by }),
+      },
+      render: () => null,
+      subscriptions: () => ({ once: Subscription.effect((dispatch) => dispatch(Bump, { by: 5 })) }),
+    });
+    const { state } = await Effect.runPromise(
+      feature.run([Go.make()], { props: {}, hooks: {}, layer: Layer.empty }),
+    );
+    expect(state).toEqual({ n: 5 });
+  });
+
+  it("the store's dispatch takes the schema form, and routes an output by tag", async () => {
+    const feature = Counter.create({
+      initialState: () => ({ n: 0 }),
+      reducer: {
+        Go: (_payload, { state }) => ({ n: state.n + 1 }),
+        Bump: ({ by }, { state }) => ({ n: state.n + by }),
+      },
+      render: () => null,
+    });
+    const runtime = ManagedRuntime.make(Layer.empty) as unknown as ManagedRuntime.ManagedRuntime<
+      any,
+      any
+    >;
+    const emitted: unknown[] = [];
+    const store = createFeatureStore({
+      feature: feature as never,
+      props: {},
+      equivalence: { props: Equivalence.strictEqual(), hooks: Equivalence.strictEqual() },
+      runtime,
+      layer: undefined,
+      emit: (output) => void emitted.push(output),
+      defect: (error) => {
+        throw error;
+      },
+    });
+    store.start();
+    store.dispatch(Go as never);
+    store.dispatch(Bump as never, { by: 3 } as never);
+    store.dispatch(Out as never, { n: 1 } as never);
+    expect(store.getSnapshot()).toEqual({ n: 4 });
+    expect(emitted).toEqual([{ _tag: "Out", n: 1 }]);
+    expect(() => store.dispatch(Bump as never, { by: "x" } as never)).toThrow();
+    store.stop();
+    await runtime.dispose();
   });
 });
 

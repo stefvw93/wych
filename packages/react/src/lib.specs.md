@@ -389,6 +389,7 @@ landed with every box checked again.
 - [x] `Command.cancel(name)` interrupts the one group booked under `name`, whatever action tags forked its members. The fiber book is a flat map by name — no tag level, no delimiter encoding.
 - [x] Bare-tag `cancel("Tag")` reaches only the **unkeyed** fibers of that tag; work forked under `keyed(name)` is addressed by `name` alone.
 - [x] Cancelling work started from several action tags under one `keyed(name)` is one line — `cancel(name)` — naming no foreign tag.
+- [x] Every `dispatch` — `render`'s, `useFeature().dispatch`, and the `Dispatcher` a `Command.effect` or `Subscription.effect` leaf is handed — takes a built message or a message schema and its payload: `dispatch(Bump, { by: 2 })` is `dispatch(Bump.make({ by: 2 }))`, and the payload is omitted when every field is optional (`dispatch(Reverted)`). `make` validates, so a rejected payload is a defect of the command or subscription that sent it, and throws out of the event handler that called `render`'s dispatch.
 - [x] `Command.output(message, payload)` emits an outbound message; passing an internal message is a compile error. _Re-expressed on the new leaf internally; signature unchanged. Removing it is deferred — see Deferred decisions._
 - [x] Commands are `Pipeable`, and piping preserves `A` and `R`.
 
@@ -486,6 +487,7 @@ landed with every box checked again.
 - [x] `Command<Narrow>` stays assignable to `Command<Wide>` under the callback leaf, and `Command.none: Command<never>` stays the bottom. `Dispatcher<A>` is contravariant in `A` and sits in a parameter position — contravariant again — so the two compose to covariant. **The existing covariance test passes unchanged.**
 - [x] `Command.effect` carries `R` out of the effect it is handed. `A` has no inference site of its own, so it defaults to `never`: a command that emits nothing is `Command<never, R>` and fits every slot. Passing a bare `Effect` — the pre-redesign shape — no longer compiles, and neither does an effect with an open error channel.
 - [x] Inside a handler, `dispatch` is typed by the feature's own vocabulary: `A` arrives from the contextual type of the handler's return. An undeclared tag and a declared tag with the wrong payload are both compile errors.
+- [x] `Dispatcher<A>` and `Dispatch<A>` are two overloads: `<M extends MessageOf<A>>(message: M, ...payload: PayloadArgs<M>)`, then `(action: A)`. A schema whose `Type` is not in `A`, a missing required payload and a wrong payload are compile errors; `MessageOf<never>` admits nothing, so a standalone leaf still accepts nothing. The value form is last, so `Stream.runForEach(stream, dispatch)` infers it. The covariance of `Command` in `A` is unchanged. A lambda written against `Dispatcher` by hand needs its parameter annotated: an overloaded target gives no contextual parameter type.
 - [x] `Command.keyed` preserves `A` and `R`, through `.pipe`, applied directly, and nested. The key is a required string.
 - [x] `Command.batch` preserves `A` and `R`, and a `Command<never>` member — the `Cancel` the variant exists to sequence — does not collapse the batch to `never`.
 - [x] `Command.cancel` is `Command<never>` and takes exactly one string. An object target — `{ tag }` or `{ tag, key }` — is a compile error, as are a number and a zero-argument call.
@@ -1182,7 +1184,7 @@ already own-keys checked. The channel brand keeps its declaration-time jobs
 (`ChannelOf`, `SameChannel`, `Disjoint`, `OutputProps`); it stops being checked
 at the command call site, where it never affected routing anyway.
 
-**Partially executed.** `dispatch` now carries `Emit<A, O>` everywhere — the
+**Partially executed.** `dispatch` takes `(Message, payload)` as well as a built message, so every send site has the one shape `Command.output(Message, payload)` already had. `dispatch` now carries `Emit<A, O>` everywhere — the
 command dispatcher always did, and `render`'s dispatch is widened to match, so
 a passthrough view announces without a mirror action. A purely type-level
 change: the store routed by tag all along. `Command.output` **stays**, as

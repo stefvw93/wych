@@ -1,4 +1,4 @@
-import { Effect, Layer, Option, Schema } from "effect";
+import { Effect, Layer, Option, Schema, Stream } from "effect";
 import { expect, test } from "tstyche";
 import type { ComponentProps, FC, ReactNode } from "react";
 import { drafterLayer, mutativeDrafter, type Draft } from "../draft";
@@ -25,6 +25,7 @@ import {
   type OutputProps,
   type RenderSnapshot,
   type ServicesOf,
+  Subscription,
   type TagsOf,
 } from "../lib";
 
@@ -91,7 +92,8 @@ test("`fields` is optional, and `make()` takes no argument only when nothing is 
   expect(Reverted.make({})).type.toBe<{ readonly _tag: "Reverted" }>();
 
   const Typed = Action("Typed", { query: Schema.String });
-  expect(Typed.make).type.not.toBeCallableWith();
+  // @ts-expect-error Expected 1-2 arguments
+  Typed.make();
   expect(Typed.make({ query: "a" })).type.toBe<{
     readonly _tag: "Typed";
     readonly query: string;
@@ -610,6 +612,86 @@ test("`render`'s dispatch carries the outbound vocabulary too", () => {
       dispatch({ _tag: "Sent" });
       return null;
     },
+  });
+});
+
+test("`dispatch(Message, payload)` is the same message, on every dispatch", () => {
+  // The schema form: the message's own schema and its payload, payload
+  // omitted when there is none. Checked against the same vocabulary as the
+  // value form, so an undeclared schema and a wrong payload are both errors.
+  const Ping = Action("Ping");
+  const Pong = Action("Pong", { at: Schema.Number });
+  const Sent = Action.output("Sent", { at: Schema.Number });
+  const Stray = Action("Stray");
+  const Defined = define({
+    props: Schema.Struct({}),
+    state: Schema.Struct({}),
+    action: Action.of([Ping, Pong]),
+    output: Action.of([Sent]),
+  });
+
+  Defined.create({
+    initialState: () => ({}),
+    reducer: {
+      Ping: (_action, { state }) => [
+        state,
+        Command.effect((dispatch) =>
+          Effect.gen(function* () {
+            yield* dispatch(Pong, { at: 1 });
+            yield* dispatch(Ping);
+            yield* dispatch(Sent, { at: 2 });
+            // @ts-expect-error No overload matches this call
+            yield* dispatch(Stray);
+            // @ts-expect-error is not assignable to parameter of type
+            yield* dispatch(Pong);
+            // @ts-expect-error is not assignable to type 'number'
+            yield* dispatch(Pong, { at: "1" });
+          }),
+        ),
+      ],
+      Pong: (_action, { state }) => state,
+    },
+    render: ({ dispatch }) => {
+      dispatch(Ping);
+      dispatch(Pong, { at: 1 });
+      dispatch(Sent, { at: 1 });
+      // @ts-expect-error No overload matches this call
+      dispatch(Stray);
+      // @ts-expect-error is not assignable to parameter of type
+      dispatch(Sent, {});
+      return null;
+    },
+    subscriptions: () => ({
+      tick: Subscription.effect((dispatch) => dispatch(Pong, { at: 1 })),
+    }),
+  });
+
+  // Standalone, `A` is `never` and the schema form admits nothing either.
+  // @ts-expect-error No overload matches this call
+  Command.effect((dispatch) => dispatch(Ping));
+
+  // `Command.output` takes the same payload rule.
+  const Saved = Action.output("Saved");
+  expect(Command.output(Saved)).type.toBe<Command<{ readonly _tag: "Saved" }>>();
+  expect(Command.output).type.not.toBeCallableWith(Sent);
+});
+
+test("`dispatch` passed as a callback infers the value form", () => {
+  const Pong = Action("Pong", { at: Schema.Number });
+  const Defined = define({
+    props: Schema.Struct({}),
+    state: Schema.Struct({}),
+    action: Action.of([Pong]),
+  });
+  Defined.create({
+    initialState: () => ({}),
+    reducer: { Pong: (_action, { state }) => state },
+    render: () => null,
+    subscriptions: () => ({
+      feed: Subscription.effect((dispatch) =>
+        Stream.runForEach(Stream.make(Pong.make({ at: 1 })), dispatch),
+      ),
+    }),
   });
 });
 
