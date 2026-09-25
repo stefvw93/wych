@@ -2,12 +2,15 @@ import { Cause, Effect, Option, Schema } from "effect";
 import { isLiveDraft, type Draft } from "../draft";
 import {
   Action,
+  bindTask,
   carryMembers,
   Command,
   type LazyCommand,
   type MemberCarrier,
   type Message,
   type MessageConstructor,
+  type TaskBinding,
+  type TaskCarrier,
 } from "../lib";
 
 // ---------------------------------------------------------------------------
@@ -212,22 +215,20 @@ export type TaskHandlers<Name extends string, Key extends string, Success, Failu
  *
  * A property of the operation, not of the call site, so it is declared once
  * where the operation is: a search is take-latest wherever it is triggered from.
- *
- * Take-*first* is absent, and deliberately so: dropping a start means reading
- * whether one is already pending, which is a question about the feature's state
- * — the one thing this layer does not touch. It is a guard in the handler that
- * has the state in hand:
- *
- *     ClickedSubmit: (_action, { state }) =>
- *       Task.isPending(state.submit)
- *         ? state
- *         : [{ ...state, submit: Task.pending }, submit.run(state.form)],
  */
 export type TaskMode =
   /** Interrupt the running fiber, run the new one. The default, and what search wants. */
   | "latest"
   /** Run both. Last to settle wins, which is usually a bug — declare it deliberately. */
-  | "every";
+  | "every"
+  /**
+   * Keep the running one, drop the new start. Dropping a start means reading
+   * whether the field is `Pending`, so it is the slot handle that enforces
+   * it: `snapshot.tasks.<key>.start` does nothing while its field is
+   * `Pending`. `op.run` itself is the raw command and issues regardless; it
+   * books without interrupting, so it never ends the run in flight.
+   */
+  | "first";
 
 // ---------------------------------------------------------------------------
 // Failure
@@ -270,29 +271,34 @@ const errorMessage: TaskOnError<string> = (cause) => {
 // ---------------------------------------------------------------------------
 
 /**
- * Two actions and the command that produces them. That is the whole surface.
+ * Two actions and the command that produces them, plus the schema of the
+ * field they fill.
  *
- * What it deliberately does not have: a state field, an initial value, or a
- * `start` that writes into state on your behalf. The operation owns the
- * *work* — scheduling it, interrupting it, turning however it ended into one
- * of two actions. Where the result lands is the feature's business: the
- * reducer is exhaustive over the action union, so the two handlers cannot be
- * forgotten. `into(key)` writes them for the common case, and a hand-written
- * entry is the extension point:
+ * The operation owns the *work*: scheduling it, interrupting it, turning
+ * however it ended into one of two actions. Where the result lands is
+ * declared by the feature. In `define`'s `tasks` slot the key names the
+ * field, and the fold writes it: `Pending` from `snapshot.tasks.<key>.start`,
+ * `Idle` from `.cancel()`, the settled value before any settle handler runs:
  *
- *     ...search.into("search"),
+ *     const Search = define({ props, state, tasks: { search }, actions })
  *
- *     // or, to derive something else from the result — select the first
- *     // item, clear a filter — write the entry; after the spread, the
- *     // explicit key wins, and `resolvedInto` still writes the field:
- *     SearchResolved: search.resolvedInto("search", (value, { draft }) => {
- *       draft.selected = value[0]
- *       return draft
- *     }),
+ *     reducer: {
+ *       Typed: ({ query }, { tasks }) => tasks.search.start(query),
+ *       // optional: `draft.search` already holds the result
+ *       SearchResolved: ({ value }, { draft }) => {
+ *         draft.selected = value[0]
+ *         return draft
+ *       },
+ *     }
+ *
+ * For work stored somewhere other than one field, the operation goes into
+ * the `actions` slot instead, and the reducer writes the field by hand:
+ * `Task.start` and `op.run` to start it, `into(key)` or a hand-written entry
+ * to settle it.
  *
  * Internal and announced operations are the same shape. The only difference is
  * the channel the two actions are declared on, which is what `Task.output`
- * changes — an announced operation was never anything but these three members.
+ * changes; an announced operation has no field and no slot.
  */
 export interface TaskOperationBase<
   Name extends string,
@@ -301,13 +307,35 @@ export interface TaskOperationBase<
   Input = never,
   R = never,
   Ch extends "internal" | "outbound" = "internal",
-> extends MemberCarrier<TaskActions<Name, Success, Failure, Ch>> {
+>
+  extends
+    MemberCarrier<TaskActions<Name, Success, Failure, Ch>>,
+    TaskCarrier<
+      TaskBinding<
+        TaskValue<Success["Type"], Failure["Type"]>,
+        Success["Type"],
+        TaskAction<Name, Success["Type"], Failure["Type"]>,
+        Input,
+        R,
+        Ch
+      >
+    > {
   /**
-   * The two actions. The operation itself goes into `define`'s `actions` slot
-   * beside the feature's own (`actions: [actions, search]`), or into `outputs`
-   * for `Task.output`; this is the same pair, for reading.
+   * The two actions. The operation itself goes into `define`'s `tasks` slot
+   * under the key of the field it fills (`tasks: { search }`), into the
+   * `actions` slot beside the feature's own (`actions: [actions, search]`),
+   * or into `outputs` for `Task.output`; this is the same pair, for reading.
    */
   readonly actions: TaskActions<Name, Success, Failure, Ch>;
+
+  /**
+   * The `Resolved` action's schema, by name: `search.Resolved.make({ value })`
+   * builds the action a test seeds.
+   */
+  readonly Resolved: TaskActions<Name, Success, Failure, Ch>[0];
+
+  /** The `Rejected` action's schema: `search.Rejected.make({ error })`. */
+  readonly Rejected: TaskActions<Name, Success, Failure, Ch>[1];
 
   /**
    * Issue the work, as a `Command`. Pair it with whatever state the handler
@@ -315,6 +343,11 @@ export interface TaskOperationBase<
    *
    *     ClickedSearch: (_action, { state }) =>
    *       [{ ...state, search: Task.pending }, search.run(state.searchParams)]
+   *
+   * This is the raw command: it writes nothing, and under `mode: "first"`
+   * it issues regardless. For a task in `define`'s `tasks` slot,
+   * `snapshot.tasks.<key>.start` is the call that writes `Pending` and
+   * applies the mode.
    *
    * Returned from the *triggering* action's handler, which is what keeps the
    * effect's `R` visible to `ServicesOf` — the services a command needs are
@@ -337,6 +370,9 @@ export interface TaskOperationBase<
    * clear the field in the same return:
    *
    *     ClickedCancel: (_action, { state }) => [{ ...state, search: Task.idle }, search.cancel]
+   *
+   * For a task in `define`'s `tasks` slot, `snapshot.tasks.<key>.cancel()`
+   * is that return: it writes `Idle` and issues this command.
    */
   readonly cancel: Command<TaskAction<Name, Success["Type"], Failure["Type"]>>;
 
@@ -559,7 +595,8 @@ export interface TaskConstructors extends TaskConstructor<"internal"> {
    * `key` is constrained to the state's own async task fields, so a typo or a
    * renamed field is a compile error rather than a field that stays `Idle`.
    * Reach for the tuple directly when the fold writes something other than
-   * `Pending` — a take-first guard, or a field cleared rather than started.
+   * `Pending`, such as a field cleared rather than started. A task in
+   * `define`'s `tasks` slot has `snapshot.tasks.<key>.start` instead.
    *
    * Handed `snapshot.draft`, it writes `Pending` into the draft and returns
    * the draft, never a spread of it: a draft's children are proxies that are
@@ -596,8 +633,8 @@ export interface TaskConstructors extends TaskConstructor<"internal"> {
 
   /**
    * The partial reads, for everywhere that is not a render — a reducer
-   * deriving from the last result, a `disabled={…}`, a take-first guard —
-   * where four cases are noise. Data-first, like `Option`'s own.
+   * deriving from the last result, a `disabled={…}`, a guard — where four
+   * cases are noise. Data-first, like `Option`'s own.
    */
   readonly value: <Success>(task: TaskValue<Success, unknown>) => Option.Option<Success>;
   readonly error: <Failure>(task: TaskValue<unknown, Failure>) => Option.Option<Failure>;
@@ -662,8 +699,11 @@ const make = <Ch extends "internal" | "outbound">(ch: Ch) =>
     // Both modes book under the operation's group, so `cancel` addresses them
     // all — the book is one `Set` of fibers per name. Only `latest` also
     // interrupts what is already running.
+    // `first` books without interrupting: the slot handle drops a start
+    // while the field is `Pending`, and a raw `run` past it must not end the
+    // run in flight either.
     const scheduled = (effect: Effect.Effect<unknown, unknown, unknown>) =>
-      mode === "every" ? Command.keyed(group, work(effect)) : Command.restart(group, work(effect));
+      mode === "latest" ? Command.restart(group, work(effect)) : Command.keyed(group, work(effect));
 
     // Bound or not, `run` ends up here: with the config's `run` declared the
     // argument is its input, without it the argument is the effect itself.
@@ -700,14 +740,27 @@ const make = <Ch extends "internal" | "outbound">(ch: Ch) =>
         return then(payload[field], snapshot);
       };
 
-    const operation = carryMembers(
+    const run = (input: unknown) => scheduled(effectOf(input));
+    const cancel = Command.cancel(group);
+    const schema = buildSchema(schemas.success, failure);
+    const operation = bindTask(
+      carryMembers({ actions: [Resolved, Rejected], Resolved, Rejected, run, cancel, schema }, [
+        Resolved,
+        Rejected,
+      ]),
       {
-        actions: [Resolved, Rejected],
-        run: (input: unknown) => scheduled(effectOf(input)),
-        cancel: Command.cancel(group),
-        schema: buildSchema(schemas.success, failure),
+        channel: ch,
+        resolvedTag,
+        rejectedTag,
+        first: mode === "first",
+        schema,
+        run,
+        cancel,
+        idle,
+        pending: pendingValue,
+        resolved: helpers.resolved,
+        rejected: helpers.rejected,
       },
-      [Resolved, Rejected],
     );
     return ch === "internal"
       ? {
@@ -756,9 +809,9 @@ const helpers: Omit<TaskConstructors, "output"> = {
  *
  * Declares two actions and the command that produces them, from a name and the
  * schemas of what the work yields. The name prefixes the action tags and names
- * the fiber group `cancel` addresses. The state half is `Task.schema` plus four
- * lines of your own reducer, which is where it stays: this layer never writes
- * into your state, so where a result lands is visible in the file that owns it.
+ * the fiber group `cancel` addresses. The state half is a key in `define`'s
+ * `tasks` slot, which adds the field, starts it `Idle` and writes each
+ * settle into it:
  *
  *     const wallhavenSearch = Task("WallhavenSearch", {
  *       success: WallhavenSearchPayload,
@@ -766,20 +819,14 @@ const helpers: Omit<TaskConstructors, "output"> = {
  *         Effect.flatMap(WallhavenService, (service) => service.search(params)),
  *     })
  *
- *     const State = Schema.Struct({ search: wallhavenSearch.schema })
- *     const Seed = define({ props, state: State, action: [ClickedSearch, wallhavenSearch] })
+ *     const Seed = define({ props, state: State, tasks: { search: wallhavenSearch }, actions })
  *
- *     const initialState = FeatureDefinition.initialState(() => ({ search: Task.idle }))
- *
- *     const reducer = FeatureDefinition.reducer({
- *       ClickedSearch: (_action, { state }) =>
- *         Task.start(state, "search", wallhavenSearch.run(state.searchParams)),
- *       ...wallhavenSearch.into("search"),
+ *     const reducer = Seed.reducer({
+ *       ClickedSearch: (_action, { state, tasks }) => tasks.search.start(state.searchParams),
  *     })
  *
- * `into` writes the two settle handlers. To derive more from the result, write
- * `WallhavenSearchResolved: wallhavenSearch.resolvedInto("search", then)`
- * after the spread; the explicit key wins.
+ * A settle handler (`WallhavenSearchResolved`) is optional, and runs after
+ * the field is written, to derive more from the result.
  *
  *     // render
  *     Task.match(state.search, {
@@ -788,6 +835,10 @@ const helpers: Omit<TaskConstructors, "output"> = {
  *       Rejected: (rejected) => `Error: ${rejected.error}`,
  *       Resolved: (resolved) => <Results items={resolved.value.data} />,
  *     })
+ *
+ * The manual path, for work stored somewhere other than one field, is the
+ * operation in the `actions` slot, a `Task.schema` field, `Task.start` and
+ * `into(key)` or `resolvedInto`.
  *
  * `run` in the config is what keeps the work in one place; omit it and the
  * operation's `run` takes the effect instead, for work that differs per call

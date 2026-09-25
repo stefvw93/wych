@@ -155,6 +155,132 @@ export const carryMembers = <T extends object, const M extends ReadonlyArray<Bra
   list: M,
 ): T & MemberCarrier<M> => Object.assign(value, { [members]: list });
 
+const taskBinding: unique symbol = Symbol("@wych/task");
+
+/**
+ * @internal What `define`'s `tasks` slot reads off a `Task` operation: its
+ * two tags, its commands and the values its field moves through. The type
+ * parameters are the field's type, the success type, the two actions, the
+ * `run` input (`never` for an operation that takes the effect), the
+ * services and the channel.
+ *
+ * Declared here and filled by `Task`, so this module reads an operation
+ * without importing the module that makes one.
+ */
+export interface TaskBinding<Field, Success, A, Input, R, Ch extends Channel> {
+  readonly channel: Ch;
+  readonly resolvedTag: string;
+  readonly rejectedTag: string;
+  /** `mode: "first"`: a `start` while the field is `Pending` does nothing. */
+  readonly first: boolean;
+  readonly schema: Schema.Top;
+  readonly run: (input: Input) => Command<A, R>;
+  readonly cancel: Command<A>;
+  readonly idle: Field;
+  readonly pending: Field;
+  readonly resolved: (value: Success) => Field;
+  readonly rejected: (error: unknown) => Field;
+}
+
+/** @internal A value carrying a {@link TaskBinding}: every `Task` operation. */
+export interface TaskCarrier<B> {
+  readonly [taskBinding]: B;
+}
+
+/** @internal Brand `value` with the binding `define`'s `tasks` slot reads. */
+export const bindTask = <T extends object, B>(value: T, binding: B): T & TaskCarrier<B> =>
+  Object.assign(value, { [taskBinding]: binding });
+
+/**
+ * What `define`'s `tasks` slot takes under each key: an internal `Task`
+ * operation. `Task.output` is refused by the channel, since an announced
+ * operation's actions never reach the fold that would write its field.
+ *
+ * `never` in the input position: a bound operation's `run` takes its input,
+ * and a function over `never` is the one every such signature is
+ * assignable to.
+ */
+export type AnyTaskOperation = TaskCarrier<TaskBinding<any, any, any, never, any, "internal">>;
+
+/** The `tasks` slot: field key to operation. */
+export type TaskSlots = { readonly [key: string]: AnyTaskOperation };
+
+type BindingOf<T> = T extends TaskCarrier<infer B> ? B : never;
+
+type FieldOfBinding<B> = B extends TaskBinding<infer F, any, any, never, any, Channel> ? F : never;
+
+type ActionOfBinding<B> =
+  B extends TaskBinding<any, any, infer A extends Tagged, never, any, Channel> ? A : never;
+
+/** The state fields a `tasks` slot adds: one `TaskValue` per key. */
+export type TaskFields<TS> = {
+  readonly [K in keyof TS]: FieldOfBinding<BindingOf<TS[K]>>;
+};
+
+/** The actions a `tasks` slot adds: each operation's `Resolved` and `Rejected`. */
+export type TaskActionsOf<TS> = ActionOfBinding<BindingOf<TS[keyof TS]>>;
+
+/** `State` with the slot's fields, or `State` itself for a feature with no tasks. */
+export type WithTasks<State, TS> = [keyof TS] extends [never]
+  ? State
+  : Simplify<State & TaskFields<TS>>;
+
+/** What `initialState` returns: the state without the slot's fields, which start `Idle`. */
+export type InitialStateOf<State, TS> = [keyof TS] extends [never] ? State : Omit<State, keyof TS>;
+
+/**
+ * One slot task, as `snapshot.tasks.<key>` hands it to a reducer handler.
+ * Both methods write the field into `snapshot.draft` and return the draft
+ * beside the operation's command, so the call is the handler's return, or
+ * the draft is written further before it is returned.
+ *
+ * `start` takes what the operation's `run` takes: its input, or the effect
+ * for an operation declared without `run`. The command carries the
+ * operation's `R`, so `ServicesOf` reads it off the handler's return.
+ */
+export type TaskHandle<B, D> =
+  B extends TaskBinding<any, infer S, infer A, infer I, infer R, Channel>
+    ? {
+        /**
+         * Write `Pending` and issue the work. Under `mode: "first"`, a start
+         * while the field is `Pending` writes nothing and issues
+         * `Command.none`.
+         */
+        readonly start: [I] extends [never]
+          ? <V extends S, E = never, R2 = never>(
+              effect: Effect.Effect<V, E, R2>,
+            ) => readonly [D, Command<A, R2>]
+          : (input: I) => readonly [D, Command<A, R>];
+
+        /** Write `Idle` and interrupt the work in flight. */
+        readonly cancel: () => readonly [D, Command<A>];
+      }
+    : never;
+
+/** `snapshot.tasks`: one {@link TaskHandle} per key of the `tasks` slot. */
+export type TaskHandles<TS, State> = {
+  readonly [K in keyof TS]: TaskHandle<BindingOf<TS[K]>, Draft<State>>;
+};
+
+/** A task key may not name a field the state schema already declares. */
+export type NoTaskCollision<StateSchema extends AnyStateSchema, TS> = [
+  Extract<keyof TS, keyof StateOf<StateSchema>>,
+] extends [never]
+  ? unknown
+  : never;
+
+/**
+ * Two keys may not share tags, which is what one operation under two keys
+ * looks like to the types. `never` lands on each offending key.
+ */
+export type NoDuplicateTaskTags<TS> = {
+  readonly [K in keyof TS]: [
+    Extract<TaskActionsOf<Pick<TS, K>>["_tag"], TaskActionsOf<Omit<TS, K>>["_tag"]>,
+  ] extends [never]
+    ? unknown
+    : never;
+};
+
 /** One source that is not an array: a message, a `Task`, or a record of messages. */
 export type MemberLeaf<Ch extends Channel> =
   | AnyMessage<Ch>
@@ -439,6 +565,57 @@ const tagsIn = (
     seen.add(tag);
     return tag;
   });
+
+/**
+ * The `tasks` slot, checked: every value is an internal `Task` operation,
+ * no key is a state field, no operation sits under two keys, and no tag is
+ * one `seen` already holds from `actions` and `outputs`. The types hold
+ * each of these where they can see it; this holds them for a slot that got
+ * past the types.
+ */
+const slotTasks = (
+  spec: { readonly state: AnyStateSchema; readonly tasks?: Readonly<Record<string, unknown>> },
+  seen: Set<string>,
+): ReadonlyArray<SlotTask> => {
+  const tasks = spec.tasks;
+  if (tasks === undefined) return [];
+  const declared = new Set(seen);
+  const keyOf = new Map<unknown, string>();
+  return Object.keys(tasks).map((key) => {
+    const operation = tasks[key];
+    if (
+      typeof operation !== "object" ||
+      operation === null ||
+      !Object.hasOwn(operation, taskBinding)
+    ) {
+      throw new TypeError(`define: tasks.${key} is not a Task operation`);
+    }
+    const binding = (operation as TaskCarrier<SlotTask["binding"]>)[taskBinding];
+    if (binding.channel !== "internal") {
+      throw new TypeError(
+        `define: tasks.${key} is a Task.output operation; its actions never reach the fold that would write the field`,
+      );
+    }
+    if (Object.hasOwn(spec.state.fields, key)) {
+      throw new TypeError(`define: tasks.${key} is also a field of the state schema`);
+    }
+    const other = keyOf.get(operation);
+    if (other !== undefined) {
+      throw new TypeError(`define: one Task operation is under two keys, "${other}" and "${key}"`);
+    }
+    keyOf.set(operation, key);
+    for (const tag of [binding.resolvedTag, binding.rejectedTag]) {
+      if (declared.has(tag)) {
+        throw new TypeError(
+          `define: tag "${tag}" of tasks.${key} is also declared in "actions" or "outputs"`,
+        );
+      }
+      if (seen.has(tag)) throw new TypeError(`define: tag "${tag}" is declared twice`);
+      seen.add(tag);
+    }
+    return { key, binding };
+  });
+};
 
 // ---------------------------------------------------------------------------
 // Commands
@@ -1061,14 +1238,28 @@ export interface Snapshot<Props, State, H extends AnyHooks> {
  * no-op. Returning any other state discards the draft, and throws if the
  * draft was written to. `render` and `subscriptions` see a plain
  * `Snapshot`: neither is a place to change state.
+ *
+ * `tasks` holds one handle per key of `define`'s `tasks` slot, `{}` for a
+ * feature without one. A handle writes into `draft`, so it is read on the
+ * same terms: made on first read, and part of the one draft the handler
+ * returns.
  */
-export interface ReducerSnapshot<Props, State, H extends AnyHooks> extends Snapshot<
+export interface ReducerSnapshot<Props, State, H extends AnyHooks, TS = {}> extends Snapshot<
   Props,
   State,
   H
 > {
   readonly draft: Draft<State>;
+  readonly tasks: TaskHandles<TS, State>;
 }
+
+/** @internal One slot task, as `define` hands it to the fold: its key and binding. */
+type SlotTask = {
+  readonly key: string;
+  readonly binding: TaskBinding<unknown, unknown, unknown, unknown, unknown, Channel>;
+};
+
+const NO_TASKS: {} = Object.freeze({});
 
 /**
  * The one snapshot a handler is called with. The getter is on the
@@ -1076,24 +1267,63 @@ export interface ReducerSnapshot<Props, State, H extends AnyHooks> extends Snaps
  * fold, twenty times the price of the fold itself; on a prototype it is a
  * property lookup.
  */
-class FoldSnapshot<Props, State, H extends AnyHooks> implements ReducerSnapshot<Props, State, H> {
+class FoldSnapshot<Props, State, H extends AnyHooks> implements ReducerSnapshot<
+  Props,
+  State,
+  H,
+  TaskSlots
+> {
   #handle: DraftHandle<State> | undefined;
+  #tasks: TaskHandles<TaskSlots, State> | undefined;
   readonly #drafter: DrafterService;
+  readonly #slots: ReadonlyArray<SlotTask>;
 
   // Own keys stay `state`, `props`, `hooks`: the snapshot is the one object
   // this module claims is entirely encodable, and `Object.keys` is how a
-  // test checks that. `draft` is on the prototype; the drafter is private.
+  // test checks that. `draft` and `tasks` are on the prototype; the drafter
+  // and the slot tasks are private.
   constructor(
     readonly state: State,
     readonly props: Props,
     readonly hooks: H,
     drafter: DrafterService,
+    slots: ReadonlyArray<SlotTask>,
   ) {
     this.#drafter = drafter;
+    this.#slots = slots;
   }
 
   get draft(): Draft<State> {
     return (this.#handle ??= openDraft(this.#drafter, this.state)).draft;
+  }
+
+  /**
+   * The handles, built on first read. Each reads and writes its field
+   * through `draft`, so a handle called after the handler wrote other
+   * fields returns the one draft holding both.
+   */
+  get tasks(): TaskHandles<TaskSlots, State> {
+    if (this.#tasks !== undefined) return this.#tasks;
+    if (this.#slots.length === 0) return (this.#tasks = NO_TASKS);
+    const handles: Record<string, unknown> = {};
+    for (const { key, binding } of this.#slots) {
+      const field = (): Record<string, unknown> => this.draft as Record<string, unknown>;
+      handles[key] = {
+        start: (input: unknown) => {
+          const draft = field();
+          const current = draft[key] as { readonly _tag?: unknown } | undefined;
+          if (binding.first && current?._tag === "Pending") return [draft, Command.none];
+          draft[key] = binding.pending;
+          return [draft, binding.run(input)];
+        },
+        cancel: () => {
+          const draft = field();
+          draft[key] = binding.idle;
+          return [draft, binding.cancel];
+        },
+      };
+    }
+    return (this.#tasks = Object.freeze(handles) as TaskHandles<TaskSlots, State>);
   }
 
   /**
@@ -1187,17 +1417,17 @@ export type LifecycleAction<Props, H extends AnyHooks> =
  * One handler, in the shape every other handler has. The action shape comes from
  * `LifecycleAction`, so there is one place a lifecycle action is described.
  */
-type LifecycleHandler<Tag extends LifecycleTag, Props, State, Action, H extends AnyHooks, R> = (
+type LifecycleHandler<Tag extends LifecycleTag, Props, State, Action, H extends AnyHooks, R, TS> = (
   payload: Simplify<Omit<Extract<LifecycleAction<Props, H>, { readonly _tag: Tag }>, "_tag">>,
-  snapshot: ReducerSnapshot<Props, State, H>,
+  snapshot: ReducerSnapshot<Props, State, H, TS>,
 ) => Next<State, Action, R>;
 
 /**
  * Actions the runtime raises. All optional.
  */
-export interface LifecycleHandlers<Props, State, Action, H extends AnyHooks, R = never> {
+export interface LifecycleHandlers<Props, State, Action, H extends AnyHooks, R = never, TS = {}> {
   /** Fires once, after the initial state exists. Where startup commands live. */
-  readonly Mounted?: LifecycleHandler<"Mounted", Props, State, Action, H, R>;
+  readonly Mounted?: LifecycleHandler<"Mounted", Props, State, Action, H, R, TS>;
 
   /**
    * Fires when props change **by value** (`Schema.toEquivalence`), so an
@@ -1205,12 +1435,12 @@ export interface LifecycleHandlers<Props, State, Action, H extends AnyHooks, R =
    * carried the props commits, never for a render React abandons. Returning
    * the same state reference is the no-op.
    */
-  readonly PropsChanged?: LifecycleHandler<"PropsChanged", Props, State, Action, H, R>;
+  readonly PropsChanged?: LifecycleHandler<"PropsChanged", Props, State, Action, H, R, TS>;
 
   /**
    * Fires whenever any hook's value changes, whole-object like `PropsChanged`.
    */
-  readonly HookChanged?: LifecycleHandler<"HookChanged", Props, State, Action, H, R>;
+  readonly HookChanged?: LifecycleHandler<"HookChanged", Props, State, Action, H, R, TS>;
 
   /**
    * Commands cannot fail, but they can still *die*; a handler can throw; and
@@ -1218,7 +1448,7 @@ export interface LifecycleHandlers<Props, State, Action, H extends AnyHooks, R =
    * unhandled, the defect is rethrown into the nearest React error boundary.
    * `error` is the squashed cause; `cause` is always `Cause.die(error)`.
    */
-  readonly Error?: LifecycleHandler<"Error", Props, State, Action, H, R>;
+  readonly Error?: LifecycleHandler<"Error", Props, State, Action, H, R, TS>;
 
   /**
    * The component is gone, so the runtime reads `Next.command(…)` and
@@ -1226,7 +1456,7 @@ export interface LifecycleHandlers<Props, State, Action, H extends AnyHooks, R =
    * command. `feature.reduce` discards identically, so a teardown test
    * folded through `reduce` cannot disagree with the runtime.
    */
-  readonly Unmounted?: LifecycleHandler<"Unmounted", Props, State, Action, H, R>;
+  readonly Unmounted?: LifecycleHandler<"Unmounted", Props, State, Action, H, R, TS>;
 }
 
 // ---------------------------------------------------------------------------
@@ -1258,7 +1488,9 @@ export type Exhaustive<U, State, Allowed extends string = string> = {
 /**
  * Exhaustive over the declared actions; lifecycle handlers stay optional; output
  * tags are absent from the key set, so writing a handler for one is a compile
- * error.
+ * error. The settle tags of a `tasks` slot (`TS`) are optional too: the fold
+ * writes the field itself, and a handler written for one runs after that
+ * write.
  *
  * A handler receives the action's **payload** — `_tag` stripped, on the same
  * terms as an output crossing into its `on<Tag>` prop: the handler's own key
@@ -1273,12 +1505,22 @@ export type Reducer<
   O extends Tagged,
   H extends AnyHooks,
   R = never,
-> = {
-  readonly [K in A["_tag"]]: (
+  TS = {},
+> = ActionHandlers<Props, State, A, O, H, R, TS> &
+  LifecycleHandlers<Props, State, Emit<A, O>, H, R, TS>;
+
+/** The action handlers: required per declared tag, optional per settle tag of a slot task. */
+type ActionHandlers<Props, State, A extends Tagged, O extends Tagged, H extends AnyHooks, R, TS> = {
+  readonly [K in Exclude<A["_tag"], TaskActionsOf<TS>["_tag"]>]: (
     payload: Simplify<Omit<Extract<A, { readonly _tag: K }>, "_tag">>,
-    snapshot: ReducerSnapshot<Props, State, H>,
+    snapshot: ReducerSnapshot<Props, State, H, TS>,
   ) => Next<State, Emit<A, O>, R>;
-} & LifecycleHandlers<Props, State, Emit<A, O>, H, R>;
+} & {
+  readonly [K in TaskActionsOf<TS>["_tag"]]?: (
+    payload: Simplify<Omit<Extract<A, { readonly _tag: K }>, "_tag">>,
+    snapshot: ReducerSnapshot<Props, State, H, TS>,
+  ) => Next<State, Emit<A, O>, R>;
+};
 
 const internals: unique symbol = Symbol("@wych/internals");
 
@@ -1449,10 +1691,17 @@ export interface FeatureDefinition<
   A extends Tagged,
   O extends Tagged,
   H extends AnyHooks,
+  TS = {},
 > {
-  readonly initialState: (initialState: (props: Props) => State) => (props: Props) => State;
+  /**
+   * The initial state, without the `tasks` slot's fields: the runtime fills
+   * each with `Task.idle`, then spreads this state over them.
+   */
+  readonly initialState: (
+    initialState: (props: Props) => InitialStateOf<State, TS>,
+  ) => (props: Props) => InitialStateOf<State, TS>;
 
-  readonly reducer: <U extends Reducer<Props, State, A, O, H, any>>(
+  readonly reducer: <U extends Reducer<Props, State, A, O, H, any, TS>>(
     reducer: U & Exhaustive<U, State, A["_tag"] | LifecycleTag>,
   ) => U;
 
@@ -1484,13 +1733,35 @@ export interface FeatureDefinition<
    * the record's values and unioned into the feature's `R`, so a service a
    * subscription needs is a compile error at `component`.
    */
-  readonly create: <U extends Reducer<Props, State, A, O, H, any>, SR = never>(parts: {
-    readonly initialState: (props: Props) => State;
+  readonly create: <U extends Reducer<Props, State, A, O, H, any, TS>, SR = never>(parts: {
+    readonly initialState: (props: Props) => InitialStateOf<State, TS>;
     readonly reducer: U & Exhaustive<U, State, A["_tag"] | LifecycleTag>;
     readonly render: Render<Props, State, Emit<A, O>, H>;
     readonly subscriptions?: SubscriptionsHook<Props, State, H, Emit<A, O>, SR>;
   }) => Feature<Props, State, A, O, H, ServicesOf<U> | SR>;
 }
+
+/** Where a settle action lands: the slot key, the payload field, and the value it becomes. */
+type Settle = {
+  readonly key: string;
+  readonly field: "value" | "error";
+  readonly write: (x: unknown) => unknown;
+};
+
+/**
+ * The state with a settle action's field written, through a draft of its
+ * own: the same drafter, so the result is frozen as any folded state is.
+ */
+const settled = (
+  settle: Settle,
+  action: { readonly _tag: string; readonly [field: string]: unknown },
+  state: unknown,
+  drafter: DrafterService,
+): unknown => {
+  const handle = openDraft(drafter, state);
+  (handle.draft as Record<string, unknown>)[settle.key] = settle.write(action[settle.field]);
+  return closeDraft(handle);
+};
 
 /**
  * Declare what a feature is made of, then build it.
@@ -1503,12 +1774,27 @@ export interface FeatureDefinition<
  *     const Cart = define({
  *       props: Props,
  *       state: State,
- *       actions: [actions, checkout],
+ *       tasks: { checkout },
+ *       actions,
  *       outputs: OrderPlaced,
  *       useUnsafeHooks: …,
  *     })
  *
  *     export const cart = Cart.create({ initialState, reducer, render })
+ *
+ * `tasks` binds each `Task` operation to a state field of its own, under
+ * its key. The key adds a `TaskValue` field to `State`, typed and
+ * validated by the operation's `schema`, and the operation's two actions to
+ * the action union. The field starts `Idle`, so `initialState` leaves it
+ * out. Settling writes `Resolved` or `Rejected` into the field before the
+ * reducer's settle handler runs, which makes that handler optional. A
+ * handler starts and cancels the work through `snapshot.tasks.<key>`.
+ *
+ * Each of these throws a `TypeError` here, and each is a compile error
+ * where the types can see it: a task key that is also a state field; a task
+ * tag also declared in `actions` or `outputs`, which is also what one
+ * operation in both `tasks` and `actions` looks like; one operation under
+ * two keys; and a `Task.output` operation in `tasks`.
  */
 export const define: <
   PropsSchema extends AnyPropsSchema,
@@ -1516,39 +1802,35 @@ export const define: <
   const AS extends MemberSource<"internal">,
   const OS extends MemberSource<"outbound"> = readonly [],
   H extends AnyHooks = {},
+  const TS extends TaskSlots = {},
 >(spec: {
   readonly props: PropsSchema;
   readonly state: StateSchema;
+  readonly tasks?: TS &
+    NoTaskCollision<StateSchema, TS> &
+    NoDuplicateTaskTags<TS> &
+    Disjoint<MembersOf<AS> | MembersOf<OS>, TaskActionsOf<TS>>;
   readonly actions: AS;
   readonly outputs?: OS &
     Disjoint<MembersOf<AS>, MembersOf<OS>> &
     NoPropCollision<PropsSchema, MembersOf<OS>>;
 
-  readonly useUnsafeHooks?: HookSpec<PropsOf<PropsSchema>, StateOf<StateSchema>, H>;
+  readonly useUnsafeHooks?: HookSpec<PropsOf<PropsSchema>, WithTasks<StateOf<StateSchema>, TS>, H>;
 }) => FeatureDefinition<
   PropsOf<PropsSchema>,
-  StateOf<StateSchema>,
-  MembersOf<AS>,
+  WithTasks<StateOf<StateSchema>, TS>,
+  MembersOf<AS> | TaskActionsOf<TS>,
   MembersOf<OS>,
-  H
+  H,
+  TS
 > = ((spec: {
   readonly props: AnyPropsSchema;
   readonly state: AnyStateSchema;
+  readonly tasks?: Readonly<Record<string, unknown>>;
   readonly actions: unknown;
   readonly outputs?: unknown;
   readonly useUnsafeHooks?: HookSpec<any, any, any>;
-}): FeatureDefinition<any, any, any, any, any> => {
-  // Opaque declarations (`Children`) are redacted only in `PropsChanged`
-  // events; state reaches devtools transitions verbatim. Refusing them here
-  // keeps the "every event is encodable" contract honest.
-  const opaqueState = opaqueProps(spec.state as AnyPropsSchema);
-  if (opaqueState.length > 0) {
-    throw new TypeError(
-      `Opaque field "${opaqueState[0][0]}" declared in the state schema; ` +
-        "opaque declarations like Children belong in props",
-    );
-  }
-
+}): FeatureDefinition<any, any, any, any, any, any> => {
   // The slot types already hold both checks; these catch a source that got
   // past them through a cast, where a wrong channel would route an action
   // out through a prop, or an output into the reducer.
@@ -1556,6 +1838,34 @@ export const define: <
   tagsIn(spec.actions, "internal", "actions", seen);
   const outputTags =
     spec.outputs === undefined ? [] : tagsIn(spec.outputs, "outbound", "outputs", seen);
+
+  const slots = slotTasks(spec, seen);
+  const state =
+    slots.length === 0
+      ? spec.state
+      : Schema.Struct({
+          ...spec.state.fields,
+          ...Object.fromEntries(slots.map(({ key, binding }) => [key, binding.schema])),
+        });
+
+  // Opaque declarations (`Children`) are redacted only in `PropsChanged`
+  // events; state reaches devtools transitions verbatim. Refusing them here
+  // keeps the "every event is encodable" contract honest.
+  const opaqueState = opaqueProps(state);
+  if (opaqueState.length > 0) {
+    throw new TypeError(
+      `Opaque field "${opaqueState[0][0]}" declared in the state schema; ` +
+        "opaque declarations like Children belong in props",
+    );
+  }
+
+  // Settle tag to the field it writes and how.
+  const settles = new Map<string, Settle>();
+  for (const { key, binding } of slots) {
+    settles.set(binding.resolvedTag, { key, field: "value", write: binding.resolved });
+    settles.set(binding.rejectedTag, { key, field: "error", write: binding.rejected });
+  }
+  const idles = Object.fromEntries(slots.map(({ key, binding }) => [key, binding.idle]));
 
   return {
     initialState: (initialState) => (props) => initialState(props),
@@ -1566,6 +1876,11 @@ export const define: <
       const outputTagSet = new Set(outputTags);
       const subscriptions: SubscriptionsHook<any, any, any, any, any> =
         parts.subscriptions ?? (() => NO_SUBSCRIPTIONS);
+      // The slot's fields start `Idle`, under whatever the feature returns.
+      const initialState: (props: any) => any =
+        slots.length === 0
+          ? parts.initialState
+          : (props) => ({ ...idles, ...parts.initialState(props) });
 
       /**
        * A missing handler is the documented no-op only for a *lifecycle* tag —
@@ -1584,13 +1899,20 @@ export const define: <
         drafter: DrafterService = mutativeDrafter,
       ): Next<any, any, any> => {
         const handler = handlerFor(parts.reducer, action._tag);
+        const settle = settles.size === 0 ? undefined : settles.get(action._tag);
         if (handler) {
           // The handler key already did the discrimination, so the tag is
           // spent — stripped on the same terms as `emit` strips it for the
           // `on<Tag>` prop. What the handler holds cannot smuggle a tag into
           // state or a command's payload.
           const { _tag, ...payload } = action;
-          const fold = new FoldSnapshot(snapshot.state, snapshot.props, snapshot.hooks, drafter);
+          // A settle handler folds over the state with its field already
+          // written, so returning `snapshot.state` is the field write alone.
+          const state =
+            settle === undefined
+              ? snapshot.state
+              : settled(settle, action, snapshot.state, drafter);
+          const fold = new FoldSnapshot(state, snapshot.props, snapshot.hooks, drafter, slots);
           // `finish` runs whether or not the handler threw: an open draft
           // must be closed and unbooked before the defect propagates.
           let next: Next<any, any, any>;
@@ -1605,20 +1927,21 @@ export const define: <
           const command = Next.command(next);
           return command === undefined ? snapshot.state : [snapshot.state, command];
         }
+        if (settle !== undefined) return settled(settle, action, snapshot.state, drafter);
         if (isLifecycleTag(action._tag)) return snapshot.state;
         throw new TypeError(`No reducer handler for action "${action._tag}"`);
       };
 
       return {
         [internals]: {
-          initialState: parts.initialState,
+          initialState,
           render: parts.render,
           useUnsafeHooks: spec.useUnsafeHooks,
           subscribes: parts.subscriptions !== undefined,
           props: Schema.toType(spec.props),
           outputTags,
           opaqueProps: opaqueProps(spec.props),
-          handles: (tag) => handlerFor(parts.reducer, tag) !== undefined,
+          handles: (tag) => handlerFor(parts.reducer, tag) !== undefined || settles.has(tag),
         },
 
         reduce,
@@ -1643,7 +1966,7 @@ export const define: <
               const snapshot = { props: options.props, hooks: options.hooks };
               // Total: a `Reference` reads its default when the layer has none.
               const drafter = yield* Effect.service(Drafter);
-              let state = parts.initialState(options.props);
+              let state = initialState(options.props);
 
               for (const action of actions) {
                 yield* Queue.offer(queue, { msg: action, origin: "seed" });

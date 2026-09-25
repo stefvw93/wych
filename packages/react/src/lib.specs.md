@@ -359,6 +359,40 @@ drafter and to `Draft<T>`: same value, same type, still immutable.
 wrapper, and `Drafter` as a required service with `mutative` an optional
 peer.
 
+## `snapshot.tasks`, the slot tasks' handles
+
+`define({ tasks: { save: saveNote } })` binds a `Task` operation to a state
+field under its key; `task.specs.md` holds the slot's semantics and its
+clash rules. What it changes here:
+
+- **`define`.** `State` is `StateOf<StateSchema> & TaskFields<TS>`
+  (simplified; the schema's own type when the slot is empty), and the action
+  union gains `TaskActionsOf<TS>`. The runtime extends the state schema with
+  each `op.schema`, checks the slot, and builds a settle map from each
+  operation's two tags to its key.
+- **`FeatureDefinition` / `Reducer` / `LifecycleHandlers`** take a trailing
+  `TS = {}`. The task tags are optional reducer keys; `Exhaustive` allows
+  them because they are in `A`. `initialState` returns
+  `InitialStateOf<State, TS>`, the state without the task keys, and the
+  runtime spreads it over one `Task.idle` per key.
+- **`reduce`.** For a settle tag, the field is written through a draft of
+  its own (the same drafter, so the result is frozen), then the handler, if
+  there is one, folds over that state on the finishing rules above; with no
+  handler the written state is the result. `handles(tag)` is true for a
+  settle tag either way.
+- **`ReducerSnapshot<Props, State, H, TS = {}>`** gains
+  `tasks: TaskHandles<TS, State>`. `tasks` is a second prototype getter on
+  `FoldSnapshot`, built on first read and cached for the fold, so the own
+  keys stay `state`, `props`, `hooks`. Each handle writes through `draft`,
+  so what it writes and what the handler writes finish as one state. A
+  feature with no slot hands a frozen `{}`.
+
+`render` and `subscriptions` get no handles, for the reason they get no
+draft. `subscriptions` also stays on `create` rather than moving to `define`
+beside `tasks`: it is a function of the snapshot, while the task binding is
+a static declaration the state, reducer and snapshot types are all read
+from.
+
 ## Acceptance Criteria
 
 `[x]` holds today. The command-leaf pass landed, and what it did not do is in
@@ -423,6 +457,14 @@ landed with every box checked again.
 - [x] A handler that throws with a draft open still closes it: the proxy is revoked and the handler's own error propagates.
 - [x] `Task.start(draft, key, command)` writes `Pending` into the draft and returns the draft, so its result is the finished state; given a plain state it spreads as before.
 - [x] The snapshot's own keys are `state`, `props`, `hooks`; `draft` is reachable and lives on the prototype; the drafter is not reachable.
+
+### `snapshot.tasks` and the `tasks` slot
+
+- [x] `define({ tasks })` adds one `TaskValue` field per key and fills it with `Task.idle` under the feature's initial state, which is spread on top.
+- [x] `reduce` writes a settle tag's field before the handler runs, and with no handler returns the written state; a handler returning `snapshot.state` returns the field write alone.
+- [x] `snapshot.tasks.<key>.start` / `.cancel()` write `Pending` / `Idle` into the draft and return `[draft, command]`; under `mode: "first"` a start while `Pending` returns `[snapshot.state, Command.none]`.
+- [x] `snapshot.tasks` is on the prototype: the snapshot's own keys stay `state`, `props`, `hooks`, and a feature without a slot hands `{}`.
+- [x] `define` throws a `TypeError` for each clash rule in `task.specs.md`.
 - [x] `reduce` drafts with its optional third argument, `run` with the `Drafter` in `options.layer`, the store with the `Drafter` in the root runtime; each defaults to `mutativeDrafter`.
 
 ### `Feature.run`
@@ -507,6 +549,7 @@ landed with every box checked again.
 - [x] `Task.start` and `Next.lazy` accept a draft; `Task.start`'s key is still constrained to the task fields; the lazy thunk's parameter is the draft's type. `Exhaustive` reports no excess for a drafting handler.
 - [x] A command returned beside a draft still carries `R` to `component`.
 - [x] `render` and `subscriptions` snapshots have no `draft`.
+- [x] `ReducerSnapshot`'s `tasks` is `TaskHandles<TS, State>`, `{}` without a slot; the `tasks` slot's types (merged `State`, `initialState` without the task keys, optional settle keys, `start`'s input and `R`, the clash guards) are pinned in `task.tst.ts`.
 - [x] `reduce` accepts an optional `DrafterService`; `drafterLayer(…)` is `Layer.Layer<never>`.
 
 **How `A` reaches the leaf.** `A` appears only inside `Dispatcher<A>`, in a

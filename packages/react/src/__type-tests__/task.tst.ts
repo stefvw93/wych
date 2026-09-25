@@ -1,7 +1,8 @@
-import { Context, Effect, Option, Schema } from "effect";
+import { Context, Effect, Layer, Option, Schema } from "effect";
 import { expect, test } from "tstyche";
 import { Task, type TaskValue } from "../utils/task";
 import { Action, Command, define, Next, type ServicesOf } from "../lib";
+import type { Draft } from "../draft";
 
 const Clicked = Action("Clicked", {});
 const Props = Schema.Struct({});
@@ -41,12 +42,22 @@ test("a lower-case name is rejected, the way an action tag is", () => {
   });
 });
 
-test("take-first is not a mode — it is a guard the handler writes", () => {
-  expect(Task).type.not.toBeCallableWith("Search", {
-    success: Schema.String,
-    onError: Task.errorMessage,
-    mode: "first",
-  });
+test("take-first is a mode, beside latest and every", () => {
+  expect(Task).type.toBeCallableWith("Search", { success: Schema.String, mode: "first" });
+  expect(Task).type.not.toBeCallableWith("Search", { success: Schema.String, mode: "last" });
+});
+
+test("`Resolved` and `Rejected` are the two message schemas, by name", () => {
+  const search = Task("Search", { success: Schema.Number });
+  expect(search.Resolved.make({ value: 1 })).type.toBe<{
+    readonly _tag: "SearchResolved";
+    readonly value: number;
+  }>();
+  expect(search.Rejected.make({ error: "no" })).type.toBe<{
+    readonly _tag: "SearchRejected";
+    readonly error: string;
+  }>();
+  expect(search.Resolved).type.toBe<(typeof search.actions)[0]>();
 });
 
 // ---------------------------------------------------------------------------
@@ -464,4 +475,238 @@ test("an announced operation has no `resolvedInto`", () => {
   const announced = Task.output("Announced", { success: Schema.String });
   expect(announced).type.not.toHaveProperty("resolvedInto");
   expect(announced).type.not.toHaveProperty("rejectedInto");
+});
+
+// ---------------------------------------------------------------------------
+// The `tasks` slot
+// ---------------------------------------------------------------------------
+
+const slot = (() => {
+  const saveNote = Task("Save", {
+    success: Schema.Number,
+    run: (note: { readonly id: string; readonly text: string }) =>
+      Effect.map(
+        Effect.flatMap(Api, (api) => api.load),
+        (loaded) => loaded.length + note.text.length,
+      ),
+  });
+  const loose = Task("Loose", { success: Schema.String });
+  const actions = Action({ SaveClicked: {}, Cancelled: {}, Typed: { text: Schema.String } });
+  const Saved = Action.output("Saved", { revision: Schema.Number });
+  const props = Schema.Struct({ noteId: Schema.String });
+  const state = Schema.Struct({ text: Schema.String, dirty: Schema.Boolean });
+  const Editor = define({
+    props,
+    state,
+    tasks: { save: saveNote, loose },
+    actions,
+    outputs: Saved,
+  });
+  return { saveNote, loose, actions, Saved, props, state, Editor };
+})();
+
+type EditorState = {
+  readonly text: string;
+  readonly dirty: boolean;
+  readonly save: TaskValue<number, string>;
+  readonly loose: TaskValue<string, string>;
+};
+
+test("each key adds its field to `State`, and `initialState` leaves the fields out", () => {
+  const { Editor } = slot;
+  const feature = Editor.create({
+    initialState: (props) => ({ text: props.noteId, dirty: false }),
+    reducer: {
+      SaveClicked: (_p, { state }) => state,
+      Cancelled: (_p, { state }) => state,
+      Typed: (_p, { state }) => state,
+    },
+    render: ({ state }) => {
+      expect(state).type.toBe<EditorState>();
+      return null;
+    },
+  });
+  expect(feature.reduce).type.toBeCallableWith(
+    { _tag: "Typed", text: "x" },
+    {
+      props: { noteId: "n" },
+      hooks: {},
+      state: { text: "", dirty: false, save: Task.idle, loose: Task.idle },
+    },
+  );
+  expect(Editor.initialState).type.toBeCallableWith(() => ({ text: "", dirty: false }));
+});
+
+test("the settle keys are optional, and a written one is typed and still checked", () => {
+  const { Editor, Saved } = slot;
+  Editor.create({
+    initialState: () => ({ text: "", dirty: false }),
+    render: () => null,
+    reducer: {
+      SaveClicked: (_p, { state }) => state,
+      Cancelled: (_p, { state }) => state,
+      Typed: (_p, { state }) => state,
+      SaveResolved: ({ value }, { draft, state }) => {
+        expect(value).type.toBe<number>();
+        expect(state.save).type.toBe<TaskValue<number, string>>();
+        expect(draft.save).type.toBe<Draft<TaskValue<number, string>>>();
+        draft.dirty = false;
+        return [draft, Command.output(Saved, { revision: value })];
+      },
+      LooseRejected: ({ error }, { state }) => {
+        expect(error).type.toBe<string>();
+        return state;
+      },
+    },
+  });
+
+  Editor.reducer({
+    SaveClicked: (_p, { state }) => state,
+    Cancelled: (_p, { state }) => state,
+    Typed: (_p, { state }) => state,
+    // @ts-expect-error state has no property bogus
+    LooseRejected: ({ error }, { state }) => ({ ...state, bogus: error }),
+  });
+
+  // A declared action is still required.
+  // @ts-expect-error Property 'Typed' is missing
+  Editor.reducer({
+    SaveClicked: (_p, { state }) => state,
+    Cancelled: (_p, { state }) => state,
+  });
+});
+
+test("`tasks.<key>.start` takes the operation's input, and its `R` reaches `ServicesOf`", () => {
+  const { Editor } = slot;
+  const reducer = Editor.reducer({
+    SaveClicked: (_p, { state, props, tasks }) =>
+      tasks.save.start({ id: props.noteId, text: state.text }),
+    Cancelled: (_p, { tasks }) => tasks.save.cancel(),
+    Typed: ({ text }, { draft }) => {
+      draft.text = text;
+      return draft;
+    },
+  });
+  expect<ServicesOf<typeof reducer>>().type.toBe<Api>();
+
+  const feature = Editor.create({
+    initialState: () => ({ text: "", dirty: false }),
+    reducer: {
+      SaveClicked: (_p, { state, props, tasks }) =>
+        tasks.save.start({ id: props.noteId, text: state.text }),
+      Cancelled: (_p, { tasks }) => tasks.save.cancel(),
+      Typed: (_p, { state }) => state,
+    },
+    render: () => null,
+  });
+  expect(feature.run).type.not.toBeCallableWith([], {
+    props: { noteId: "n" },
+    hooks: {},
+    layer: Layer.empty,
+  });
+
+  Editor.reducer({
+    SaveClicked: (_p, { tasks }) =>
+      // @ts-expect-error is not assignable
+      tasks.save.start({ id: 1, text: "" }),
+    Cancelled: (_p, { tasks }) => tasks.save.cancel(),
+    Typed: (_p, { state }) => state,
+  });
+});
+
+test("an unbound operation's `start` takes the effect, and no service leaks", () => {
+  const { Editor } = slot;
+  const quiet = Editor.reducer({
+    SaveClicked: (_p, { tasks }) => tasks.loose.start(Effect.succeed("x")),
+    Cancelled: (_p, { tasks }) => tasks.loose.cancel(),
+    Typed: ({ text }, { tasks, draft }) => {
+      draft.text = text;
+      return tasks.loose.start(Effect.succeed(text));
+    },
+  });
+  expect<ServicesOf<typeof quiet>>().type.toBe<never>();
+
+  const loud = Editor.reducer({
+    SaveClicked: (_p, { tasks }) => tasks.loose.start(Effect.flatMap(Api, (api) => api.load)),
+    Cancelled: (_p, { state }) => state,
+    Typed: (_p, { state }) => state,
+  });
+  expect<ServicesOf<typeof loud>>().type.toBe<Api>();
+
+  Editor.reducer({
+    SaveClicked: (_p, { tasks }) =>
+      // @ts-expect-error is not assignable
+      tasks.loose.start(Effect.succeed(1)),
+    Cancelled: (_p, { state }) => state,
+    Typed: (_p, { state }) => state,
+  });
+});
+
+test("lifecycle handlers get the handles too", () => {
+  const { Editor } = slot;
+  Editor.reducer({
+    SaveClicked: (_p, { state }) => state,
+    Cancelled: (_p, { state }) => state,
+    Typed: (_p, { state }) => state,
+    Mounted: (_p, { tasks }) => tasks.loose.start(Effect.succeed("ready")),
+  });
+});
+
+test("a feature without `tasks` has an empty `snapshot.tasks` and its own state", () => {
+  const { props, state, actions } = slot;
+  const Plain = define({ props, state, actions });
+  Plain.reducer({
+    SaveClicked: (_p, snapshot) => {
+      expect(snapshot.tasks).type.toBe<{}>();
+      expect(snapshot.state).type.toBe<{ readonly text: string; readonly dirty: boolean }>();
+      return snapshot.state;
+    },
+    Cancelled: (_p, { state }) => state,
+    Typed: (_p, { state }) => state,
+  });
+});
+
+test("the clash rules are compile errors", () => {
+  const { saveNote, loose, actions, props, state } = slot;
+
+  // A task key that is also a state field.
+  expect(define).type.not.toBeCallableWith({ props, state, tasks: { text: saveNote }, actions });
+
+  // A task tag that is also a declared output tag.
+  const SaveResolved = Action.output("SaveResolved", {});
+  expect(define).type.not.toBeCallableWith({
+    props,
+    state,
+    tasks: { save: saveNote },
+    actions,
+    outputs: SaveResolved,
+  });
+
+  // One operation under two keys.
+  expect(define).type.not.toBeCallableWith({
+    props,
+    state,
+    tasks: { a: saveNote, b: saveNote },
+    actions,
+  });
+
+  // One operation in both `tasks` and `actions`.
+  expect(define).type.not.toBeCallableWith({
+    props,
+    state,
+    tasks: { save: saveNote },
+    actions: [actions, saveNote],
+  });
+
+  // An announced operation.
+  const shout = Task.output("Shout", { success: Schema.String });
+  expect(define).type.not.toBeCallableWith({ props, state, tasks: { shout }, actions });
+
+  // The control.
+  expect(define).type.toBeCallableWith({
+    props,
+    state,
+    tasks: { a: saveNote, b: loose },
+    actions,
+  });
 });

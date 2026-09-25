@@ -14,6 +14,7 @@ import { act, StrictMode, useLayoutEffect, useState } from "react";
 import { expect, test, vi } from "vite-plus/test";
 import { click, container, ErrorBoundary, mount, text } from "./__fixtures__/dom";
 import { Action, Children, Command, createRuntime, define } from "./lib";
+import { Task } from "./utils/task";
 
 const { component } = createRuntime(Layer.empty);
 
@@ -851,4 +852,70 @@ test("two mounts of one component each hand their fragments their own snapshot",
   // Nearest mount wins: `a`'s fragment moved `a`'s state, and `b` saw nothing.
   expect(within("a", "inner-count")?.textContent).toBe("1");
   expect(within("b", "inner-count")?.textContent).toBe("0");
+});
+
+// ---------------------------------------------------------------------------
+// A task in the `tasks` slot, started and cancelled from clicks.
+// ---------------------------------------------------------------------------
+
+test("a slot task paints `Pending` on the click that starts it and `Idle` on the cancel", async () => {
+  let release: (revision: string) => void = () => {};
+  const gate = new Promise<string>((resolve) => {
+    release = resolve;
+  });
+  const save = Task("Save", { success: Schema.String, run: () => Effect.promise(() => gate) });
+  const actions = Action({ SaveClicked: {}, Cancelled: {} });
+  const Editor = define({
+    props: Schema.Struct({}),
+    state: Schema.Struct({}),
+    tasks: { save },
+    actions,
+  });
+  const EditorView = component(
+    Editor.create({
+      initialState: () => ({}),
+      reducer: {
+        SaveClicked: (_p, { tasks }) => tasks.save.start(),
+        Cancelled: (_p, { tasks }) => tasks.save.cancel(),
+      },
+      render: ({ state, dispatch }) => (
+        <div>
+          <span data-testid="save">
+            {Task.match(state.save, {
+              Idle: () => "idle",
+              Pending: () => "saving",
+              Resolved: ({ value }) => `saved ${value}`,
+              Rejected: ({ error }) => `failed ${error}`,
+            })}
+          </span>
+          <button data-testid="start" onClick={() => dispatch(actions.SaveClicked)}>
+            save
+          </button>
+          <button data-testid="cancel" onClick={() => dispatch(actions.Cancelled)}>
+            cancel
+          </button>
+        </div>
+      ),
+    }),
+    { name: "Editor" },
+  );
+
+  await mount(<EditorView />);
+  await vi.waitFor(() => expect(text("save")).toBe("idle"));
+
+  await click("start");
+  await vi.waitFor(() => expect(text("save")).toBe("saving"));
+
+  await click("cancel");
+  await vi.waitFor(() => expect(text("save")).toBe("idle"));
+
+  await click("start");
+  await vi.waitFor(() => expect(text("save")).toBe("saving"));
+  // The settle arrives from the command, outside any click, so it is flushed
+  // inside `act` like one.
+  await act(async () => {
+    release("r1");
+    await gate;
+  });
+  await vi.waitFor(() => expect(text("save")).toBe("saved r1"));
 });

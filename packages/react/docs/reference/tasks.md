@@ -173,7 +173,7 @@ const operation: TaskOperation<"LoadMail", typeof Subjects, Schema.String, strin
   loadMail;
 
 console.log(Object.keys(operation).sort());
-// => ["actions", "cancel", "into", "rejectedInto", "resolvedInto", "run", "schema"]
+// => ["Rejected", "Resolved", "actions", "cancel", "into", "rejectedInto", "resolvedInto", "run", "schema"]
 ```
 
 ### `actions`
@@ -429,7 +429,7 @@ const Announcer = define({
 });
 
 console.log(Object.keys(announceUpload).sort());
-// => ["actions", "cancel", "run", "schema"]
+// => ["Rejected", "Resolved", "actions", "cancel", "run", "schema"]
 ```
 
 The same operation with both actions on the outbound channel, so it goes into
