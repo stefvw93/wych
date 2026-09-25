@@ -5,6 +5,7 @@ import { drafterLayer, mutativeDrafter, type Draft } from "../draft";
 import { Task, type TaskValue } from "../utils/task";
 import {
   Action,
+  type AnyMessage,
   type AnyVocabulary,
   type ChannelOf,
   Children,
@@ -82,6 +83,46 @@ test("a reserved lifecycle tag cannot be declared as an action or output", () =>
   // rejections above are `NotLifecycleTag` and not a broken signature.
   expect(Action).type.toBeCallableWith("Mount", {});
   expect(Action.output).type.toBeCallableWith("Unmount", {});
+});
+
+test("`fields` is optional, and `make()` takes no argument only when nothing is required", () => {
+  const Reverted = Action("Reverted");
+  expect(Reverted.make()).type.toBe<{ readonly _tag: "Reverted" }>();
+  expect(Reverted.make({})).type.toBe<{ readonly _tag: "Reverted" }>();
+
+  const Typed = Action("Typed", { query: Schema.String });
+  expect(Typed.make).type.not.toBeCallableWith();
+  expect(Typed.make({ query: "a" })).type.toBe<{
+    readonly _tag: "Typed";
+    readonly query: string;
+  }>();
+
+  const Saved = Action.output("Saved");
+  expect(Saved.make()).type.toBe<{ readonly _tag: "Saved" }>();
+});
+
+test("the record form declares one message per key, tag from the key", () => {
+  const actions = Action({ Typed: { query: Schema.String }, Cleared: {} });
+  expect(actions.Typed.make({ query: "a" })).type.toBe<{
+    readonly _tag: "Typed";
+    readonly query: string;
+  }>();
+  expect(actions.Cleared.make()).type.toBe<{ readonly _tag: "Cleared" }>();
+  expect(actions.Typed).type.toBeAssignableTo<AnyMessage<"internal">>();
+  expect(actions.Typed).type.not.toBeAssignableTo<AnyMessage<"outbound">>();
+
+  const outputs = Action.output({ Saved: { id: Schema.String } });
+  expect(outputs.Saved).type.toBeAssignableTo<AnyMessage<"outbound">>();
+  expect(outputs.Saved).type.not.toBeAssignableTo<AnyMessage<"internal">>();
+});
+
+test("the record form rejects a lower-case key and a lifecycle key", () => {
+  // @ts-expect-error must be capitalized
+  Action({ typed: {} });
+  // @ts-expect-error is a reserved lifecycle tag
+  Action({ Mounted: {} });
+  // @ts-expect-error is a reserved lifecycle tag
+  Action.output({ Fine: {}, Unmounted: {} });
 });
 
 // ---------------------------------------------------------------------------

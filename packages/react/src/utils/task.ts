@@ -1,6 +1,6 @@
 import { Cause, Effect, Option, Schema } from "effect";
 import { isLiveDraft, type Draft } from "../draft";
-import { Action, Command, type LazyCommand, type Message } from "../lib";
+import { Action, Command, type LazyCommand, type Message, type MessageConstructor } from "../lib";
 
 // ---------------------------------------------------------------------------
 // Layer 1 — the vocabulary
@@ -546,7 +546,8 @@ const make = <Ch extends "internal" | "outbound">(ch: Ch) =>
     // this operation's `cancel` — nor the reverse.
     const group = `Task/${name}`;
 
-    const message_ = ch === "internal" ? Action : Action.output;
+    const message_: MessageConstructor<"internal" | "outbound"> =
+      ch === "internal" ? Action : Action.output;
     const Resolved = message_(resolvedTag, { value: schemas.success });
     const Rejected = message_(rejectedTag, { error: failure });
 

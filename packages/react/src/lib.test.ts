@@ -69,6 +69,27 @@ describe("vocabularies", () => {
     expect(channelOf(OutboundFoo)).toBe("outbound");
   });
 
+  it("an empty message needs no fields and no payload", () => {
+    const Reverted = Action("Reverted");
+    expect(Object.keys(Reverted.fields)).toEqual(["_tag"]);
+    expect(Reverted.make()).toEqual({ _tag: "Reverted" });
+    expect(Reverted.make()).toEqual(Reverted.make({}));
+    expect(Action.output("Saved").make()).toEqual({ _tag: "Saved" });
+  });
+
+  it("the record form declares one branded message per key, in key order, frozen", () => {
+    const actions = Action({ Typed: { query: Schema.String }, Cleared: {} });
+    expect(Object.keys(actions)).toEqual(["Typed", "Cleared"]);
+    expect(Object.isFrozen(actions)).toBe(true);
+    expect(actions.Typed.make({ query: "a" })).toEqual({ _tag: "Typed", query: "a" });
+    expect(actions.Cleared.make()).toEqual({ _tag: "Cleared" });
+    expect(channelOf(actions.Typed)).toBe("internal");
+
+    const outputs = Action.output({ Saved: { id: Schema.String } });
+    expect(outputs.Saved.make({ id: "n1" })).toEqual({ _tag: "Saved", id: "n1" });
+    expect(channelOf(outputs.Saved)).toBe("outbound");
+  });
+
   it("`.of` builds a tagged union exposing cases, guards, and match", () => {
     const Started = Action("Started", {});
     const Failed = Action("Failed", { reason: Schema.String });

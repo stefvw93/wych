@@ -95,11 +95,41 @@ const handlerFor = <Handler>(
 const channel: unique symbol = Symbol("@wych/channel");
 export type Channel = "internal" | "outbound";
 
+/**
+ * `make()` for a message whose fields are all optional, so an empty payload
+ * is not spelled `make({})`. Absent when a field is required.
+ */
+type EmptyMake<S extends Schema.Top> = {} extends S["~type.make.in"]
+  ? { make(input?: S["~type.make.in"], options?: Schema.MakeOptions): S["Type"] }
+  : {};
+
 export type Message<
   Tag extends Capitalize<string>,
   Fields extends Schema.Struct.Fields,
   Ch extends Channel,
-> = Schema.TaggedStruct<Tag, Fields> & { readonly [channel]: Ch };
+> = Schema.TaggedStruct<Tag, Fields> & { readonly [channel]: Ch } & EmptyMake<
+    Schema.TaggedStruct<Tag, Fields>
+  >;
+
+/**
+ * A record of messages declared at once, each keyed by its own tag: what
+ * `Action({ … })` returns.
+ */
+export type Messages<Defs extends Record<string, Schema.Struct.Fields>, Ch extends Channel> = {
+  readonly [K in keyof Defs & string]: Message<K & Capitalize<string>, Defs[K], Ch>;
+};
+
+/**
+ * The record form's key check, surfaced as an error string on the offending
+ * key: a tag is capitalized and is not one the runtime raises.
+ */
+export type ValidTags<Defs> = {
+  readonly [K in keyof Defs]: K extends LifecycleTag
+    ? `"${K & string}" is a reserved lifecycle tag`
+    : K extends Capitalize<string>
+      ? unknown
+      : `"${K & string}" must be capitalized`;
+};
 
 export type AnyMessage<Ch extends Channel> = Schema.Codec<any, any> & {
   readonly Type: { readonly _tag: string };
@@ -149,10 +179,21 @@ export type TagsOf<V extends AnyVocabulary<Channel>> = keyof V["cases"] & string
 export type MemberOf<V extends AnyVocabulary<Channel>> = V["Type"];
 
 export interface MessageConstructor<Ch extends Channel> {
-  <const Tag extends Capitalize<string>, const Fields extends Schema.Struct.Fields>(
+  /** One message. `fields` is optional: `Action("Reverted")` carries no payload. */
+  <const Tag extends Capitalize<string>, const Fields extends Schema.Struct.Fields = {}>(
     tag: Tag & NotLifecycleTag<Tag>,
-    fields: Fields,
+    fields?: Fields,
   ): Message<Tag, Fields, Ch>;
+
+  /**
+   * Several messages, each tag written once as a key:
+   *
+   *     const actions = Action({ Typed: { query: Schema.String }, Cleared: {} })
+   *     dispatch(actions.Typed, { query })
+   */
+  <const Defs extends Record<string, Schema.Struct.Fields>>(
+    defs: Defs & ValidTags<Defs>,
+  ): Messages<Defs, Ch>;
 }
 
 export interface Vocabularies extends MessageConstructor<"internal"> {
@@ -170,9 +211,26 @@ export interface Vocabularies extends MessageConstructor<"internal"> {
   ) => Vocabulary<Members, ChannelOf<Members>>;
 }
 
+const message = (ch: Channel, tag: string, fields: Schema.Struct.Fields = {}) => {
+  const schema = Schema.TaggedStruct(tag, fields);
+  const make = schema.make;
+  return Object.assign(schema, {
+    [channel]: ch,
+    make: (input?: object, options?: Schema.MakeOptions) => make((input ?? {}) as never, options),
+  });
+};
+
 export const messages = <Ch extends Channel>(ch: Ch) =>
-  function message(tag: string, fields: Schema.Struct.Fields) {
-    return Object.assign(Schema.TaggedStruct(tag, fields), { [channel]: ch });
+  function messages(
+    tagOrDefs: string | Record<string, Schema.Struct.Fields>,
+    fields?: Schema.Struct.Fields,
+  ) {
+    if (typeof tagOrDefs === "string") return message(ch, tagOrDefs, fields);
+    return Object.freeze(
+      Object.fromEntries(
+        Object.keys(tagOrDefs).map((tag) => [tag, message(ch, tag, tagOrDefs[tag])]),
+      ),
+    );
   };
 
 /**

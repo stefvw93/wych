@@ -368,6 +368,8 @@ landed with every box checked again.
 ### Vocabularies (`Action`, `Action.output`, `Action.of`)
 
 - [x] `Action("Tag", fields)` / `Action.output("Tag", fields)` constructs a `Schema.TaggedStruct` branded with its channel (`"internal"` vs `"outbound"`).
+- [x] `fields` is optional: `Action("Reverted")` is `Action("Reverted", {})`. A message whose fields are all optional has `make()` with no argument, equal to `make({})`; a message with a required field does not.
+- [x] `Action({ Tag: fields, … })` / `Action.output({ … })` is the record form: one branded message per key, the key as its tag, frozen, in key order. A lower-case key or a lifecycle key is a compile error naming the key.
 - [x] `Action.of([...])` builds a branded tagged union exposing `cases`, `guards`, `match`, `mapMembers`, and a `make` per case.
 - [x] `Action.of` infers the channel from its members' brand; there is no per-channel `of`.
 - [x] `Action.of` rejects a member list mixing channels, at the call rather than at `define`.
