@@ -74,7 +74,8 @@ the fold returns. Wych is that answer on React, with
 
 A feature is declared from values. Props and state are `Schema.Struct`s, and
 the actions are messages, one per tag. A `Task` declares the request as two
-actions, a command, and the schema of the field that holds the result.
+actions and a command; the `tasks` slot gives it the state field that holds
+the result, and `mode: "first"` is the double-submit rule.
 
 ```tsx
 import { Context, Effect, Layer, Schema } from "effect";
@@ -94,6 +95,7 @@ const SignedIn = Action.output("SignedIn", { userId: Schema.String });
 
 const login = Task("Login", {
   success: Schema.String,
+  mode: "first",
   run: (credentials: { readonly email: string; readonly password: string }) =>
     Effect.gen(function* () {
       const auth = yield* Auth;
@@ -103,19 +105,18 @@ const login = Task("Login", {
 
 const Login = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({
-    email: Schema.String,
-    password: Schema.String,
-    session: login.schema,
-  }),
-  actions: [actions, login],
+  state: Schema.Struct({ email: Schema.String, password: Schema.String }),
+  tasks: { session: login },
+  actions,
   outputs: SignedIn,
 });
 ```
 
 That block is the whole contract: what the feature holds, what it can do,
-what it tells its parent. The React version spread the same facts over four
-`useState` calls, a ref and a callback prop.
+what it tells its parent. `tasks: { session: login }` adds `session` to the
+state, a `TaskValue` that starts `Idle`, and the two settle actions to the
+reducer. The React version spread the same facts over four `useState` calls,
+a ref and a callback prop.
 
 The reducer is one pure function of `(payload, snapshot)`. A handler returns
 the next state, or the next state beside a `Command`.
@@ -128,7 +129,7 @@ sees the proxy.
 
 ```tsx continue
 const loginForm = Login.create({
-  initialState: () => ({ email: "", password: "", session: Task.idle }),
+  initialState: () => ({ email: "", password: "" }),
   reducer: {
     EmailTyped: ({ email }, { draft }) => {
       draft.email = email;
@@ -138,15 +139,9 @@ const loginForm = Login.create({
       draft.password = password;
       return draft;
     },
-    Submitted: (_payload, { draft, state }) =>
-      Task.isPending(state.session)
-        ? draft
-        : Task.start(draft, "session", login.run({ email: state.email, password: state.password })),
-    ...login.into("session"),
-    LoginResolved: login.resolvedInto("session", (userId, { draft }) => [
-      draft,
-      Command.output(SignedIn, { userId }),
-    ]),
+    Submitted: (_payload, { state, tasks }) =>
+      tasks.session.start({ email: state.email, password: state.password }),
+    LoginResolved: ({ value }, { state }) => [state, Command.output(SignedIn, { userId: value })],
   },
   render: ({ state, dispatch }) => (
     <form
@@ -172,17 +167,19 @@ const loginForm = Login.create({
 
 Every rule from the React version is in the reducer. `pending` and `error`
 are one field with four cases, so they cannot disagree. The double-submit
-guard reads the state the fold was handed, never a stale closure. The
+guard is `mode: "first"` on the task: `start` reads the field the fold was
+handed, never a stale closure, and does nothing while it is `Pending`. The
 `alive` ref is gone: state lives at the store, not the component, so a
 login that resolves after unmount folds safely into state nothing renders,
 instead of calling `setState` on a component that is gone.
 
 The `Submitted` handler does not sign in. It returns a description of signing
-in, and `Task.start` writes `Pending` beside it on the same fold. Who runs
-the description is the runtime's business. `...login.into("session")` writes
-the two settle handlers; `LoginResolved` after it does one more thing, so it
-is `login.resolvedInto`: the field is written into the draft, then the
-follow-up announces `SignedIn` beside it.
+in, and `tasks.session.start` writes `Pending` beside it on the same fold.
+Who runs the description is the runtime's business. When the request
+settles, the fold writes `Resolved` or `Rejected` into `session` before any
+handler runs. `LoginRejected` needs no handler; `LoginResolved` does one
+more thing, so it is written: it announces `SignedIn` beside the field
+write.
 
 ## One reducer, three readers
 
@@ -201,8 +198,8 @@ const ignored = loginForm.reduce(actions.Submitted.make(), pending);
 
 console.log(Next.state(ignored) === pending.state);
 // => true
-console.log(Next.command(ignored));
-// => undefined
+console.log(Next.command(ignored)?._tag);
+// => "None"
 ```
 
 `feature.run` folds a sequence, runs each command against a `Layer`, feeds
@@ -324,6 +321,14 @@ that needs a websocket, a presence feed or a `Stream.tick` declares it through
 a `subscriptions` hook on `create`, keyed on the snapshot; the runtime diffs
 the declared keys after every fold and starts or stops fibers to match. See
 [Subscriptions](/docs/reference/subscriptions) for the hook and the key rule.
+
+The split decides where each is declared. A task binding is static: its
+field, its two actions and its group are fixed before any state exists, so
+`tasks` sits on `define` beside the state schema and the vocabularies, and
+`initialState`, the reducer and the snapshot types all read it. A
+subscription set is a function of the snapshot, computed again after every
+fold, so `subscriptions` sits on `create` beside the reducer that produces
+those snapshots.
 
 `run` resolves at command quiescence: nothing queued, no command fiber in
 flight. A subscription fiber does not count. A subscription over a

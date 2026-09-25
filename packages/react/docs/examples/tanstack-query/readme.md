@@ -24,7 +24,8 @@ Split the two directions. The read path pulls `useQuery`'s result into the
 reducer through `useUnsafeHooks` (`src/note-editor.tsx`), so `HookChanged`
 folds a fetched note into `draft` the same way any other action does. The
 write path is a `Task` (`save`, also in `note-editor.tsx`) whose `run` reads
-the `Queries` service, saves, and calls `client.invalidateQueries`.
+the `Queries` service, saves, and calls `client.invalidateQueries`. The
+`tasks` slot on `define` binds it to the `save` state field.
 
 ```ts
 // src/queries.ts
@@ -68,8 +69,10 @@ HookChanged: ({ previous }, { draft, hooks }) => {
 },
 ```
 
-`Submitted` starts the `save` task. `save` declares no `failure`, so a
-rejection carries the error's message and needs no `onError`. On success the
+`Submitted` starts the `save` task through `tasks.save.start`, which writes
+`Pending` into the `save` field and returns the command beside it. `save`
+declares no `failure`, so a rejection carries the error's message and needs
+no `onError`; the fold writes it into the field with no handler. On success the
 task invalidates the note's query key, so `main.tsx`'s `Preview` component, a
 plain `useQuery` consumer on the same key with no Wych involved, refetches too:
 
@@ -86,15 +89,15 @@ run: ({ id, text }) =>
   }),
 ```
 
-`...save.into("save")` writes both settle handlers. `SaveResolved` after it
-is `save.resolvedInto`: the field is written into the draft first, then the
-follow-up adopts the saved text and announces `Saved` to the parent:
+The fold writes the saved text into `save` before `SaveResolved` runs, so
+the handler adopts the saved text as the draft and announces `Saved` to the
+parent:
 
 ```ts
-SaveResolved: save.resolvedInto("save", (text, { draft, props }) => {
-  draft.draft = text;
+SaveResolved: ({ value }, { draft, props }) => {
+  draft.draft = value;
   return [draft, Command.output(Saved, { id: props.noteId })];
-}),
+},
 ```
 
 `src/note-editor.test.ts` proves both paths need no React. The read path

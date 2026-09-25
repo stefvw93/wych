@@ -17,20 +17,17 @@ const loadNotes = Task("Load", {
 
 const List = define({
   props: Schema.Struct({ title: Schema.String, children: Schema.optionalKey(Children) }),
-  state: Schema.Struct({
-    notes: loadNotes.schema,
-    lastSaved: Schema.String,
-  }),
-  actions: [NoteSaved, loadNotes],
+  state: Schema.Struct({ lastSaved: Schema.String }),
+  tasks: { notes: loadNotes },
+  actions: NoteSaved,
 });
 
 const listReducer = List.reducer({
-  Mounted: (_payload, { draft }) => Task.start(draft, "notes", loadNotes.run()),
+  Mounted: (_payload, { tasks }) => tasks.notes.start(),
   NoteSaved: ({ id }, { draft }) => {
     draft.lastSaved = id;
     return draft;
   },
-  ...loadNotes.into("notes"),
 });
 
 const LastSaved = () => {
@@ -39,7 +36,7 @@ const LastSaved = () => {
 };
 
 const noteList = List.create({
-  initialState: () => ({ notes: Task.idle, lastSaved: "" }),
+  initialState: () => ({ lastSaved: "" }),
   reducer: listReducer,
   render: ({ state, props, dispatch }) => (
     <section>

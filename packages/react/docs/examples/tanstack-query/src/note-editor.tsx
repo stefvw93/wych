@@ -27,10 +27,13 @@ export const save = Task("Save", {
     }),
 });
 
+// `tasks: { save }` gives the task the `save` state field: it starts `Idle`,
+// `start` writes `Pending`, and the fold writes the settle into it.
 export const noteEditor = define({
   props: Schema.Struct({ noteId: Schema.String }),
-  state: Schema.Struct({ draft: Schema.String, save: save.schema }),
-  actions: [actions, save],
+  state: Schema.Struct({ draft: Schema.String }),
+  tasks: { save },
+  actions,
   outputs: Saved,
   /**
    * Read path: `useQuery` runs in render position. Only primitives are
@@ -45,7 +48,7 @@ export const noteEditor = define({
     return { text: query.data?.text, status: query.status };
   },
 }).create({
-  initialState: () => ({ draft: "", save: Task.idle }),
+  initialState: () => ({ draft: "" }),
   reducer: {
     // The cache filled or refetched: adopt the server text as the draft.
     HookChanged: ({ previous }, { draft, hooks }) => {
@@ -57,15 +60,14 @@ export const noteEditor = define({
       draft.draft = text;
       return draft;
     },
-    Submitted: (_payload, { draft, props }) =>
-      Task.start(draft, "save", save.run({ id: props.noteId, text: draft.draft })),
-    ...save.into("save"),
-    // Written after the spread, so it replaces the generated `SaveResolved`:
-    // the field is written into the draft, then the parent hears about it.
-    SaveResolved: save.resolvedInto("save", (text, { draft, props }) => {
-      draft.draft = text;
+    Submitted: (_payload, { state, props, tasks }) =>
+      tasks.save.start({ id: props.noteId, text: state.draft }),
+    // The saved text is already in `save` when this runs: adopt it as the
+    // draft, then the parent hears about it. A rejection needs no handler.
+    SaveResolved: ({ value }, { draft, props }) => {
+      draft.draft = value;
       return [draft, Command.output(Saved, { id: props.noteId })];
-    }),
+    },
   },
   render: ({ state, hooks, dispatch }) => (
     <form

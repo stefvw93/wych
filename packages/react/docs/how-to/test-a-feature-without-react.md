@@ -49,31 +49,28 @@ const total = (items: ReadonlyArray<{ readonly price: number }>) =>
 
 const cart = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({
-    items: Schema.Array(Item),
-    charge: charge.schema,
-  }),
-  actions: [actions, charge],
+  state: Schema.Struct({ items: Schema.Array(Item) }),
+  tasks: { charge },
+  actions,
   outputs: Ordered,
 }).create({
-  initialState: () => ({ items: [], charge: Task.idle }),
+  initialState: () => ({ items: [] }),
   reducer: {
     Added: (item, { draft }) => {
       draft.items.push(item);
       return draft;
     },
-    Submitted: (_payload, { draft }) => Task.start(draft, "charge", charge.run(total(draft.items))),
-    ...charge.into("charge"),
-    ChargeResolved: charge.resolvedInto("charge", (_receipt, { draft, state }) => [
-      draft,
+    Submitted: (_payload, { state, tasks }) => tasks.charge.start(total(state.items)),
+    ChargeResolved: (_receipt, { state }) => [
+      state,
       Command.output(Ordered, { total: total(state.items) }),
-    ]),
+    ],
   },
   render: () => null,
 });
 ```
 
-The payment provider is a service, so each test picks its own `Payments` layer. `...charge.into("charge")` writes both settle handlers; `ChargeResolved` after it replaces one of them with `charge.resolvedInto`, which writes the field into the draft and then announces the order beside it. `render` returns `null`: nothing on this page mounts the feature, and the view is a separate concern.
+The payment provider is a service, so each test picks its own `Payments` layer. `tasks: { charge }` gives the task the `charge` state field, so `initialState` leaves it out and `tasks.charge.start` writes `Pending` into it. The fold writes the receipt into `charge` before `ChargeResolved` runs; the handler announces the order beside that write. A rejection needs no handler. `render` returns `null`: nothing on this page mounts the feature, and the view is a separate concern.
 
 ## One step with reduce
 
@@ -95,7 +92,7 @@ test("Added appends and issues no command", () => {
 });
 ```
 
-Pick `reduce` when the claim is about one transition. You supply the snapshot, so any state is one object literal away, and there is no layer to build. A handler's `draft` is finished before `reduce` returns the `Next`, so `Next.state(next)` is always a plain value, never the proxy.
+Pick `reduce` when the claim is about one transition. You supply the snapshot, so any state is one object literal away, and there is no layer to build. The `charge` field is part of `State`, so a hand-built state includes `charge: Task.idle`. A handler's `draft` is finished before `reduce` returns the `Next`, so `Next.state(next)` is always a plain value, never the proxy.
 
 `reduce` runs nothing. A handler that returns a command hands you the command as data, so a test can assert that work was requested without running it.
 
@@ -169,7 +166,7 @@ test("a second Submitted supersedes the charge in flight", async () => {
 });
 ```
 
-The first charge is asleep in `Effect.delay` when the second `Submitted` folds. `Task` runs in `"latest"` mode by default, so `Task.start` restarts the group and interrupts that fiber. An interrupted task dispatches nothing, which is why `emitted` holds one `ChargeResolved`.
+The first charge is asleep in `Effect.delay` when the second `Submitted` folds. `Task` runs in `"latest"` mode by default, so `tasks.charge.start` restarts the group and interrupts that fiber. An interrupted task dispatches nothing, which is why `emitted` holds one `ChargeResolved`.
 
 One claim stays out of `run`'s reach: a command that never completes keeps `run` from resolving, because `run` resolves at command quiescence. A long-lived source belongs in a subscription instead, declared through the `subscriptions` hook: `run` resolves once command work settles regardless of which subscriptions are still running, and the result's `subscriptions` field lists the keys still declared at that point. See [subscribe to a stream](/docs/how-to/subscribe-to-a-stream) for the recipe.
 

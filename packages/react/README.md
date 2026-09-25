@@ -45,21 +45,20 @@ const search = Task("Search", {
 
 const taskSearch = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({ query: Schema.String, results: search.schema }),
-  actions: [actions, search],
+  state: Schema.Struct({ query: Schema.String }),
+  tasks: { results: search },
+  actions,
 }).create({
-  initialState: () => ({ query: "", results: Task.idle }),
+  initialState: () => ({ query: "" }),
   reducer: {
-    Typed: ({ query }, { draft }) => {
+    Typed: ({ query }, { draft, tasks }) => {
       draft.query = query;
-      return Task.start(draft, "results", search.run(query));
+      return tasks.results.start(query);
     },
-    Cleared: (_payload, { draft }) => {
+    Cleared: (_payload, { draft, tasks }) => {
       draft.query = "";
-      draft.results = Task.idle;
-      return [draft, search.cancel];
+      return tasks.results.cancel();
     },
-    ...search.into("results"),
   },
   render: ({ state, dispatch }) => (
     <div>
@@ -95,6 +94,10 @@ export const Search = component(taskSearch, { name: "Search" });
 ```tsx
 <Search />
 ```
+
+`tasks: { results: search }` gives the task a state field of its own. The
+runtime writes `Pending` when a handler starts it and `Resolved` or
+`Rejected` when it settles, so the reducer owes no handler for the outcome.
 
 The same feature folds without React. `taskSearch` takes the latest result: a
 slow request for `"a"` is still in flight when `"ab"` arrives, and `Task`'s

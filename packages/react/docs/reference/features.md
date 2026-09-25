@@ -1,6 +1,6 @@
 ---
 title: Features
-description: define and its action and output slots, the definition helpers, create, reduce, run, Snapshot, Next and Children.
+description: define and its tasks, actions and outputs slots, the definition helpers, create, reduce, run, Snapshot, Next and Children.
 order: 2
 ---
 
@@ -35,6 +35,7 @@ const NoteEditor = define({
 define({
   props: Schema.Struct, // required
   state: Schema.Struct, // required
+  tasks?: { readonly [key: string]: TaskOperation }, // optional, internal operations
   actions: MemberSource<"internal">, // required
   outputs?: MemberSource<"outbound">, // optional
   useUnsafeHooks?: (props, state) => H,
@@ -44,23 +45,22 @@ define({
 `props` and `state` are `Schema.Struct`s. `actions` and `outputs` each take a
 message, a record of messages (`Action({ ... })`), a
 [task](/docs/reference/tasks) operation, or an array of those, one array
-nested inside another at most. `define` infers `Props`, `State`, the messages
-of each slot and the hooks from that one object literal, so no type argument
-is written by hand.
+nested inside another at most. `tasks` takes a record of task operations,
+keyed by the state field each one fills. `define` infers `Props`, `State`, the
+messages of each slot and the hooks from that one object literal, so no type
+argument is written by hand.
 
 ```ts continue
-const autosave = Task("Autosave", { success: Schema.String });
-
 const OneMessage = define({
   props: Schema.Struct({}),
   state: Schema.Struct({}),
   actions: actions.Saved,
 });
 
-const WithTask = define({
+const Nested = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({ text: Schema.String, autosave: autosave.schema }),
-  actions: [actions, autosave],
+  state: Schema.Struct({ text: Schema.String }),
+  actions: [actions, Action("Reverted")],
   outputs: [NoteSaved, Action.output("Discarded")],
 });
 ```
@@ -121,6 +121,66 @@ define({
 
 The full message ends with `opaque declarations like Children belong in props`.
 
+### `tasks`
+
+```ts fragment
+tasks?: { readonly [key: string]: TaskOperation }
+// State gains `readonly [key]: TaskValue<Success, Failure>` per key
+// Action gains `${Name}Resolved` and `${Name}Rejected` per key
+// initialState returns State without the task keys
+```
+
+Each key of `tasks` adds a `TaskValue` field to `State` under that key, typed
+by the operation's own schemas, and the operation's two actions to the action
+union. The field starts `Idle`, so `initialState` omits the key. A handler
+starts and cancels the work through [`snapshot.tasks`](#reducersnapshot-and-snapshotdraft).
+
+```ts continue
+const autosave = Task("Autosave", { success: Schema.String });
+
+const WithTask = define({
+  props: Schema.Struct({}),
+  state: Schema.Struct({ text: Schema.String }),
+  tasks: { autosave },
+  actions,
+  outputs: NoteSaved,
+});
+
+const withTask = WithTask.create({
+  initialState: WithTask.initialState(() => ({ text: "" })),
+  reducer: WithTask.reducer({
+    Typed: ({ text }, { draft }) => {
+      draft.text = text;
+      return draft;
+    },
+    Saved: (_payload, { state, tasks }) => tasks.autosave.start(Effect.succeed(state.text)),
+  }),
+  render: WithTask.render(() => null),
+});
+
+const untouched = await Effect.runPromise(
+  withTask.run([], { props: {}, hooks: {}, layer: Layer.empty }),
+);
+
+console.log(untouched.state);
+// => { text: "", autosave: { _tag: "Idle" } }
+
+const autosaved = await Effect.runPromise(
+  withTask.run([actions.Typed.make({ text: "hi" }), actions.Saved.make()], {
+    props: {},
+    hooks: {},
+    layer: Layer.empty,
+  }),
+);
+
+console.log(autosaved.state);
+// => { text: "hi", autosave: { _tag: "Resolved", value: "hi" } }
+```
+
+The `AutosaveResolved` and `AutosaveRejected` handlers are optional: the fold
+writes the field before either runs. The slot's rules, `snapshot.tasks` and
+the clash rules that throw at `define` are in [Tasks](/docs/reference/tasks#the-tasks-slot).
+
 ### `useUnsafeHooks`
 
 ```ts fragment
@@ -145,7 +205,7 @@ const WithHooks = define({
 
 ```ts fragment
 FeatureDefinition {
-  initialState(fn): (props) => State
+  initialState(fn): (props) => InitialStateOf<State, Tasks> // State without the task keys
   reducer(obj): Reducer
   render(fn): Render
   subscriptions(fn): SubscriptionsHook
@@ -154,7 +214,8 @@ FeatureDefinition {
 ```
 
 `initialState`, `reducer` and `render` are identity functions at runtime. They
-supply types, so each piece can live in its own file.
+supply types, so each piece can live in its own file. `NoteEditor` has no
+`tasks`, so its `initialState` returns the whole `State`.
 
 ```tsx continue
 const initialState = NoteEditor.initialState(() => ({ text: "", dirty: false }));
@@ -268,17 +329,51 @@ an output without a mirror action. See
 ## `ReducerSnapshot` and `snapshot.draft`
 
 ```ts fragment
-interface ReducerSnapshot<Props, State, H> extends Snapshot<Props, State, H> {
+interface ReducerSnapshot<Props, State, H, Tasks = {}> extends Snapshot<Props, State, H> {
   readonly draft: Draft<State>;
+  readonly tasks: TaskHandles<Tasks, State>;
 }
 ```
 
 A reducer handler receives a `ReducerSnapshot`: `state`, `props` and `hooks`,
-plus `draft`, a mutable view of `state`. Write into it and return it, alone or
+plus `draft`, a mutable view of `state`, and `tasks`, one handle per key of
+the [`tasks` slot](#tasks). Write into the draft and return it, alone or
 beside a command, and the fold replaces it with the finished value before
-anything else reads the `Next`. `render` and `subscriptions` receive a plain
-`Snapshot`, with no `draft`: neither is a place to change state. The `reducer`
-above already writes this way.
+anything else reads the `Next`. A handle writes into the same draft and
+returns it beside the operation's command. `render` and `subscriptions`
+receive a plain `Snapshot`, with no `draft` and no `tasks`: neither is a place
+to change state. The `reducer` above already writes this way.
+
+`draft` and `tasks` are getters on the snapshot's prototype, so the own keys
+stay `state`, `props` and `hooks`. A feature without a slot hands `{}` as
+`tasks`.
+
+```ts continue
+let ownKeys: ReadonlyArray<string> = [];
+let handles: ReadonlyArray<string> = [];
+
+const readingHandles = NoteEditor.reducer({
+  Typed: (_payload, snapshot) => {
+    ownKeys = Object.keys(snapshot);
+    handles = Object.keys(snapshot.tasks);
+    return snapshot.state;
+  },
+  Saved: (_payload, { state }) => state,
+});
+
+NoteEditor.create({ initialState, reducer: readingHandles, render }).reduce(
+  actions.Typed.make({ text: "hi" }),
+  { state: { text: "", dirty: false }, props: { noteId: "n_1", autosave: true }, hooks: {} },
+);
+
+console.log(ownKeys);
+// => ["state", "props", "hooks"]
+console.log(handles);
+// => []
+```
+
+`withTask`'s `Saved` handler above uses a handle; the handle's signatures are
+in [Tasks](/docs/reference/tasks#snapshottasks).
 
 ```ts fragment
 type Draft<T> = T extends { readonly pipe: unknown }

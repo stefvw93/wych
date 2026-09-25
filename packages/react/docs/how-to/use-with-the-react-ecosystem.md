@@ -67,8 +67,9 @@ const save = Task("Save", {
 
 const noteEditor = define({
   props: Schema.Struct({ noteId: Schema.String }),
-  state: Schema.Struct({ draft: Schema.String, save: save.schema }),
-  actions: [actions, save],
+  state: Schema.Struct({ draft: Schema.String }),
+  tasks: { save },
+  actions,
   outputs: Saved,
   useUnsafeHooks: (props) => {
     const query = useQuery({
@@ -78,7 +79,7 @@ const noteEditor = define({
     return { text: query.data?.text, status: query.status };
   },
 }).create({
-  initialState: () => ({ draft: "", save: Task.idle }),
+  initialState: () => ({ draft: "" }),
   reducer: {
     // The cache filled or refetched: adopt the server text as the draft.
     HookChanged: ({ previous }, { draft, hooks }) => {
@@ -90,13 +91,12 @@ const noteEditor = define({
       draft.draft = text;
       return draft;
     },
-    Submitted: (_payload, { draft, props }) =>
-      Task.start(draft, "save", save.run({ id: props.noteId, text: draft.draft })),
-    ...save.into("save"),
-    SaveResolved: save.resolvedInto("save", (text, { draft, props }) => {
-      draft.draft = text;
+    Submitted: (_payload, { state, props, tasks }) =>
+      tasks.save.start({ id: props.noteId, text: state.draft }),
+    SaveResolved: ({ value }, { draft, props }) => {
+      draft.draft = value;
       return [draft, Command.output(Saved, { id: props.noteId })];
-    }),
+    },
   },
   render: ({ state, hooks, dispatch }) => (
     <form
@@ -126,7 +126,7 @@ const noteEditor = define({
 });
 ```
 
-TanStack keeps the cache, refetch-on-focus, dedup and staleness. The feature keeps the reducer that turns a fetched value and a save button into state. The `Task.match` at the end is exhaustive: one case per `TaskValue` tag.
+TanStack keeps the cache, refetch-on-focus, dedup and staleness. The feature keeps the reducer that turns a fetched value and a save button into state. `tasks: { save }` gives the task the `save` state field, so `initialState` leaves it out. The `Task.match` at the end is exhaustive: one case per `TaskValue` tag.
 
 ### Read a query into the reducer
 
@@ -161,18 +161,18 @@ run: ({ id, text }: { id: string; text: string }) =>
 
 The save is a `Task` whose `run` reads `Queries` from context, so no `import` of the client appears in the feature. `client.invalidateQueries` marks the key stale and every `useQuery` on it refetches, including plain TanStack consumers outside Wych. Use `client.setQueryData` instead when the save response is the new value and a second round trip is waste.
 
-`save` declares no `failure`, so the error is the cause's message, a string. `...save.into("save")` writes the `SaveRejected` handler that stores it, and the view renders it with no schema of its own.
+`save` declares no `failure`, so the error is the cause's message, a string. The fold writes it into `save` with no `SaveRejected` handler, and the view renders it with no schema of its own.
 
 ### Hand the result to the parent
 
 ```ts fragment
-SaveResolved: save.resolvedInto("save", (text, { draft, props }) => {
-  draft.draft = text;
+SaveResolved: ({ value }, { draft, props }) => {
+  draft.draft = value;
   return [draft, Command.output(Saved, { id: props.noteId })];
-}),
+},
 ```
 
-`resolvedInto` writes `Task.resolved(text)` into `draft.save` first, then runs the follow-up with the same draft. Written after the `into` spread, it replaces the generated `SaveResolved` and leaves `SaveRejected` in place. The cache update went through the Layer because TanStack owns the cache. `Saved` leaves as an output because the parent owns what happens next: navigation, a toast, a list refresh. Put a result on the side that owns it. See [Actions and outputs](/docs/explanation/actions-and-outputs).
+The fold writes `Task.resolved(value)` into `save` before the handler runs, so the handler does the one thing left: it adopts the saved text and announces `Saved` beside it. The cache update went through the Layer because TanStack owns the cache. `Saved` leaves as an output because the parent owns what happens next: navigation, a toast, a list refresh. Put a result on the side that owns it. See [Actions and outputs](/docs/explanation/actions-and-outputs).
 
 ## Mount it
 
@@ -188,11 +188,11 @@ const App = () => (
 createRoot(document.getElementById("root")!).render(<App />);
 ```
 
-`onSaved` is required at the call site because `Saved` is declared in `output`. The provider holds the `queryClient` the runtime layer already holds.
+`onSaved` is required at the call site because `Saved` is declared in `outputs`. The provider holds the `queryClient` the runtime layer already holds.
 
 ## Test without a QueryClientProvider
 
-Hooks are plain data in a fold, so the read path needs no `QueryClientProvider`: pass the `hooks` object `run` and `reduce` already take. Use `reduce` for one step and no Layer.
+Hooks are plain data in a fold, so the read path needs no `QueryClientProvider`: pass the `hooks` object `run` and `reduce` already take. Use `reduce` for one step and no Layer. The `save` field is part of `State`, so the hand-built state includes `save: Task.idle`.
 
 ```ts fragment
 import { Next, Task } from "@wych/react";

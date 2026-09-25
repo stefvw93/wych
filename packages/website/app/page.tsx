@@ -28,8 +28,7 @@ export class SearchApi extends Context.Service<
 export const Typed = Action("Typed", { query: Schema.String });
 const Cleared = Action("Cleared");
 
-// Two actions (SearchResolved, SearchRejected), one cancellable command,
-// and the schema of the field that holds the result.
+// Two actions (SearchResolved, SearchRejected) and one cancellable command.
 const search = Task("Search", {
   success: Hits,
   run: (query: string) =>
@@ -41,22 +40,22 @@ const search = Task("Search", {
 
 export const taskSearch = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({ query: Schema.String, results: search.schema }),
-  actions: [Typed, Cleared, search],
+  state: Schema.Struct({ query: Schema.String }),
+  // The task owns the \`results\` field: Idle, Pending, Resolved or Rejected.
+  tasks: { results: search },
+  actions: [Typed, Cleared],
 }).create({
-  initialState: () => ({ query: "", results: Task.idle }),
+  initialState: () => ({ query: "" }),
   reducer: {
     // Take latest: a new Typed interrupts the fiber still resolving the old one.
-    Typed: ({ query }, { draft }) => {
+    Typed: ({ query }, { draft, tasks }) => {
       draft.query = query;
-      return Task.start(draft, "results", search.run(query));
+      return tasks.results.start(query);
     },
-    Cleared: (_payload, { draft }) => {
+    Cleared: (_payload, { draft, tasks }) => {
       draft.query = "";
-      draft.results = Task.idle;
-      return [draft, search.cancel];
+      return tasks.results.cancel();
     },
-    ...search.into("results"),
   },
   render: ({ state, dispatch }) => (
     <div>

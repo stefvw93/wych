@@ -186,9 +186,10 @@ console.log(summarizeCommand(loadHistory.cancel));
 // => { _tag: "Cancel", target: "Task/History" }
 ```
 
-Cancelling writes no state. A task left `Pending` after a cancel renders a
-permanently disabled button, so the handler clears the field with
-`draft.history = Task.idle` and returns `[draft, loadHistory.cancel]`.
+The command writes no state. A task left `Pending` after a cancel renders a
+permanently disabled button, so the task's handle on the snapshot pairs the
+two: `tasks.history.cancel()` writes `Idle` into the field the task owns and
+returns this command beside it.
 
 ## What `batch` is for
 

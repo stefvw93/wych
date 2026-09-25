@@ -12,7 +12,8 @@ nothing else. Saving it needs a service to call, a way to run the call, and
 somewhere to put the outcome.
 
 You write the save by hand first, with a `Command`. Then you hit the two
-problems every save button has, and `Task` folds the fixes into one field.
+problems every save button has, and a `Task` in the `tasks` slot folds the
+fixes into one field.
 
 ## 1. Declare the service
 
@@ -267,6 +268,7 @@ import { Task } from "@wych/react";
 
 const saveNote = Task("Save", {
   success: Schema.String,
+  mode: "first",
   run: (note: { readonly id: string; readonly text: string }) =>
     Effect.gen(function* () {
       const api = yield* NotesApi;
@@ -275,18 +277,20 @@ const saveNote = Task("Save", {
 });
 ```
 
-Each piece replaces something from step 3:
+Each piece replaces something from step 3 or 4:
 
 - `saveNote` declares `SaveResolved { value }` and `SaveRejected { error }`,
   in place of `Saved` and `SaveFailed`.
 - `saveNote.run(note)` is the `Command.effect` with `catchCause` inside.
 - The `catchCause` body is `Task.errorMessage`, the message off the cause. It
   is the default; a `failure` schema of your own takes an `onError` beside it.
+- `mode: "first"` is the guard from step 4: while a save is pending, a new
+  start does nothing.
 - `saveNote.cancel` interrupts the save in flight. By hand that needs a named
   group; see [groups and cancellation](/docs/explanation/groups-and-cancellation).
-- `saveNote.schema` is the state field, in place of `saving` and `error`. It
-  holds one of four cases: `Idle`, `Pending`, `Resolved { value }`,
-  `Rejected { error }`.
+
+The state field, in place of `saving` and `error`, comes from the `tasks`
+slot on `define`. The key names the field.
 
 ```ts continue
 const actions = Action({
@@ -301,20 +305,21 @@ const Editor = define({
   state: Schema.Struct({
     text: Schema.String,
     dirty: Schema.Boolean,
-    save: saveNote.schema,
   }),
-  actions: [actions, saveNote],
+  tasks: { save: saveNote },
+  actions,
 });
 
 const initialState = Editor.initialState((props) => ({
   text: props.initialText,
   dirty: false,
-  save: Task.idle,
 }));
 ```
 
-The operation goes into the `actions` slot beside the record, and brings its
-two actions with it. The reducer now owes a handler for each.
+`tasks: { save: saveNote }` adds a `save` field to the state and brings the
+two actions with it. The field holds one of four cases: `Idle`, `Pending`,
+`Resolved { value }`, `Rejected { error }`. It starts `Idle`, so
+`initialState` leaves it out.
 
 ```ts continue
 const reducer = Editor.reducer({
@@ -330,40 +335,35 @@ const reducer = Editor.reducer({
     draft.save = Task.idle;
     return draft;
   },
-  SaveClicked: (_payload, { draft, state, props }) =>
-    Task.isPending(state.save)
-      ? draft
-      : Task.start(draft, "save", saveNote.run({ id: props.noteId, text: state.text })),
-  SaveCancelled: (_payload, { draft }) => {
-    draft.save = Task.idle;
-    return [draft, saveNote.cancel];
-  },
-  ...saveNote.into("save"),
-  SaveResolved: saveNote.resolvedInto("save", (_revision, { draft }) => {
+  SaveClicked: (_payload, { state, props, tasks }) =>
+    tasks.save.start({ id: props.noteId, text: state.text }),
+  SaveCancelled: (_payload, { tasks }) => tasks.save.cancel(),
+  SaveResolved: (_payload, { draft }) => {
     draft.dirty = false;
     return draft;
-  }),
+  },
 });
 ```
 
-`Task.start(draft, key, command)` writes `Pending` into `key` and returns
-the command beside it, the same two lines `SaveClicked` wrote by hand. The
-guard is the one from step 4, reading the field instead of a boolean.
-`saveNote.cancel` writes nothing, which is why the same handler clears the
-field.
+The snapshot carries one handle per key of the slot, under `tasks`.
+`tasks.save.start(note)` writes `Pending` into `save` and returns the draft
+beside the command, the same two lines `SaveClicked` wrote by hand. Under
+`mode: "first"`, a start while the field is `Pending` writes nothing and
+issues `Command.none`. `tasks.save.cancel()` writes `Idle` and interrupts the
+save.
 
-`...saveNote.into("save")` writes the two settle handlers: `SaveResolved`
-puts `Resolved { value }` into the field and `SaveRejected` puts
-`Rejected { error }`. A resolved save also clears `dirty`, so `SaveResolved`
-is written again after the spread, with `resolvedInto`: the field is already
-in the draft when the follow-up runs, and the follow-up returns the draft.
-The later key wins.
+When the save settles, the runtime writes `Resolved { value }` or
+`Rejected { error }` into `save` before any handler runs. So the reducer
+owes no handler for `SaveResolved` and `SaveRejected`. A resolved save also
+clears `dirty`, and that is what the `SaveResolved` handler above is for:
+the draft already holds the settled field, and the handler adds its own
+write.
 
-> `key` is checked against the state's task fields, so a renamed field is a
-> compile error. Interruption is a normal ending for a task: a cancelled save
-> dispatches neither `SaveResolved` nor `SaveRejected`. The full contract of
-> `into`, `resolvedInto` and `rejectedInto` is in
-> [Tasks](/docs/reference/tasks#into).
+> A settle handler receives the payload like any other handler:
+> `SaveResolved: ({ value }, { draft }) => …`. Interruption is a normal ending
+> for a task: a cancelled save dispatches neither `SaveResolved` nor
+> `SaveRejected`. The full contract of the slot and its handles is in
+> [Tasks](/docs/reference/tasks).
 
 ## 6. Render the four cases
 
@@ -432,15 +432,30 @@ console.log(twoSaves.state.save);
 // => { _tag: "Resolved", value: "n1@2" }
 ```
 
-> `Task` has a concurrency `mode`, declared once on the operation. The default
-> `"latest"` interrupts the running request when a new one starts, so even
-> without the guard two clicks resolve once. The difference is which click
-> wins: `"latest"` sends the second request and drops the first mid-flight,
-> the guard sends the first and ignores the second. A search wants the former;
-> a save wants the latter, and take-first is a guard because it reads state.
-> `"every"`, where both requests land in order, is in
-> [debounce and take latest](/docs/how-to/debounce-and-take-latest); the
-> option is in [tasks](/docs/reference/tasks).
+> `mode` is declared once on the operation. `"first"` sends the first request
+> and ignores the second, which is what a save wants. The default `"latest"`
+> interrupts the running request when a new one starts, so the second click
+> wins; a search wants that. `"every"`, where both requests land in order, is
+> in [debounce and take latest](/docs/how-to/debounce-and-take-latest); the
+> option is in [tasks](/docs/reference/tasks#taskmode).
+
+A settle is an action, so `feature.reduce` folds one on its own.
+`saveNote.Resolved` builds it, and the state includes the field.
+
+```ts continue
+import { Next } from "@wych/react";
+
+const settled = editor.reduce(saveNote.Resolved.make({ value: "n1@3" }), {
+  state: { text: "Buy milk", dirty: true, save: Task.pending },
+  props: { noteId: "n1", initialText: "Buy milk" },
+  hooks: {},
+});
+
+console.log(Next.state(settled));
+// => { text: "Buy milk", dirty: false, save: { _tag: "Resolved", value: "n1@3" } }
+```
+
+The field was written by the runtime, `dirty` by the handler, on one fold.
 
 A failing layer lands in the same field, with the message `Task.errorMessage`
 took off the cause.
@@ -498,7 +513,7 @@ import { notesApiLayer } from "./notes-api"; // runtime.ts
 import { NotesApi } from "./notes-api"; // note-editor.tsx, note-editor-by-hand.tsx
 import { component } from "./runtime"; // note-editor.tsx, note-editor-by-hand.tsx
 import { NoteEditor } from "./note-editor"; // main.tsx
-import { actions, editor } from "./note-editor"; // note-editor.test.ts
+import { actions, editor, saveNote } from "./note-editor"; // note-editor.test.ts
 import { actions as byHandActions, byHand } from "./note-editor-by-hand"; // note-editor.test.ts
 ```
 

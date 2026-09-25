@@ -19,8 +19,9 @@ wired into the module the component imports.
 ## Solution
 
 `cart.ts` defines `cart` like any other feature: `actions` (`Added` and
-`Submitted`, declared as one record), a `Charge` task, and an `Ordered`
-output. The test file never imports React. `cart.reduce` folds one action
+`Submitted`, declared as one record), a `Charge` task bound to the `charge`
+state field through the `tasks` slot, and an `Ordered` output. The test file
+never imports React. `cart.reduce` folds one action
 against a hand-written state and props snapshot:
 
 ```ts fragment
@@ -43,10 +44,13 @@ resolved and rejected paths without touching the feature.
 
 ## How It Works
 
-`charge` declares no `failure`, so a declined card lands in the field as the
-error's message. `...charge.into("charge")` writes both settle handlers, and
-`ChargeResolved` after it is `charge.resolvedInto`: the receipt is written
-into the draft, then the order is announced beside it. The last two tests
+`tasks: { charge }` adds `charge` to the state, so `initialState` leaves it
+out and a hand-built test state includes `charge: Task.idle`.
+`tasks.charge.start(total)` writes `Pending` into the field and returns the
+command beside it. `charge` declares no `failure`, so a declined card lands in
+the field as the error's message, with no `ChargeRejected` handler. The
+receipt is in the field before `ChargeResolved` runs, so that handler only
+announces the order beside it. The last two tests
 build a runtime with `devtoolsLayer(recorder.sink)` from `createRecorder`,
 giving `recorder.events` to assert against directly, filtered by `_tag` for
 `"Transition"` events.

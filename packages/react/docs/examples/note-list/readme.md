@@ -19,15 +19,15 @@ the parent and every child would need to agree on one action vocabulary.
 ## Solution
 
 `note-editor.tsx` declares `Saved` in an `Action.output` record and emits it
-from `SaveResolved` with `Command.output`, beside the draft that
-`saveNote.resolvedInto("save", ...)` wrote the field into:
+from `SaveResolved` with `Command.output`, beside the draft. The runtime
+wrote `Resolved` into the `save` field before the handler ran, so the
+handler adds only its own write:
 
 ```tsx fragment
-...saveNote.into("save"),
-SaveResolved: saveNote.resolvedInto("save", (revision, { draft, props }) => {
+SaveResolved: ({ value }, { draft, props }) => {
   draft.dirty = false;
-  return [draft, Command.output(outputs.Saved, { id: props.noteId, revision })];
-}),
+  return [draft, Command.output(outputs.Saved, { id: props.noteId, revision: value })];
+},
 ```
 
 `note-list.tsx` never handles `Saved` in its own reducer; it only listens on
@@ -48,8 +48,9 @@ separate.
 ## How It Works
 
 `notes-api.ts` adds a `list` method alongside `save`. `note-list.tsx` defines
-`List` with a `loadNotes` task that runs on `Mounted` and settles through
-`...loadNotes.into("notes")`, renders each note as a `NoteEditor`, and a
+`List` with `loadNotes` under `tasks: { notes }`, started on `Mounted` with
+`tasks.notes.start()` and settled by the runtime into the `notes` field with
+no handler, renders each note as a `NoteEditor`, and a
 `LastSaved` fragment that reads `NoteList.useFeature()` for the most recent
 save. `props.children` renders as given, since `Children`
 is opaque to the reducer. `main.tsx` mounts `<NoteList>` with a child

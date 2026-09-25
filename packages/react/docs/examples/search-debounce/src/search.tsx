@@ -64,21 +64,20 @@ const Cleared = Action("Cleared");
 
 export const taskSearch = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({ query: Schema.String, results: search.schema }),
-  actions: [Typed, Cleared, search],
+  state: Schema.Struct({ query: Schema.String }),
+  tasks: { results: search },
+  actions: [Typed, Cleared],
 }).create({
-  initialState: () => ({ query: "", results: Task.idle }),
+  initialState: () => ({ query: "" }),
   reducer: {
-    Typed: ({ query }, { draft }) => {
+    Typed: ({ query }, { draft, tasks }) => {
       draft.query = query;
-      return Task.start(draft, "results", search.run(query));
+      return tasks.results.start(query);
     },
-    Cleared: (_payload, { draft }) => {
+    Cleared: (_payload, { draft, tasks }) => {
       draft.query = "";
-      draft.results = Task.idle;
-      return [draft, search.cancel];
+      return tasks.results.cancel();
     },
-    ...search.into("results"),
   },
   render: ({ state, dispatch }) => (
     <div>
@@ -116,25 +115,18 @@ const searchEvery = Task("SearchEvery", {
 
 export const everySearch = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({ results: searchEvery.schema }),
-  actions: [Typed, searchEvery],
+  state: Schema.Struct({}),
+  tasks: { results: searchEvery },
+  actions: Typed,
 }).create({
-  initialState: () => ({ results: Task.idle }),
+  initialState: () => ({}),
   reducer: {
-    Typed: ({ query }, { draft }) => Task.start(draft, "results", searchEvery.run(query)),
-    SearchEveryResolved: ({ value }, { draft }) => {
-      draft.results = Task.resolved(value);
-      return draft;
-    },
-    SearchEveryRejected: ({ error }, { draft }) => {
-      draft.results = Task.rejected(error);
-      return draft;
-    },
+    Typed: ({ query }, { tasks }) => tasks.results.start(query),
   },
   render: () => null,
 });
 
-/** Load the next page: `Task.start` takes a thunk that reads the state the handler built. */
+/** Load the next page: the handler writes `page`, then starts the task with the page it wrote. */
 const searchPage = Task("SearchPage", {
   success: Hits,
   run: ({ query, page }: { readonly query: string; readonly page: number }) =>
@@ -148,27 +140,20 @@ export const MoreClicked = Action("MoreClicked");
 
 export const pagedSearch = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({ query: Schema.String, page: Schema.Number, results: searchPage.schema }),
-  actions: [Typed, MoreClicked, searchPage],
+  state: Schema.Struct({ query: Schema.String, page: Schema.Number }),
+  tasks: { results: searchPage },
+  actions: [Typed, MoreClicked],
 }).create({
-  initialState: () => ({ query: "", page: 1, results: Task.idle }),
+  initialState: () => ({ query: "", page: 1 }),
   reducer: {
-    Typed: ({ query }, { draft }) => {
+    Typed: ({ query }, { draft, tasks }) => {
       draft.query = query;
       draft.page = 1;
-      return Task.start(draft, "results", (next) => searchPage.run(next));
+      return tasks.results.start({ query, page: 1 });
     },
-    MoreClicked: (_payload, { draft }) => {
+    MoreClicked: (_payload, { draft, tasks }) => {
       draft.page += 1;
-      return Task.start(draft, "results", (next) => searchPage.run(next));
-    },
-    SearchPageResolved: ({ value }, { draft }) => {
-      draft.results = Task.resolved(value);
-      return draft;
-    },
-    SearchPageRejected: ({ error }, { draft }) => {
-      draft.results = Task.rejected(error);
-      return draft;
+      return tasks.results.start({ query: draft.query, page: draft.page });
     },
   },
   render: ({ state, dispatch }) => (

@@ -36,7 +36,7 @@ class SearchApi extends Context.Service<
 
 const actions = Action({ Typed: { query: Schema.String }, Cleared: {} });
 
-// Two actions (SearchResolved, SearchRejected), one cancellable command, one field schema.
+// Two actions (SearchResolved, SearchRejected) and one cancellable command.
 const search = Task("Search", {
   success: Hits,
   run: (query: string) =>
@@ -48,22 +48,22 @@ const search = Task("Search", {
 
 const taskSearch = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({ query: Schema.String, results: search.schema }),
-  actions: [actions, search],
+  state: Schema.Struct({ query: Schema.String }),
+  // The task owns the `results` field: Idle, Pending, Resolved or Rejected.
+  tasks: { results: search },
+  actions,
 }).create({
-  initialState: () => ({ query: "", results: Task.idle }),
+  initialState: () => ({ query: "" }),
   reducer: {
     // Take latest: a new Typed interrupts the fiber still resolving the old one.
-    Typed: ({ query }, { draft }) => {
+    Typed: ({ query }, { draft, tasks }) => {
       draft.query = query;
-      return Task.start(draft, "results", search.run(query));
+      return tasks.results.start(query);
     },
-    Cleared: (_payload, { draft }) => {
+    Cleared: (_payload, { draft, tasks }) => {
       draft.query = "";
-      draft.results = Task.idle;
-      return [draft, search.cancel];
+      return tasks.results.cancel();
     },
-    ...search.into("results"),
   },
   render: ({ state, dispatch }) => (
     <div>
@@ -99,9 +99,10 @@ export const Search = component(taskSearch, { name: "Search" });
 ```
 
 The fetch, the cancel and the race are in the `Typed` handler, as a value.
-`Task.start` writes `Pending` on the same fold, so the button is disabled
-before the click handler returns. `search.cancel` is a command too, so a
-different action can interrupt the request.
+`tasks.results.start` writes `Pending` on the same fold, so `Searching`
+paints before the request starts, and the settle lands in `results` with no
+handler to write. `tasks.results.cancel()` writes `Idle` and interrupts the
+request, so a different action can end it.
 
 The proof does not need React. Feed two keystrokes to `run` with an API slow
 enough that the first is still in flight when the second arrives, and read

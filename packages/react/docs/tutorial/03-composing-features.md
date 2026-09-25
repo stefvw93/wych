@@ -66,6 +66,7 @@ const outputs = Action.output({ Saved: { id: Schema.String, revision: Schema.Str
 
 const saveNote = Task("Save", {
   success: Schema.String,
+  mode: "first",
   run: (note: { readonly id: string; readonly text: string }) =>
     Effect.gen(function* () {
       const api = yield* NotesApi;
@@ -75,17 +76,14 @@ const saveNote = Task("Save", {
 
 const Editor = define({
   props: Schema.Struct({ noteId: Schema.String, initialText: Schema.String }),
-  state: Schema.Struct({
-    text: Schema.String,
-    dirty: Schema.Boolean,
-    save: saveNote.schema,
-  }),
-  actions: [actions, saveNote],
+  state: Schema.Struct({ text: Schema.String, dirty: Schema.Boolean }),
+  tasks: { save: saveNote },
+  actions,
   outputs,
 });
 
 const editor = Editor.create({
-  initialState: (props) => ({ text: props.initialText, dirty: false, save: Task.idle }),
+  initialState: (props) => ({ text: props.initialText, dirty: false }),
   reducer: {
     TextChanged: ({ text }, { draft, props }) => {
       draft.text = text;
@@ -99,15 +97,12 @@ const editor = Editor.create({
       draft.save = Task.idle;
       return draft;
     },
-    SaveClicked: (_payload, { draft, state, props }) =>
-      Task.isPending(state.save)
-        ? draft
-        : Task.start(draft, "save", saveNote.run({ id: props.noteId, text: state.text })),
-    ...saveNote.into("save"),
-    SaveResolved: saveNote.resolvedInto("save", (revision, { draft, props }) => {
+    SaveClicked: (_payload, { state, props, tasks }) =>
+      tasks.save.start({ id: props.noteId, text: state.text }),
+    SaveResolved: ({ value }, { draft, props }) => {
       draft.dirty = false;
-      return [draft, Command.output(outputs.Saved, { id: props.noteId, revision })];
-    }),
+      return [draft, Command.output(outputs.Saved, { id: props.noteId, revision: value })];
+    },
   },
   render: ({ state, dispatch }) => (
     <form>
@@ -129,9 +124,9 @@ export const NoteEditor = component(editor, { name: "NoteEditor" });
 ```
 
 `Command.output` takes the message and its payload, the same shape as
-`dispatch`. It rides beside the draft that `resolvedInto` already wrote the
-field into. `Saved` has no reducer handler, and writing one is a compile
-error. An output leaves the feature and never comes back. `NoteEditor` now
+`dispatch`. It rides beside the draft, which already holds the resolved
+`save` field: the runtime writes the settle before `SaveResolved` runs.
+`Saved` has no reducer handler, and writing one is a compile error. An output leaves the feature and never comes back. `NoteEditor` now
 takes a required `onSaved` prop, derived from the tag, with the payload minus
 `_tag`.
 
@@ -164,19 +159,17 @@ const loadNotes = Task("Load", {
 
 const List = define({
   props: Schema.Struct({ title: Schema.String, children: Schema.optionalKey(Children) }),
-  state: Schema.Struct({
-    notes: loadNotes.schema,
-    lastSaved: Schema.String,
-  }),
-  actions: [NoteSaved, loadNotes],
+  state: Schema.Struct({ lastSaved: Schema.String }),
+  tasks: { notes: loadNotes },
+  actions: NoteSaved,
 });
 ```
 
 `NoteSaved` is the list's one action, so `Action("Tag", fields)` declares it
-alone. `loadNotes` takes no input, so `run` declares none and the handler
-calls `loadNotes.run()`. `Children` validates any node and is invisible to
-change detection. A parent that passes a fresh node on every render raises
-no `PropsChanged`.
+alone. `loadNotes` takes no input, so `run` declares none and the handle's
+`start` takes none. `Children` validates any node and is invisible to change
+detection. A parent that passes a fresh node on every render raises no
+`PropsChanged`.
 
 ## 4. Load the notes on Mounted
 
@@ -185,18 +178,18 @@ startup work goes.
 
 ```ts continue
 const listReducer = List.reducer({
-  Mounted: (_payload, { draft }) => Task.start(draft, "notes", loadNotes.run()),
+  Mounted: (_payload, { tasks }) => tasks.notes.start(),
   NoteSaved: ({ id }, { draft }) => {
     draft.lastSaved = id;
     return draft;
   },
-  ...loadNotes.into("notes"),
 });
 ```
 
-A loaded list has nothing to do beyond landing in its field, so
-`...loadNotes.into("notes")` is both settle handlers.
-Lifecycle handlers are optional and take the same shape as any other handler.
+A loaded list has nothing to do beyond landing in its field, and the runtime
+writes the field, so the reducer has no settle handler for `LoadResolved` or
+`LoadRejected`. Lifecycle handlers are optional and take the same shape as
+any other handler.
 The five tags are `Mounted`, `PropsChanged`, `HookChanged`, `Error` and
 `Unmounted`. Their payloads and firing order are in the
 [lifecycle reference](/docs/reference/lifecycle).
@@ -228,7 +221,7 @@ Each note gets a `NoteEditor`. `onSaved` receives the output payload with
 
 ```tsx continue
 const noteList = List.create({
-  initialState: () => ({ notes: Task.idle, lastSaved: "" }),
+  initialState: () => ({ lastSaved: "" }),
   reducer: listReducer,
   render: ({ state, props, dispatch }) => (
     <section>

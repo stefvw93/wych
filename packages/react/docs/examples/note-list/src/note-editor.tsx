@@ -12,6 +12,7 @@ const outputs = Action.output({ Saved: { id: Schema.String, revision: Schema.Str
 
 const saveNote = Task("Save", {
   success: Schema.String,
+  mode: "first",
   run: (note: { readonly id: string; readonly text: string }) =>
     Effect.gen(function* () {
       const api = yield* NotesApi;
@@ -21,17 +22,14 @@ const saveNote = Task("Save", {
 
 const Editor = define({
   props: Schema.Struct({ noteId: Schema.String, initialText: Schema.String }),
-  state: Schema.Struct({
-    text: Schema.String,
-    dirty: Schema.Boolean,
-    save: saveNote.schema,
-  }),
-  actions: [actions, saveNote],
+  state: Schema.Struct({ text: Schema.String, dirty: Schema.Boolean }),
+  tasks: { save: saveNote },
+  actions,
   outputs,
 });
 
 export const editor = Editor.create({
-  initialState: (props) => ({ text: props.initialText, dirty: false, save: Task.idle }),
+  initialState: (props) => ({ text: props.initialText, dirty: false }),
   reducer: {
     TextChanged: ({ text }, { draft, props }) => {
       draft.text = text;
@@ -45,15 +43,12 @@ export const editor = Editor.create({
       draft.save = Task.idle;
       return draft;
     },
-    SaveClicked: (_payload, { draft, state, props }) =>
-      Task.isPending(state.save)
-        ? draft
-        : Task.start(draft, "save", saveNote.run({ id: props.noteId, text: state.text })),
-    ...saveNote.into("save"),
-    SaveResolved: saveNote.resolvedInto("save", (revision, { draft, props }) => {
+    SaveClicked: (_payload, { state, props, tasks }) =>
+      tasks.save.start({ id: props.noteId, text: state.text }),
+    SaveResolved: ({ value }, { draft, props }) => {
       draft.dirty = false;
-      return [draft, Command.output(outputs.Saved, { id: props.noteId, revision })];
-    }),
+      return [draft, Command.output(outputs.Saved, { id: props.noteId, revision: value })];
+    },
   },
   render: ({ state, dispatch }) => (
     <form>

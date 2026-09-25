@@ -3,8 +3,9 @@ import { Action, Task, define } from "@wych/react";
 import { NotesApi } from "./notes-api";
 import { component } from "./runtime";
 
-const saveNote = Task("Save", {
+export const saveNote = Task("Save", {
   success: Schema.String,
+  mode: "first",
   run: (note: { readonly id: string; readonly text: string }) =>
     Effect.gen(function* () {
       const api = yield* NotesApi;
@@ -24,15 +25,14 @@ const Editor = define({
   state: Schema.Struct({
     text: Schema.String,
     dirty: Schema.Boolean,
-    save: saveNote.schema,
   }),
-  actions: [actions, saveNote],
+  tasks: { save: saveNote },
+  actions,
 });
 
 const initialState = Editor.initialState((props) => ({
   text: props.initialText,
   dirty: false,
-  save: Task.idle,
 }));
 
 const reducer = Editor.reducer({
@@ -48,19 +48,13 @@ const reducer = Editor.reducer({
     draft.save = Task.idle;
     return draft;
   },
-  SaveClicked: (_payload, { draft, state, props }) =>
-    Task.isPending(state.save)
-      ? draft
-      : Task.start(draft, "save", saveNote.run({ id: props.noteId, text: state.text })),
-  SaveCancelled: (_payload, { draft }) => {
-    draft.save = Task.idle;
-    return [draft, saveNote.cancel];
-  },
-  ...saveNote.into("save"),
-  SaveResolved: saveNote.resolvedInto("save", (_revision, { draft }) => {
+  SaveClicked: (_payload, { state, props, tasks }) =>
+    tasks.save.start({ id: props.noteId, text: state.text }),
+  SaveCancelled: (_payload, { tasks }) => tasks.save.cancel(),
+  SaveResolved: (_payload, { draft }) => {
     draft.dirty = false;
     return draft;
-  }),
+  },
 });
 
 const render = Editor.render(({ state, dispatch }) => (
