@@ -315,3 +315,19 @@ test("`.pipe` on a subscription preserves `A` and `R`", () => {
     Subscription<{ readonly _tag: "Pong"; readonly at: number }, PresenceApi>
   >();
 });
+
+test("`Subscription.effect(source, effect)` names its messages outside the hook", () => {
+  const Ticked = Action("Ticked", { at: Schema.Number });
+  const tick = Subscription.effect(Ticked, (dispatch) =>
+    Effect.gen(function* () {
+      yield* presenceEffect;
+      yield* dispatch(Ticked, { at: 1 });
+    }),
+  );
+  expect(tick).type.toBe<
+    Subscription<{ readonly _tag: "Ticked"; readonly at: number }, PresenceApi>
+  >();
+
+  // @ts-expect-error No overload matches this call
+  Subscription.effect(Ticked, (dispatch) => dispatch(Action("Stray")));
+});

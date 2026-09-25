@@ -62,14 +62,22 @@ const noneReducer = Search.reducer({
 ## `Command.effect`
 
 ```ts fragment
-Command.effect<A, R>(
+Command.effect<A = never, R = never>(
   effect: (dispatch: Dispatcher<A>) => Effect.Effect<unknown, never, R>,
 ): Command<A, R>
+
+Command.effect<const S extends MemberSource<Channel>, R = never>(
+  source: S,
+  effect: (dispatch: Dispatcher<MembersOf<S>>) => Effect.Effect<unknown, never, R>,
+): Command<MembersOf<S>, R>
 ```
 
 The only leaf. The effect runs and emits by calling `dispatch`: zero times,
 once, or forever. The effect's error channel is `never`, so the effect handles
-its own failures before it returns.
+its own failures before it returns. The second overload takes a `source`
+first: a message, a record, a `Task` or an array of those, the same value a
+`define` slot takes. The source types `dispatch` and is not stored; see
+[Contextual typing](#contextual-typing).
 
 ```ts continue
 const effectReducer = Search.reducer({
@@ -467,20 +475,33 @@ const pipedRestart = Command.none.pipe(Command.restart("query"));
 
 `A` is inferred from the contextual type alone. Inside a handler's return,
 `dispatch`'s action type comes from the contextual type of that return. A
-standalone leaf has no contextual type, so `A` falls back to `never` unless a
-type argument names it.
+standalone leaf has no contextual type, so it names the messages it may emit
+as its first argument, and `dispatch` accepts those.
 
 ```ts continue
-const named = Command.effect<typeof actions.Results.Type>((dispatch) =>
+const named = Command.effect(actions.Results, (dispatch) =>
   dispatch(actions.Results, { hits: [] }),
 );
 ```
 
-`R` falls back to `never` the same way, so a standalone leaf that needs a
-service names both type arguments.
+`R` is inferred from the effect in both forms, so a standalone leaf that
+needs a service writes nothing more.
 
 ```ts continue
-const namedWithService = Command.effect<typeof actions.Results.Type, SearchApi>((dispatch) =>
+const namedWithService = Command.effect(actions.Results, (dispatch) =>
+  Effect.gen(function* () {
+    const api = yield* SearchApi;
+    const hits = yield* api.query("cats");
+    yield* dispatch(actions.Results, { hits });
+  }),
+);
+```
+
+A type argument names `A` too, but TypeScript has no partial inference: naming
+`A` that way also names `R`, which then must be written out.
+
+```ts continue
+const typeArguments = Command.effect<typeof actions.Results.Type, SearchApi>((dispatch) =>
   Effect.gen(function* () {
     const api = yield* SearchApi;
     const hits = yield* api.query("cats");

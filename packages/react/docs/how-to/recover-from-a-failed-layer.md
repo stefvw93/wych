@@ -22,7 +22,7 @@ class Metrics extends Context.Service<Metrics, { readonly snapshot: Effect.Effec
 const Loaded = Action("Loaded", { value: Schema.Number });
 const Retry = Action("Retry");
 
-const loadMetrics = Command.effect<typeof Loaded.Type, Metrics>((dispatch) =>
+const loadMetrics = Command.effect(Loaded, (dispatch) =>
   Effect.gen(function* () {
     const metrics = yield* Metrics;
     const value = yield* metrics.snapshot;

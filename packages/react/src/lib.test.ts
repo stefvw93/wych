@@ -2806,10 +2806,11 @@ describe("createFeatureStore — teardown belongs to the mount that started it",
       ),
     );
 
+    const SecondHop = Action("SecondHop");
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ count: Schema.Number }),
-      action: [Action("Noop", {}), Action("SecondHop", {})],
+      action: [Action("Noop"), SecondHop],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -2826,10 +2827,8 @@ describe("createFeatureStore — teardown belongs to the mount that started it",
         Unmounted: (_a: unknown, snap: { readonly state: unknown }) => [
           snap.state,
           // The reducer is cast, so there is no contextual type to carry `A`
-          // into the leaf — it is named here instead.
-          Command.effect<{ readonly _tag: "SecondHop" }>((dispatch) =>
-            dispatch({ _tag: "SecondHop" as const }),
-          ),
+          // into the leaf: the leaf names its message instead.
+          Command.effect(SecondHop, (dispatch) => dispatch(SecondHop)),
         ],
       } as any,
       render: () => null,
@@ -3462,6 +3461,37 @@ describe("dispatch(Message, payload)", () => {
     expect(() => store.dispatch(Bump, { by: "x" as never })).toThrow();
     store.stop();
     await runtime.dispose();
+  });
+});
+
+describe("Command.effect(source, effect)", () => {
+  it("is the same leaf: the source only types dispatch", async () => {
+    const Go = Action("Go");
+    const Bump = Action("Bump", { by: Schema.Number });
+    const bump = Command.effect(Bump, (dispatch) => dispatch(Bump, { by: 2 }));
+    const tick = Subscription.effect(Bump, (dispatch) => dispatch(Bump, { by: 10 }));
+    expect(bump._tag).toBe("Effect");
+
+    const feature = define({
+      props: Schema.Struct({}),
+      state: Schema.Struct({ n: Schema.Number }),
+      action: [Go, Bump],
+    }).create({
+      initialState: () => ({ n: 0 }),
+      reducer: {
+        Go: (_p, { state }) => [state, bump],
+        Bump: ({ by }, { draft }) => {
+          draft.n += by;
+          return draft;
+        },
+      },
+      render: () => null,
+      subscriptions: () => ({ tick }),
+    });
+    const { state } = await Effect.runPromise(
+      feature.run([Go.make()], { props: {}, hooks: {}, layer: Layer.empty }),
+    );
+    expect(state).toEqual({ n: 12 });
   });
 });
 

@@ -383,6 +383,7 @@ landed with every box checked again.
 
 - [x] `Command.none` is the `{ _tag: "None" }` no-op.
 - [x] `Command.effect((dispatch) => Effect<unknown, never, R>)` is the only leaf. A command that emits nothing ignores the parameter.
+- [x] `Command.effect(source, (dispatch) => …)` is the same leaf for a command written outside a handler: `source` is any `MemberSource` (a message, record, `Task` or array, either channel) and types `dispatch` as `Dispatcher<MembersOf<source>>`; `R` is inferred from the effect. The source is not stored: the command is the one-argument form's value.
 - [x] `Command.stream` and the `Stream` variant are removed. A long-lived source is `Stream.runForEach(source, dispatch)` inside the effect, so the whole `Stream` vocabulary stays available one call earlier.
 - [x] `Command.keyed(key, command)` names the group a command's fibers book under — the whole address, outermost wins. Also curried (`Command.keyed(key)`) and so pipeable. An unkeyed command books under its issuing action's tag.
 - [x] `Command.ignore`, `Command.queue`, the `Policy` type and the `Guarded` node are removed.
@@ -513,8 +514,12 @@ parameter position, so nothing in the argument can infer it — it is resolved f
 the contextual type of the call, which the reducer's return type supplies through
 `create`'s `U extends Reducer<…>` constraint. Written standalone, with no
 contextual type, `A` falls back to `never` and `dispatch` accepts nothing; the
-call site names it (`Command.effect<Action>(…)`). The spec's examples rely on the
-contextual path, and a type test compiles each of them to say so.
+call site names the messages it may emit as a value, `Command.effect(Loaded,
+(dispatch) => …)`, which also leaves `R` to inference. A type argument names
+them too (`Command.effect<Action, R>(…)`), but TypeScript has no partial
+inference, so naming `A` that way forces `R` to be spelled as well. The spec's
+examples rely on the contextual path, and a type test compiles each of them to
+say so.
 
 Two consequences the surface had to absorb, both found by compiling the example
 above rather than by reasoning about it:

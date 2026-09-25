@@ -143,7 +143,7 @@ stream. The other constructors combine, name or interrupt.
 ```ts continue
 import { Effect as E } from "effect";
 
-const loopback = Command.effect<typeof actions.Progressed.Type>((dispatch) =>
+const loopback = Command.effect(actions.Progressed, (dispatch) =>
   Stream.runForEach(Stream.make(10, 20), (percent) => dispatch(actions.Progressed, { percent })),
 );
 
@@ -153,8 +153,9 @@ console.log(loopback._tag);
 
 Inside a handler's return, `dispatch` is typed from the contextual return
 type of the reducer. A command written standalone has no such context, so it
-names the messages it may emit, as `loopback` does. Either way `dispatch`
-takes the message and its payload, and builds the value itself.
+names the messages it may emit as its first argument, as `loopback` does.
+Either way `dispatch` takes the message and its payload, and builds the
+value itself.
 
 ## Concurrency belongs to Effect
 
@@ -163,7 +164,7 @@ throttled progress report is `Stream.throttle` where the work is written.
 
 ```ts continue
 const throttled = (name: string) =>
-  Command.effect<typeof actions.Progressed.Type, Uploads>((dispatch) =>
+  Command.effect(actions.Progressed, (dispatch) =>
     Effect.gen(function* () {
       const uploads = yield* Uploads;
       yield* Stream.runForEach(

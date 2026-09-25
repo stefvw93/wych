@@ -25,7 +25,7 @@ by string; the runtime starts a new key and stops a missing one:
 
 ```tsx fragment
 subscriptions: ({ props }) => ({
-  [`presence:${props.roomId}`]: Subscription.effect<typeof Changed.Type, PresenceApi>((dispatch) =>
+  [`presence:${props.roomId}`]: Subscription.effect((dispatch) =>
     Effect.gen(function* () {
       const api = yield* PresenceApi;
       yield* Stream.runForEach(api.events(props.roomId), (event) => dispatch(Changed, event));

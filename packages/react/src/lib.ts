@@ -576,11 +576,20 @@ export const Command: {
   readonly none: Command<never>;
 
   /**
-   * The leaf. `dispatch` is how the command emits.
+   * The leaf. `dispatch` is how the command emits. Inside a handler's return
+   * it is typed by the feature. Written outside one, name the messages it
+   * may emit first, a message, record, `Task` or array of those, and `R` is
+   * inferred: `Command.effect(Loaded, (dispatch) => …)`.
    */
-  readonly effect: <A = never, R = never>(
-    effect: (dispatch: Dispatcher<A>) => Effect.Effect<unknown, never, R>,
-  ) => Command<A, R>;
+  readonly effect: {
+    <A = never, R = never>(
+      effect: (dispatch: Dispatcher<A>) => Effect.Effect<unknown, never, R>,
+    ): Command<A, R>;
+    <const S extends MemberSource<Channel>, R = never>(
+      source: S,
+      effect: (dispatch: Dispatcher<MembersOf<S>>) => Effect.Effect<unknown, never, R>,
+    ): Command<MembersOf<S>, R>;
+  };
 
   /**
    * Names the group a command's fibers book under — the *whole* address,
@@ -625,7 +634,9 @@ export const Command: {
 } = {
   none: pipeable({ _tag: "None" }),
 
-  effect: (effect) => pipeable({ _tag: "Effect", effect }),
+  // The source only types `dispatch`; the leaf is the function either way.
+  effect: ((first: unknown, second?: unknown) =>
+    pipeable({ _tag: "Effect", effect: second ?? first })) as (typeof Command)["effect"],
 
   keyed: ((key: string, command?: Command<any, any>) =>
     command === undefined
@@ -699,11 +710,23 @@ export type SubscriptionsHook<Props, State, H extends AnyHooks, A, R = never> = 
  * fold, outputs leave through `on<Tag>` — exactly as a command's leaf.
  */
 export const Subscription: {
-  readonly effect: <A = never, R = never>(
-    effect: (dispatch: Dispatcher<A>) => Effect.Effect<unknown, never, R>,
-  ) => Subscription<A, R>;
+  /** As `Command.effect`: named messages first when written outside the hook. */
+  readonly effect: {
+    <A = never, R = never>(
+      effect: (dispatch: Dispatcher<A>) => Effect.Effect<unknown, never, R>,
+    ): Subscription<A, R>;
+    <const S extends MemberSource<Channel>, R = never>(
+      source: S,
+      effect: (dispatch: Dispatcher<MembersOf<S>>) => Effect.Effect<unknown, never, R>,
+    ): Subscription<MembersOf<S>, R>;
+  };
 } = {
-  effect: (effect) => pipeable({ [subscription]: true as const, _tag: "Effect", effect }),
+  effect: ((first: unknown, second?: unknown) =>
+    pipeable({
+      [subscription]: true as const,
+      _tag: "Effect",
+      effect: second ?? first,
+    })) as (typeof Subscription)["effect"],
 };
 
 /** The frozen empty set, for a feature that declared no hook. */

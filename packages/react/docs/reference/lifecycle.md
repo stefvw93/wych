@@ -94,7 +94,7 @@ const room = Room.create({
 
     Unmounted: (_payload, { state, props }) => [
       state,
-      Command.effect<never, Presence>(() =>
+      Command.effect(() =>
         Effect.gen(function* () {
           const presence = yield* Presence;
           yield* presence.leave(props.roomId);

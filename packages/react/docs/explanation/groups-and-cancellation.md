@@ -38,7 +38,7 @@ const Dashboard = define({
 const poll = (intervalMs: number) =>
   Command.keyed(
     "poll",
-    Command.effect<typeof actions.Sampled.Type, Metrics>((dispatch) =>
+    Command.effect(actions.Sampled, (dispatch) =>
       Effect.forever(
         Effect.gen(function* () {
           const metrics = yield* Metrics;
@@ -205,7 +205,7 @@ does it. That keeps both in one fiber, under one address, with one
 interruption point.
 
 ```ts continue
-const twoSamples = Command.effect<typeof actions.Sampled.Type, Metrics>((dispatch) =>
+const twoSamples = Command.effect(actions.Sampled, (dispatch) =>
   Effect.gen(function* () {
     const metrics = yield* Metrics;
     const [first, second] = yield* Effect.all([metrics.sample, metrics.sample]);

@@ -1563,3 +1563,50 @@ test("`reduce` takes an optional drafter; the `Drafter` service is a `Reference`
   // Installing one widens nothing: a `Reference` layer has no requirement.
   expect(drafterLayer(mutativeDrafter)).type.toBe<Layer.Layer<never>>();
 });
+
+// ---------------------------------------------------------------------------
+// A command written outside a handler names its messages
+// ---------------------------------------------------------------------------
+
+test("`Command.effect(source, effect)` types `dispatch` by the source and infers `R`", () => {
+  const Loaded = Action("Loaded", { value: Schema.Number });
+  const Retry = Action("Retry");
+  const Saved = Action.output("Saved");
+
+  const one = Command.effect(Loaded, (dispatch) =>
+    Effect.gen(function* () {
+      yield* fooEffect;
+      yield* dispatch(Loaded, { value: 1 });
+    }),
+  );
+  expect(one).type.toBe<Command<{ readonly _tag: "Loaded"; readonly value: number }, FooService>>();
+
+  // An array, a record, both channels: whatever a `define` slot takes.
+  const many = Command.effect([Loaded, Action({ Other: {} }), Saved], (dispatch) =>
+    Stream.runForEach(Stream.make(1, 2), (value) => dispatch(Loaded, { value })),
+  );
+  expect(many).type.toBe<
+    Command<
+      | { readonly _tag: "Loaded"; readonly value: number }
+      | { readonly _tag: "Other" }
+      | { readonly _tag: "Saved" }
+    >
+  >();
+
+  // @ts-expect-error No overload matches this call
+  Command.effect(Loaded, (dispatch) => dispatch(Retry));
+  // @ts-expect-error is not assignable to type 'number'
+  Command.effect(Loaded, (dispatch) => dispatch(Loaded, { value: "1" }));
+
+  // It fits a handler of a feature that declares the message, and carries `R`.
+  const Def = define({
+    props: Schema.Struct({}),
+    state: Schema.Struct({}),
+    action: [Loaded, Retry],
+  });
+  const reducer = Def.reducer({
+    Retry: (_p, { state }) => [state, one],
+    Loaded: (_p, { state }) => state,
+  });
+  expect<ServicesOf<typeof reducer>>().type.toBe<FooService>();
+});
