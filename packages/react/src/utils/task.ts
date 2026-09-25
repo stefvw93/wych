@@ -1,6 +1,18 @@
 import { Cause, Effect, Option, Schema } from "effect";
 import { isLiveDraft, type Draft } from "../draft";
-import { Action, Command, type LazyCommand, type Message } from "../lib";
+import {
+  Action,
+  bindTask,
+  carryMembers,
+  Command,
+  keyedFirst,
+  type LazyCommand,
+  type MemberCarrier,
+  type Message,
+  type MessageConstructor,
+  type TaskBinding,
+  type TaskCarrier,
+} from "../lib";
 
 // ---------------------------------------------------------------------------
 // Layer 1 — the vocabulary
@@ -80,8 +92,8 @@ type TaskKeys<State> = {
 // ---------------------------------------------------------------------------
 
 /**
- * The four cases, each handed its whole member — the shape `Vocabulary.match`
- * and `Match.tag` already establish, so `Resolved: (r) => r.value` reads the
+ * The four cases, each handed its whole member — the shape `Match.tag`
+ * already establishes, so `Resolved: (r) => r.value` reads the
  * same here as it does there.
  *
  * Exhaustive, with no `orElse`: the point of four cases is that a render
@@ -113,17 +125,27 @@ export type TaskMatched<Cases> = {
 /**
  * The `_tag` a `TaggedStruct` demonstrably has, stated rather than derived.
  *
- * `Action.of` wants `AnyMessage`, whose `Type` must carry a `_tag`, and a
- * generically-fielded `Message` cannot show one — `Struct<F>["Type"]` will not
- * reduce while `F` is a type parameter. The intersection hands TypeScript the
- * proof it cannot compute, so a generated action spreads into `Action.of([...])`
- * alongside hand-written ones.
+ * A slot reads each member's `Type` for its `_tag`, and a generically-fielded
+ * `Message` cannot show one — `Struct<F>["Type"]` will not reduce while `F`
+ * is a type parameter. The intersection hands TypeScript the proof it cannot
+ * compute, so a generated action sits in a slot beside hand-written ones.
  */
 type TaskMessage<
   Tag extends Capitalize<string>,
   Fields extends Schema.Struct.Fields,
   Ch extends "internal" | "outbound",
 > = Message<Tag, Fields, Ch> & { readonly Type: { readonly _tag: Tag } };
+
+/** An operation's two actions, `Resolved` first. */
+type TaskActions<
+  Name extends string,
+  Success extends Schema.Top,
+  Failure extends Schema.Top,
+  Ch extends "internal" | "outbound",
+> = readonly [
+  TaskMessage<ResolvedTag<Name>, { readonly value: Success }, Ch>,
+  TaskMessage<RejectedTag<Name>, { readonly error: Failure }, Ch>,
+];
 
 /**
  * `` `${Name}Resolved` `` is `` `${string}Resolved` ``, which does not satisfy
@@ -194,22 +216,20 @@ export type TaskHandlers<Name extends string, Key extends string, Success, Failu
  *
  * A property of the operation, not of the call site, so it is declared once
  * where the operation is: a search is take-latest wherever it is triggered from.
- *
- * Take-*first* is absent, and deliberately so: dropping a start means reading
- * whether one is already pending, which is a question about the feature's state
- * — the one thing this layer does not touch. It is a guard in the handler that
- * has the state in hand:
- *
- *     ClickedSubmit: (_action, { state }) =>
- *       Task.isPending(state.submit)
- *         ? state
- *         : [{ ...state, submit: Task.pending }, submit.run(state.form)],
  */
 export type TaskMode =
   /** Interrupt the running fiber, run the new one. The default, and what search wants. */
   | "latest"
   /** Run both. Last to settle wins, which is usually a bug — declare it deliberately. */
-  | "every";
+  | "every"
+  /**
+   * Keep the running one, drop the new start. Decided where the work is
+   * scheduled, by whether a run of this operation is in flight on the mount,
+   * so it holds for every path: the slot's `start`, `op.run`, `Task.start`
+   * and `Task.output`. A run that was interrupted without settling (a
+   * `cancel`, an unmount) is not in flight, so the next start runs.
+   */
+  | "first";
 
 // ---------------------------------------------------------------------------
 // Failure
@@ -252,26 +272,34 @@ const errorMessage: TaskOnError<string> = (cause) => {
 // ---------------------------------------------------------------------------
 
 /**
- * Two actions and the command that produces them. That is the whole surface.
+ * Two actions and the command that produces them, plus the schema of the
+ * field they fill.
  *
- * What it deliberately does not have: a state field, an initial value, or a
- * `start` that writes into state on your behalf. The operation owns the
- * *work* — scheduling it, interrupting it, turning however it ended into one
- * of two actions. Where the result lands is the feature's business: the
- * reducer is exhaustive over the action union, so the two handlers cannot be
- * forgotten. `into(key)` writes them for the common case, and a hand-written
- * entry is the extension point:
+ * The operation owns the *work*: scheduling it, interrupting it, turning
+ * however it ended into one of two actions. Where the result lands is
+ * declared by the feature. In `define`'s `tasks` slot the key names the
+ * field, and the fold writes it: `Pending` from `snapshot.tasks.<key>.start`,
+ * `Idle` from `.cancel()`, the settled value before any settle handler runs:
  *
- *     ...search.into("search"),
+ *     const Search = define({ props, state, tasks: { search }, actions })
  *
- *     // or, to derive something else from the result — select the first
- *     // item, clear a filter — write the entry yourself; after the spread,
- *     // the explicit key wins:
- *     SearchResolved: (action, { state }) => ({ ...state, search: Task.resolved(action.value) }),
+ *     reducer: {
+ *       Typed: ({ query }, { tasks }) => tasks.search.start(query),
+ *       // optional: `draft.search` already holds the result
+ *       SearchResolved: ({ value }, { draft }) => {
+ *         draft.selected = value[0]
+ *         return draft
+ *       },
+ *     }
+ *
+ * For work stored somewhere other than one field, the operation goes into
+ * the `actions` slot instead, and the reducer writes the field by hand:
+ * `Task.start` and `op.run` to start it, `into(key)` or a hand-written entry
+ * to settle it.
  *
  * Internal and announced operations are the same shape. The only difference is
  * the channel the two actions are declared on, which is what `Task.output`
- * changes — an announced operation was never anything but these three members.
+ * changes; an announced operation has no field and no slot.
  */
 export interface TaskOperationBase<
   Name extends string,
@@ -280,15 +308,35 @@ export interface TaskOperationBase<
   Input = never,
   R = never,
   Ch extends "internal" | "outbound" = "internal",
-> {
+>
+  extends
+    MemberCarrier<TaskActions<Name, Success, Failure, Ch>>,
+    TaskCarrier<
+      TaskBinding<
+        TaskValue<Success["Type"], Failure["Type"]>,
+        Success["Type"],
+        TaskAction<Name, Success["Type"], Failure["Type"]>,
+        Input,
+        R,
+        Ch
+      >
+    > {
   /**
-   * Spread into `Action.of([...])` alongside the feature's own actions — or,
-   * for `Task.output`, into the vocabulary passed as `output`.
+   * The two actions. The operation itself goes into `define`'s `tasks` slot
+   * under the key of the field it fills (`tasks: { search }`), into the
+   * `actions` slot beside the feature's own (`actions: [actions, search]`),
+   * or into `outputs` for `Task.output`; this is the same pair, for reading.
    */
-  readonly actions: readonly [
-    TaskMessage<ResolvedTag<Name>, { readonly value: Success }, Ch>,
-    TaskMessage<RejectedTag<Name>, { readonly error: Failure }, Ch>,
-  ];
+  readonly actions: TaskActions<Name, Success, Failure, Ch>;
+
+  /**
+   * The `Resolved` action's schema, by name: `search.Resolved.make({ value })`
+   * builds the action a test seeds.
+   */
+  readonly Resolved: TaskActions<Name, Success, Failure, Ch>[0];
+
+  /** The `Rejected` action's schema: `search.Rejected.make({ error })`. */
+  readonly Rejected: TaskActions<Name, Success, Failure, Ch>[1];
 
   /**
    * Issue the work, as a `Command`. Pair it with whatever state the handler
@@ -296,6 +344,10 @@ export interface TaskOperationBase<
    *
    *     ClickedSearch: (_action, { state }) =>
    *       [{ ...state, search: Task.pending }, search.run(state.searchParams)]
+   *
+   * This is the raw command: it writes nothing. For a task in `define`'s
+   * `tasks` slot, `snapshot.tasks.<key>.start` is the call that writes
+   * `Pending` beside it.
    *
    * Returned from the *triggering* action's handler, which is what keeps the
    * effect's `R` visible to `ServicesOf` — the services a command needs are
@@ -318,8 +370,20 @@ export interface TaskOperationBase<
    * clear the field in the same return:
    *
    *     ClickedCancel: (_action, { state }) => [{ ...state, search: Task.idle }, search.cancel]
+   *
+   * For a task in `define`'s `tasks` slot, `snapshot.tasks.<key>.cancel()`
+   * is that return: it writes `Idle` and issues this command.
    */
   readonly cancel: Command<TaskAction<Name, Success["Type"], Failure["Type"]>>;
+
+  /**
+   * The schema of a state field holding this operation's `TaskValue`, built
+   * from its own `success` and `failure`, so the field cannot drift from the
+   * work that fills it:
+   *
+   *     state: Schema.Struct({ results: search.schema })
+   */
+  readonly schema: TaskSchema<Success, Failure>;
 }
 
 /**
@@ -348,6 +412,42 @@ export interface TaskInto<
   readonly into: <Key extends string>(
     key: Key,
   ) => TaskHandlers<Name, Key, Success["Type"], Failure["Type"]>;
+
+  /**
+   * The `Resolved` handler for a field, followed by the rest of what the
+   * result means. It writes `Task.resolved(value)` into `snapshot.draft[key]`,
+   * then hands `then` the value and the same snapshot, so `then` writes into
+   * the draft beside it and returns it, alone or with a command:
+   *
+   *     ...save.into("save"),
+   *     SaveResolved: save.resolvedInto("save", (revision, { draft, props }) => {
+   *       draft.dirty = false;
+   *       return [draft, Command.output(Saved, { id: props.noteId, revision })];
+   *     }),
+   *
+   * Written as the handler, in its key's position, which is what gives
+   * `snapshot` and a command's `dispatch` the feature's own types. Return the
+   * draft or `snapshot.state`: either finishes as the draft, with the field
+   * written. Any other state is the fold's `TypeError`.
+   */
+  readonly resolvedInto: <
+    Key extends string,
+    Snap extends { readonly state: TaskField<Key, Success["Type"], Failure["Type"]> },
+    N,
+  >(
+    key: Key,
+    then: (value: Success["Type"], snapshot: Snap) => N,
+  ) => (payload: { readonly value: Success["Type"] }, snapshot: Snap) => N;
+
+  /** The `Rejected` handler on the same terms: `Task.rejected(error)`, then `then`. */
+  readonly rejectedInto: <
+    Key extends string,
+    Snap extends { readonly state: TaskField<Key, Success["Type"], Failure["Type"]> },
+    N,
+  >(
+    key: Key,
+    then: (error: Failure["Type"], snapshot: Snap) => N,
+  ) => (payload: { readonly error: Failure["Type"] }, snapshot: Snap) => N;
 }
 
 /**
@@ -370,12 +470,11 @@ export type TaskOperation<
 // ---------------------------------------------------------------------------
 
 /**
- * `onError` is mandatory in both forms. The `Schema.String` default exists to
- * spare you a schema, not to spare you the decision — `Task.errorMessage` is the
- * mapping that pairs with it, spelled out at the call site so a defect quietly
- * becoming `"[object Object]"` is something you chose. `Failure` defaults to
- * `Schema.String` on the type side the same way, so `failure` is optional and
- * `onError` is typed by it either way.
+ * `failure` is optional and defaults to `Schema.String`; `onError` is optional
+ * exactly when `failure` is omitted, and defaults to `Task.errorMessage`, the
+ * mapping that pairs with a string failure. Declaring a `failure` schema is
+ * declaring a shape the default cannot produce, so `onError` is required
+ * with it, even when that schema is `Schema.String`.
  *
  * `run` is optional, and declaring it is what binds the work to the operation:
  * the effect is written once, next to the schemas that describe what it yields,
@@ -388,35 +487,61 @@ export type TaskOperation<
  * candidate, so it would fall back to `never` and the operation would read as
  * unbound: typed to take an effect the runtime then ignores. The overload pins
  * `Input` to `void`, which TypeScript lets a caller omit: `op.run()`.
+ *
+ * Four overloads: that pair, each without and with a `failure`. The general
+ * form with a `failure` is last, so a call that matches nothing reports its
+ * error, which names a missing `onError`.
  */
 export interface TaskConstructor<Ch extends "internal" | "outbound"> {
+  <const Name extends Capitalize<string>, Success extends Schema.Top, R = never>(
+    name: Name,
+    schemas: {
+      readonly success: Success;
+      readonly failure?: undefined;
+      readonly onError?: TaskOnError<string>;
+      readonly mode?: TaskMode;
+      readonly run: () => Effect.Effect<Success["Type"], unknown, R>;
+    },
+  ): TaskOperation<Name, Success, Schema.String, void, R, Ch>;
+
   <
     const Name extends Capitalize<string>,
     Success extends Schema.Top,
-    Failure extends Schema.Top = Schema.String,
+    Failure extends Schema.Top,
     R = never,
   >(
     name: Name,
     schemas: {
       readonly success: Success;
-      readonly failure?: Failure;
+      readonly failure: Failure;
       readonly onError: TaskOnError<Failure["Type"]>;
       readonly mode?: TaskMode;
       readonly run: () => Effect.Effect<Success["Type"], unknown, R>;
     },
   ): TaskOperation<Name, Success, Failure, void, R, Ch>;
 
+  <const Name extends Capitalize<string>, Success extends Schema.Top, Input = never, R = never>(
+    name: Name,
+    schemas: {
+      readonly success: Success;
+      readonly failure?: undefined;
+      readonly onError?: TaskOnError<string>;
+      readonly mode?: TaskMode;
+      readonly run?: (input: Input) => Effect.Effect<Success["Type"], unknown, R>;
+    },
+  ): TaskOperation<Name, Success, Schema.String, Input, R, Ch>;
+
   <
     const Name extends Capitalize<string>,
     Success extends Schema.Top,
-    Failure extends Schema.Top = Schema.String,
+    Failure extends Schema.Top,
     Input = never,
     R = never,
   >(
     name: Name,
     schemas: {
       readonly success: Success;
-      readonly failure?: Failure;
+      readonly failure: Failure;
       readonly onError: TaskOnError<Failure["Type"]>;
       readonly mode?: TaskMode;
       readonly run?: (input: Input) => Effect.Effect<Success["Type"], unknown, R>;
@@ -470,15 +595,16 @@ export interface TaskConstructors extends TaskConstructor<"internal"> {
    * `key` is constrained to the state's own async task fields, so a typo or a
    * renamed field is a compile error rather than a field that stays `Idle`.
    * Reach for the tuple directly when the fold writes something other than
-   * `Pending` — a take-first guard, or a field cleared rather than started.
+   * `Pending`, such as a field cleared rather than started. A task in
+   * `define`'s `tasks` slot has `snapshot.tasks.<key>.start` instead.
    *
    * Handed `snapshot.draft`, it writes `Pending` into the draft and returns
    * the draft, never a spread of it: a draft's children are proxies that are
    * revoked once the fold ends, so a copy holding them is unreadable.
    */
-  readonly start: <State, Key extends TaskKeys<State>, Action, R>(
+  readonly start: <State, Action, R>(
     state: State,
-    key: Key,
+    key: TaskKeys<State>,
     command: Command<Action, R> | LazyCommand<State, Action, R>,
   ) => readonly [State, Command<Action, R> | LazyCommand<State, Action, R>];
 
@@ -507,8 +633,8 @@ export interface TaskConstructors extends TaskConstructor<"internal"> {
 
   /**
    * The partial reads, for everywhere that is not a render — a reducer
-   * deriving from the last result, a `disabled={…}`, a take-first guard —
-   * where four cases are noise. Data-first, like `Option`'s own.
+   * deriving from the last result, a `disabled={…}`, a guard — where four
+   * cases are noise. Data-first, like `Option`'s own.
    */
   readonly value: <Success>(task: TaskValue<Success, unknown>) => Option.Option<Success>;
   readonly error: <Failure>(task: TaskValue<unknown, Failure>) => Option.Option<Failure>;
@@ -530,7 +656,7 @@ const make = <Ch extends "internal" | "outbound">(ch: Ch) =>
     schemas: {
       readonly success: Schema.Top;
       readonly failure?: Schema.Top;
-      readonly onError: TaskOnError<unknown>;
+      readonly onError?: TaskOnError<unknown>;
       readonly mode?: TaskMode;
       readonly run?: (input: unknown) => Effect.Effect<unknown, unknown, unknown>;
     },
@@ -538,6 +664,7 @@ const make = <Ch extends "internal" | "outbound">(ch: Ch) =>
     const resolvedTag = `${name}Resolved` as Capitalize<string>;
     const rejectedTag = `${name}Rejected` as Capitalize<string>;
     const failure = schemas.failure ?? Schema.String;
+    const onError = schemas.onError ?? errorMessage;
     const mode = schemas.mode ?? "latest";
 
     // Namespaced, because the name is generated: an unkeyed command books under
@@ -546,7 +673,8 @@ const make = <Ch extends "internal" | "outbound">(ch: Ch) =>
     // this operation's `cancel` — nor the reverse.
     const group = `Task/${name}`;
 
-    const message_ = ch === "internal" ? Action : Action.output;
+    const message_: MessageConstructor<"internal" | "outbound"> =
+      ch === "internal" ? Action : Action.output;
     const Resolved = message_(resolvedTag, { value: schemas.success });
     const Rejected = message_(rejectedTag, { error: failure });
 
@@ -563,16 +691,21 @@ const make = <Ch extends "internal" | "outbound">(ch: Ch) =>
           Effect.catchCause((cause) =>
             Cause.hasInterruptsOnly(cause)
               ? Effect.void
-              : dispatch((Rejected as any).make({ error: schemas.onError(cause) })),
+              : dispatch((Rejected as any).make({ error: onError(cause) })),
           ),
         ),
       );
 
-    // Both modes book under the operation's group, so `cancel` addresses them
-    // all — the book is one `Set` of fibers per name. Only `latest` also
-    // interrupts what is already running.
+    // Every mode books under the operation's group, so `cancel` addresses
+    // them all — the book is one `Set` of fibers per name. `latest` also
+    // interrupts what is already running; `first` is dropped while anything
+    // is.
     const scheduled = (effect: Effect.Effect<unknown, unknown, unknown>) =>
-      mode === "every" ? Command.keyed(group, work(effect)) : Command.restart(group, work(effect));
+      mode === "latest"
+        ? Command.restart(group, work(effect))
+        : mode === "first"
+          ? keyedFirst(group, work(effect))
+          : Command.keyed(group, work(effect));
 
     // Bound or not, `run` ends up here: with the config's `run` declared the
     // argument is its input, without it the argument is the effect itself.
@@ -599,12 +732,52 @@ const make = <Ch extends "internal" | "outbound">(ch: Ch) =>
       }),
     });
 
-    const operation = {
-      actions: [Resolved, Rejected],
-      run: (input: unknown) => scheduled(effectOf(input)),
-      cancel: Command.cancel(group),
-    };
-    return ch === "internal" ? { ...operation, into } : operation;
+    // Written into the draft, so what `then` writes lands beside it and a
+    // returned draft is the one finished state. `snapshot.state` returned in
+    // its place means "nothing more than the field", so it becomes the draft
+    // rather than a second next state.
+    const settleInto =
+      (field: "value" | "error", write: (x: unknown) => unknown) =>
+      (key: string, then: (x: unknown, snapshot: unknown) => unknown) =>
+      (
+        payload: Record<string, unknown>,
+        snapshot: { readonly state: unknown; readonly draft: Record<string, unknown> },
+      ) => {
+        snapshot.draft[key] = write(payload[field]);
+        const next = then(payload[field], snapshot);
+        if (next === snapshot.state) return snapshot.draft;
+        if (Array.isArray(next) && next[0] === snapshot.state) return [snapshot.draft, next[1]];
+        return next;
+      };
+
+    const run = (input: unknown) => scheduled(effectOf(input));
+    const cancel = Command.cancel(group);
+    const schema = buildSchema(schemas.success, failure);
+    const operation = bindTask(
+      carryMembers({ actions: [Resolved, Rejected], Resolved, Rejected, run, cancel, schema }, [
+        Resolved,
+        Rejected,
+      ]),
+      {
+        channel: ch,
+        resolvedTag,
+        rejectedTag,
+        run,
+        cancel,
+        idle,
+        pending: pendingValue,
+        resolved: helpers.resolved,
+        rejected: helpers.rejected,
+      },
+    );
+    return ch === "internal"
+      ? {
+          ...operation,
+          into,
+          resolvedInto: settleInto("value", helpers.resolved),
+          rejectedInto: settleInto("error", helpers.rejected),
+        }
+      : operation;
   } as unknown as TaskConstructor<Ch>;
 
 /**
@@ -628,7 +801,7 @@ const helpers: Omit<TaskConstructors, "output"> = {
   // The cast is the one place the four-way dispatch is not proven to
   // TypeScript: `cases` is exhaustive by its type, so the lookup cannot miss.
   match: (value, cases) =>
-    (cases as unknown as Record<string, (value: unknown) => never>)[value._tag]!(value),
+    (cases as unknown as Record<string, (value: unknown) => never>)[value._tag](value),
   value: (task) => (task._tag === "Resolved" ? Option.some(task.value) : Option.none()),
   error: (task) => (task._tag === "Rejected" ? Option.some(task.error) : Option.none()),
   getOrElse: (task, orElse) => (task._tag === "Resolved" ? task.value : orElse()),
@@ -644,30 +817,24 @@ const helpers: Omit<TaskConstructors, "output"> = {
  *
  * Declares two actions and the command that produces them, from a name and the
  * schemas of what the work yields. The name prefixes the action tags and names
- * the fiber group `cancel` addresses. The state half is `Task.schema` plus four
- * lines of your own reducer, which is where it stays: this layer never writes
- * into your state, so where a result lands is visible in the file that owns it.
+ * the fiber group `cancel` addresses. The state half is a key in `define`'s
+ * `tasks` slot, which adds the field, starts it `Idle` and writes each
+ * settle into it:
  *
  *     const wallhavenSearch = Task("WallhavenSearch", {
  *       success: WallhavenSearchPayload,
- *       onError: Task.errorMessage,
  *       run: (params: typeof WallhavenSearchParams.Type) =>
  *         Effect.flatMap(WallhavenService, (service) => service.search(params)),
  *     })
  *
- *     const State = Schema.Struct({ search: Task.schema(WallhavenSearchPayload) })
- *     const SeedAction = Action.of([ClickedSearch, ...wallhavenSearch.actions])
+ *     const Seed = define({ props, state: State, tasks: { search: wallhavenSearch }, actions })
  *
- *     const initialState = FeatureDefinition.initialState(() => ({ search: Task.idle }))
- *
- *     const reducer = FeatureDefinition.reducer({
- *       ClickedSearch: (_action, { state }) =>
- *         Task.start(state, "search", wallhavenSearch.run(state.searchParams)),
- *       ...wallhavenSearch.into("search"),
+ *     const reducer = Seed.reducer({
+ *       ClickedSearch: (_action, { state, tasks }) => tasks.search.start(state.searchParams),
  *     })
  *
- * `into` writes the two settle handlers. To derive more from the result, write
- * `WallhavenSearchResolved:` yourself after the spread; the explicit key wins.
+ * A settle handler (`WallhavenSearchResolved`) is optional, and runs after
+ * the field is written, to derive more from the result.
  *
  *     // render
  *     Task.match(state.search, {
@@ -676,6 +843,10 @@ const helpers: Omit<TaskConstructors, "output"> = {
  *       Rejected: (rejected) => `Error: ${rejected.error}`,
  *       Resolved: (resolved) => <Results items={resolved.value.data} />,
  *     })
+ *
+ * The manual path, for work stored somewhere other than one field, is the
+ * operation in the `actions` slot, a `Task.schema` field, `Task.start` and
+ * `into(key)` or `resolvedInto`.
  *
  * `run` in the config is what keeps the work in one place; omit it and the
  * operation's `run` takes the effect instead, for work that differs per call

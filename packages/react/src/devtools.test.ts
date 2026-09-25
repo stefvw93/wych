@@ -25,7 +25,7 @@ import {
   type DevtoolsConsole,
   type DevtoolsEvent,
 } from "./devtools";
-import { Command } from "./lib";
+import { Command, keyedFirst } from "./lib";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -127,6 +127,21 @@ describe("summarizeCommand", () => {
         { _tag: "Keyed", key: "q", command: { _tag: "Effect" } },
         { _tag: "None" },
       ],
+    });
+  });
+
+  it("keeps a take-first `Keyed` node's flag", () => {
+    const summary = summarizeCommand(
+      keyedFirst(
+        "Task/Save",
+        Command.effect(() => Effect.void),
+      ),
+    );
+    expect(summary).toEqual({
+      _tag: "Keyed",
+      key: "Task/Save",
+      command: { _tag: "Effect" },
+      first: true,
     });
   });
 

@@ -1,7 +1,8 @@
 import { Effect, Layer } from "effect";
+import { Next, Task } from "@wych/react";
 import { expect, test } from "vitest";
-import { editor, SaveCancelled, SaveClicked } from "./note-editor";
-import { byHand, SaveClicked as SaveClickedByHand } from "./note-editor-by-hand";
+import { actions, editor, saveNote } from "./note-editor";
+import { actions as byHandActions, byHand } from "./note-editor-by-hand";
 import { NotesApi } from "./notes-api";
 
 const props = { noteId: "n1", initialText: "Buy milk" };
@@ -23,7 +24,7 @@ const failingSave = Layer.succeed(NotesApi)({
 
 test("by hand: a second click while saving is ignored", async () => {
   const { emitted, state } = await Effect.runPromise(
-    byHand.run([SaveClickedByHand.make({}), SaveClickedByHand.make({})], {
+    byHand.run([byHandActions.SaveClicked.make(), byHandActions.SaveClicked.make()], {
       props,
       hooks: {},
       layer: slowSave,
@@ -37,7 +38,7 @@ test("by hand: a second click while saving is ignored", async () => {
 
 test("by hand: a failure lands in the error field", async () => {
   const { state } = await Effect.runPromise(
-    byHand.run([SaveClickedByHand.make({})], { props, hooks: {}, layer: failingSave }),
+    byHand.run([byHandActions.SaveClicked.make()], { props, hooks: {}, layer: failingSave }),
   );
 
   expect(state.error).toBe("offline");
@@ -48,16 +49,35 @@ test("by hand: a failure lands in the error field", async () => {
 
 test("task: a second click while saving is ignored", async () => {
   const { emitted, state } = await Effect.runPromise(
-    editor.run([SaveClicked.make({}), SaveClicked.make({})], { props, hooks: {}, layer: slowSave }),
+    editor.run([actions.SaveClicked.make(), actions.SaveClicked.make()], {
+      props,
+      hooks: {},
+      layer: slowSave,
+    }),
   );
 
   expect(emitted).toEqual([{ _tag: "SaveResolved", value: "n1@2" }]);
   expect(state.save).toEqual({ _tag: "Resolved", value: "n1@2" });
+  expect(state.dirty).toBe(false);
+});
+
+test("task: a settle writes the field, then the handler clears dirty", () => {
+  const settled = editor.reduce(saveNote.Resolved.make({ value: "n1@3" }), {
+    state: { text: "Buy milk", dirty: true, save: Task.pending },
+    props,
+    hooks: {},
+  });
+
+  expect(Next.state(settled)).toEqual({
+    text: "Buy milk",
+    dirty: false,
+    save: { _tag: "Resolved", value: "n1@3" },
+  });
 });
 
 test("task: a failure lands in the same field", async () => {
   const { state } = await Effect.runPromise(
-    editor.run([SaveClicked.make({})], { props, hooks: {}, layer: failingSave }),
+    editor.run([actions.SaveClicked.make()], { props, hooks: {}, layer: failingSave }),
   );
 
   expect(state.save).toEqual({ _tag: "Rejected", error: "offline" });
@@ -65,7 +85,7 @@ test("task: a failure lands in the same field", async () => {
 
 test("task: a cancelled save dispatches nothing and resets to Idle", async () => {
   const { emitted, state } = await Effect.runPromise(
-    editor.run([SaveClicked.make({}), SaveCancelled.make({})], {
+    editor.run([actions.SaveClicked.make(), actions.SaveCancelled.make()], {
       props,
       hooks: {},
       layer: slowSave,

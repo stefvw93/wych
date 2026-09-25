@@ -49,7 +49,7 @@ describe("effect runtime probes", () => {
     expect(ensured).toBe(false);
     expect(exits).toHaveLength(1);
     expect(firedBeforeInterruptReturned).toBe(true);
-    expect(Exit.isFailure(exits[0]!) && Cause.hasInterruptsOnly(exits[0]!.cause)).toBe(true);
+    expect(Exit.isFailure(exits[0]) && Cause.hasInterruptsOnly(exits[0].cause)).toBe(true);
   });
 
   /**
@@ -76,7 +76,7 @@ describe("effect runtime probes", () => {
     );
 
     expect(firedAtAttach).toBe(true);
-    expect(Exit.isFailure(exits[0]!) && Cause.squash(exits[0]!.cause)).toBe(boom);
+    expect(Exit.isFailure(exits[0]) && Cause.squash(exits[0].cause)).toBe(boom);
   });
 
   /**
@@ -116,6 +116,6 @@ describe("effect runtime probes", () => {
     expect(regionEnded).toBe(true);
     expect(firedBeforeRegionEnded).toBe(false);
     expect(exits).toHaveLength(1);
-    expect(Exit.isFailure(exits[0]!) && Cause.hasInterruptsOnly(exits[0]!.cause)).toBe(true);
+    expect(Exit.isFailure(exits[0]) && Cause.hasInterruptsOnly(exits[0].cause)).toBe(true);
   });
 });

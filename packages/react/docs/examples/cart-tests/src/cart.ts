@@ -8,13 +8,14 @@ export class Payments extends Context.Service<
   { readonly charge: (total: number) => Effect.Effect<string, Error> }
 >()("Payments") {}
 
-export const Added = Action("Added", { id: Schema.String, price: Schema.Number });
-export const Submitted = Action("Submitted", {});
+export const actions = Action({
+  Added: { id: Schema.String, price: Schema.Number },
+  Submitted: {},
+});
 const Ordered = Action.output("Ordered", { total: Schema.Number });
 
 const charge = Task("Charge", {
   success: Schema.String,
-  onError: Task.errorMessage,
   run: (total: number) =>
     Effect.gen(function* () {
       const api = yield* Payments;
@@ -25,30 +26,27 @@ const charge = Task("Charge", {
 const total = (items: ReadonlyArray<{ readonly price: number }>) =>
   items.reduce((sum, item) => sum + item.price, 0);
 
+// `tasks: { charge }` gives the task the `charge` state field: it starts
+// `Idle`, `start` writes `Pending`, and the fold writes the settle into it.
 export const cart = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({
-    items: Schema.Array(Item),
-    charge: Task.schema(Schema.String),
-  }),
-  action: Action.of([Added, Submitted, ...charge.actions]),
-  output: Action.of([Ordered]),
+  state: Schema.Struct({ items: Schema.Array(Item) }),
+  tasks: { charge },
+  actions,
+  outputs: Ordered,
 }).create({
-  initialState: () => ({ items: [], charge: Task.idle }),
+  initialState: () => ({ items: [] }),
   reducer: {
     Added: (item, { draft }) => {
       draft.items.push(item);
       return draft;
     },
-    Submitted: (_payload, { draft }) => Task.start(draft, "charge", charge.run(total(draft.items))),
-    ChargeResolved: ({ value }, { draft, state }) => {
-      draft.charge = Task.resolved(value);
-      return [draft, Command.output(Ordered, { total: total(state.items) })];
-    },
-    ChargeRejected: ({ error }, { draft }) => {
-      draft.charge = Task.rejected(error);
-      return draft;
-    },
+    Submitted: (_payload, { state, tasks }) => tasks.charge.start(total(state.items)),
+    // The receipt is already in `charge` when this runs; announce the order beside it.
+    ChargeResolved: (_receipt, { state }) => [
+      state,
+      Command.output(Ordered, { total: total(state.items) }),
+    ],
   },
   render: () => null,
 });

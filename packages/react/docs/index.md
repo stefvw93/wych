@@ -34,13 +34,11 @@ class SearchApi extends Context.Service<
   { readonly hits: (query: string) => Effect.Effect<ReadonlyArray<string>> }
 >()("SearchApi") {}
 
-const Typed = Action("Typed", { query: Schema.String });
-const Cleared = Action("Cleared", {});
+const actions = Action({ Typed: { query: Schema.String }, Cleared: {} });
 
 // Two actions (SearchResolved, SearchRejected) and one cancellable command.
 const search = Task("Search", {
   success: Hits,
-  onError: Task.errorMessage,
   run: (query: string) =>
     Effect.gen(function* () {
       const api = yield* SearchApi;
@@ -50,30 +48,30 @@ const search = Task("Search", {
 
 const taskSearch = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({ query: Schema.String, results: Task.schema(Hits) }),
-  action: Action.of([Typed, Cleared, ...search.actions]),
+  state: Schema.Struct({ query: Schema.String }),
+  // The task owns the `results` field: Idle, Pending, Resolved or Rejected.
+  tasks: { results: search },
+  actions,
 }).create({
-  initialState: () => ({ query: "", results: Task.idle }),
+  initialState: () => ({ query: "" }),
   reducer: {
     // Take latest: a new Typed interrupts the fiber still resolving the old one.
-    Typed: ({ query }, { draft }) => {
+    Typed: ({ query }, { draft, tasks }) => {
       draft.query = query;
-      return Task.start(draft, "results", search.run(query));
+      return tasks.results.start(query);
     },
-    Cleared: (_payload, { draft }) => {
+    Cleared: (_payload, { draft, tasks }) => {
       draft.query = "";
-      draft.results = Task.idle;
-      return [draft, search.cancel];
+      return tasks.results.cancel();
     },
-    ...search.into("results"),
   },
   render: ({ state, dispatch }) => (
     <div>
       <input
         value={state.query}
-        onChange={(event) => dispatch(Typed.make({ query: event.target.value }))}
+        onChange={(event) => dispatch(actions.Typed, { query: event.target.value })}
       />
-      <button onClick={() => dispatch(Cleared.make({}))}>clear</button>
+      <button onClick={() => dispatch(actions.Cleared)}>clear</button>
       {Task.match(state.results, {
         Idle: () => null,
         Pending: () => <p>Searching</p>,
@@ -101,9 +99,10 @@ export const Search = component(taskSearch, { name: "Search" });
 ```
 
 The fetch, the cancel and the race are in the `Typed` handler, as a value.
-`Task.start` writes `Pending` on the same fold, so the button is disabled
-before the click handler returns. `search.cancel` is a command too, so a
-different action can interrupt the request.
+`tasks.results.start` writes `Pending` on the same fold, so `Searching`
+paints before the request starts, and the settle lands in `results` with no
+handler to write. `tasks.results.cancel()` writes `Idle` and interrupts the
+request, so a different action can end it.
 
 The proof does not need React. Feed two keystrokes to `run` with an API slow
 enough that the first is still in flight when the second arrives, and read
@@ -115,7 +114,7 @@ const slowApi = Layer.succeed(SearchApi)({
 });
 
 const result = await Effect.runPromise(
-  taskSearch.run([Typed.make({ query: "a" }), Typed.make({ query: "ab" })], {
+  taskSearch.run([actions.Typed.make({ query: "a" }), actions.Typed.make({ query: "ab" })], {
     props: {},
     hooks: {},
     layer: slowApi,
@@ -173,7 +172,7 @@ One app, three chapters. Start here.
 
 - [Runtime](/docs/reference/runtime): `createRuntime`, `component`, `useFeature`, output props, props validation.
 - [Features](/docs/reference/features): `define`, `create`, `reduce`, `run`, `Next`, `Children`.
-- [Actions and outputs](/docs/reference/actions): `Action`, `Action.output`, `Action.of`, the two channels.
+- [Actions and outputs](/docs/reference/actions): `Action`, `Action.output`, the record form, the two channels.
 - [Commands](/docs/reference/commands): every constructor, groups, the contextual typing rule.
 - [Subscriptions](/docs/reference/subscriptions): `Subscription.effect`, the `subscriptions` hook, the key rule, `run` and `subscriptions`.
 - [Lifecycle](/docs/reference/lifecycle): the five runtime actions and change detection.

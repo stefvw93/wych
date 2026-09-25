@@ -22,11 +22,13 @@ class Uploads extends Context.Service<
   { readonly upload: (name: string) => Stream.Stream<number, Error> }
 >()("Uploads") {}
 
-const Picked = Action("Picked", { name: Schema.String });
-const Progressed = Action("Progressed", { percent: Schema.Number });
-const Finished = Action("Finished", {});
-const Failed = Action("Failed", { message: Schema.String });
-const Cancelled = Action("Cancelled", {});
+const actions = Action({
+  Picked: { name: Schema.String },
+  Progressed: { percent: Schema.Number },
+  Finished: {},
+  Failed: { message: Schema.String },
+  Cancelled: {},
+});
 
 const Uploader = define({
   props: Schema.Struct({}),
@@ -35,7 +37,7 @@ const Uploader = define({
     percent: Schema.Number,
     status: Schema.String,
   }),
-  action: Action.of([Picked, Progressed, Finished, Failed, Cancelled]),
+  actions,
 });
 ```
 
@@ -59,12 +61,12 @@ const uploader = Uploader.create({
             Effect.gen(function* () {
               const uploads = yield* Uploads;
               yield* Stream.runForEach(uploads.upload(name), (percent) =>
-                dispatch(Progressed.make({ percent })),
+                dispatch(actions.Progressed, { percent }),
               );
-              yield* dispatch(Finished.make({}));
+              yield* dispatch(actions.Finished);
             }).pipe(
               Effect.catchCause((cause) =>
-                dispatch(Failed.make({ message: String(Cause.squash(cause)) })),
+                dispatch(actions.Failed, { message: String(Cause.squash(cause)) }),
               ),
             ),
           ),
@@ -96,7 +98,7 @@ const uploader = Uploader.create({
 The command the handler returned is readable before anything runs.
 
 ```ts continue
-const picked = uploader.reduce(Picked.make({ name: "photo.jpg" }), {
+const picked = uploader.reduce(actions.Picked.make({ name: "photo.jpg" }), {
   state: { name: "", percent: 0, status: "idle" },
   props: {},
   hooks: {},
@@ -119,7 +121,7 @@ const threeSteps = Layer.succeed(Uploads)({
 });
 
 const done = await Effect.runPromise(
-  uploader.run([Picked.make({ name: "photo.jpg" })], {
+  uploader.run([actions.Picked.make({ name: "photo.jpg" })], {
     props: {},
     hooks: {},
     layer: threeSteps,
@@ -141,8 +143,8 @@ stream. The other constructors combine, name or interrupt.
 ```ts continue
 import { Effect as E } from "effect";
 
-const loopback = Command.effect<typeof Progressed.Type>((dispatch) =>
-  Stream.runForEach(Stream.make(10, 20), (percent) => dispatch(Progressed.make({ percent }))),
+const loopback = Command.effect(actions.Progressed, (dispatch) =>
+  Stream.runForEach(Stream.make(10, 20), (percent) => dispatch(actions.Progressed, { percent })),
 );
 
 console.log(loopback._tag);
@@ -151,7 +153,9 @@ console.log(loopback._tag);
 
 Inside a handler's return, `dispatch` is typed from the contextual return
 type of the reducer. A command written standalone has no such context, so it
-names its own vocabulary, as `loopback` does.
+names the messages it may emit as its first argument, as `loopback` does.
+Either way `dispatch` takes the message and its payload, and builds the
+value itself.
 
 ## Concurrency belongs to Effect
 
@@ -160,14 +164,14 @@ throttled progress report is `Stream.throttle` where the work is written.
 
 ```ts continue
 const throttled = (name: string) =>
-  Command.effect<typeof Progressed.Type, Uploads>((dispatch) =>
+  Command.effect(actions.Progressed, (dispatch) =>
     Effect.gen(function* () {
       const uploads = yield* Uploads;
       yield* Stream.runForEach(
         uploads
           .upload(name)
           .pipe(Stream.throttle({ cost: () => 1, units: 1, duration: "100 millis" })),
-        (percent) => dispatch(Progressed.make({ percent })),
+        (percent) => dispatch(actions.Progressed, { percent }),
       );
     }).pipe(Effect.catchCause(() => E.void)),
   );
@@ -181,7 +185,7 @@ running fiber so a _different_ action's handler can interrupt it. That is
 
 ```ts continue
 const stopped = await Effect.runPromise(
-  uploader.run([Picked.make({ name: "photo.jpg" }), Cancelled.make({})], {
+  uploader.run([actions.Picked.make({ name: "photo.jpg" }), actions.Cancelled.make()], {
     props: {},
     hooks: {},
     layer: Layer.succeed(Uploads)({
@@ -214,7 +218,7 @@ const lazily = Uploader.reducer({
         Effect.gen(function* () {
           const uploads = yield* Uploads;
           yield* Stream.runForEach(uploads.upload(next.name), (percent) =>
-            dispatch(Progressed.make({ percent })),
+            dispatch(actions.Progressed, { percent }),
           );
         }).pipe(Effect.catchCause(() => E.void)),
       ),
@@ -275,7 +279,11 @@ const broken = Layer.succeed(Uploads)({
 });
 
 const failed = await Effect.runPromise(
-  uploader.run([Picked.make({ name: "photo.jpg" })], { props: {}, hooks: {}, layer: broken }),
+  uploader.run([actions.Picked.make({ name: "photo.jpg" })], {
+    props: {},
+    hooks: {},
+    layer: broken,
+  }),
 );
 
 console.log(failed.state.status);

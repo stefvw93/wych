@@ -29,7 +29,7 @@ const Changed = Action("Changed", { userId: Schema.String });
 const Presence = define({
   props: Schema.Struct({ roomId: Schema.String }),
   state: Schema.Struct({ online: Schema.Array(Schema.String) }),
-  action: Action.of([Changed]),
+  actions: Changed,
 });
 ```
 
@@ -39,12 +39,21 @@ const Presence = define({
 Subscription.effect<A = never, R = never>(
   effect: (dispatch: Dispatcher<A>) => Effect.Effect<unknown, never, R>,
 ): Subscription<A, R>
+
+Subscription.effect<const S extends MemberSource<Channel>, R = never>(
+  source: S,
+  effect: (dispatch: Dispatcher<MembersOf<S>>) => Effect.Effect<unknown, never, R>,
+): Subscription<MembersOf<S>, R>
 ```
 
 The one constructor. `effect` is the same leaf `Command.effect` takes:
-`dispatch` emits actions and outputs, and the effect's error channel is
-`never`, so the effect handles its own failures before it dies (see
-[Failure](#failure)).
+`dispatch` emits actions and outputs, as a message schema and its payload or
+as a built message (see
+[`Dispatcher`](/docs/reference/commands#dispatcher-and-dispatch)), and the
+effect's error channel is `never`, so the effect handles its own failures
+before it dies (see [Failure](#failure)). The second overload takes a
+`source` first, the same value a `define` slot takes, and types `dispatch`
+from it; see [Contextual typing](#contextual-typing).
 
 ```ts continue
 const presence = Presence.create({
@@ -59,9 +68,7 @@ const presence = Presence.create({
     [`presence:${props.roomId}`]: Subscription.effect((dispatch) =>
       Effect.gen(function* () {
         const api = yield* PresenceApi;
-        yield* Stream.runForEach(api.events(props.roomId), (event) =>
-          dispatch(Changed.make(event)),
-        );
+        yield* Stream.runForEach(api.events(props.roomId), (event) => dispatch(Changed, event));
       }),
     ),
   }),
@@ -89,9 +96,7 @@ const declareConditionally = Presence.subscriptions(({ props }) => ({
     ? Subscription.effect((dispatch) =>
         Effect.gen(function* () {
           const api = yield* PresenceApi;
-          yield* Stream.runForEach(api.events(props.roomId), (event) =>
-            dispatch(Changed.make(event)),
-          );
+          yield* Stream.runForEach(api.events(props.roomId), (event) => dispatch(Changed, event));
         }),
       )
     : undefined,
@@ -140,7 +145,7 @@ const subscriptions = Presence.subscriptions(({ props }) => ({
   [`presence:${props.roomId}`]: Subscription.effect((dispatch) =>
     Effect.gen(function* () {
       const api = yield* PresenceApi;
-      yield* Stream.runForEach(api.events(props.roomId), (event) => dispatch(Changed.make(event)));
+      yield* Stream.runForEach(api.events(props.roomId), (event) => dispatch(Changed, event));
     }),
   ),
 }));
@@ -264,7 +269,7 @@ it; the key stays declared as died.
 const Room = define({
   props: Schema.Struct({ roomId: Schema.String }),
   state: Schema.Struct({ online: Schema.Array(Schema.String), failed: Schema.Boolean }),
-  action: Action.of([Changed]),
+  actions: Changed,
 });
 
 const flaky = Room.create({
@@ -298,10 +303,10 @@ Restarting is the feature's decision, expressed through the key: bump an
 attempt counter and put it in the key, or reconnect inside the effect.
 
 ```ts continue
-const reconnecting = Subscription.effect<typeof Changed.Type, PresenceApi>((dispatch) =>
+const reconnecting = Subscription.effect(Changed, (dispatch) =>
   Effect.gen(function* () {
     const api = yield* PresenceApi;
-    yield* Stream.runForEach(api.events("general"), (event) => dispatch(Changed.make(event)));
+    yield* Stream.runForEach(api.events("general"), (event) => dispatch(Changed, event));
   }).pipe(Effect.retry(Schedule.exponential("1 second"))),
 );
 ```
@@ -335,7 +340,7 @@ const inferred = Presence.subscriptions(({ props }) => ({
   [`presence:${props.roomId}`]: Subscription.effect((dispatch) =>
     Effect.gen(function* () {
       const api = yield* PresenceApi;
-      yield* Stream.runForEach(api.events(props.roomId), (event) => dispatch(Changed.make(event)));
+      yield* Stream.runForEach(api.events(props.roomId), (event) => dispatch(Changed, event));
     }),
   ),
 }));
@@ -358,9 +363,7 @@ const presenceWithSubscriptions = Presence.create({
     [`presence:${props.roomId}`]: Subscription.effect((dispatch) =>
       Effect.gen(function* () {
         const api = yield* PresenceApi;
-        yield* Stream.runForEach(api.events(props.roomId), (event) =>
-          dispatch(Changed.make(event)),
-        );
+        yield* Stream.runForEach(api.events(props.roomId), (event) => dispatch(Changed, event));
       }),
     ),
   }),
@@ -369,23 +372,39 @@ const presenceWithSubscriptions = Presence.create({
 ```
 
 A value with no slot has no contextual type to read. Written standalone, `A`
-falls back to `never` unless a type argument names it, the same way a bare
-`Effect.Effect<void>` variable needs its own annotation to carry a service.
+falls back to `never`, the same way a bare `Effect.Effect<void>` variable
+needs its own annotation to carry a service.
 
 ```ts continue
-// @ts-expect-error dispatch is typed never without a type argument
-const bare = Subscription.effect((dispatch) => dispatch(Changed.make({ userId: "ada" })));
+// @ts-expect-error dispatch is typed never without a source
+const bare = Subscription.effect((dispatch) => dispatch(Changed, { userId: "ada" }));
 ```
 
-Naming `R` too is the exception, not the rule: reach for it only when a
-`Subscriptions` value has no slot to infer from.
+A standalone subscription names the messages it may emit as its first
+argument, the same value a `define` slot takes, and `R` is inferred from the
+effect. `reconnecting` under [Failure](#failure) is written this way. A type
+argument names `A` too (`Subscription.effect<typeof Changed.Type, PresenceApi>`),
+and then `R` must be written as well, since TypeScript has no partial
+inference.
+
+```ts continue
+const named = Subscription.effect(Changed, (dispatch) =>
+  Effect.gen(function* () {
+    const api = yield* PresenceApi;
+    yield* Stream.runForEach(api.events("general"), (event) => dispatch(Changed, event));
+  }),
+);
+```
+
+An annotated `Subscriptions` record is a slot too, so its values infer from
+the annotation.
 
 ```ts continue
 const standalone: Subscriptions<typeof Changed.Type, PresenceApi> = {
   presence: Subscription.effect((dispatch) =>
     Effect.gen(function* () {
       const api = yield* PresenceApi;
-      yield* Stream.runForEach(api.events("general"), (event) => dispatch(Changed.make(event)));
+      yield* Stream.runForEach(api.events("general"), (event) => dispatch(Changed, event));
     }),
   ),
 };
@@ -398,7 +417,7 @@ way a command does.
 ```ts continue
 const severed: Subscriptions<typeof Changed.Type, PresenceApi> = {
   // @ts-expect-error a .pipe receiver has no contextual type, so dispatch is never
-  presence: Subscription.effect((dispatch) => dispatch(Changed.make({ userId: "ada" }))).pipe(
+  presence: Subscription.effect((dispatch) => dispatch(Changed, { userId: "ada" })).pipe(
     (self) => self,
   ),
 };

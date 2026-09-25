@@ -39,15 +39,14 @@ export class SearchEngine extends Context.Service<
 
 export const Typed = Action("Typed", { query: Schema.String });
 export const Moved = Action("Moved", { delta: Schema.Number });
-export const Submitted = Action("Submitted", {});
-export const Reset = Action("Reset", {});
+export const Submitted = Action("Submitted");
+export const Reset = Action("Reset");
 export const Navigated = Action.output("Navigated", { href: Schema.String });
 
 // Take latest: a new Typed interrupts the search still running for the old one.
 // The wait is the search's own, so it lives in `run`.
 const search = Task("Search", {
   success: Hits,
-  onError: Task.errorMessage,
   run: (query: string) =>
     Effect.gen(function* () {
       yield* Effect.sleep("150 millis");
@@ -68,7 +67,7 @@ const warm = Command.keyed(
 
 const State = Schema.Struct({
   query: Schema.String,
-  results: Task.schema(Hits),
+  results: search.schema,
   selected: Schema.Number,
 });
 export type State = typeof State.Type;
@@ -76,8 +75,8 @@ export type State = typeof State.Type;
 const DocsSearch = define({
   props: Schema.Struct({ open: Schema.Boolean }),
   state: State,
-  action: Action.of([Typed, Moved, Submitted, Reset, ...search.actions]),
-  output: Action.of([Navigated]),
+  actions: [Typed, Moved, Submitted, Reset, search],
+  outputs: Navigated,
 });
 
 export const initial: State = { query: "", results: Task.idle, selected: 0 };
@@ -133,17 +132,17 @@ export const docsSearch = DocsSearch.create({
           aria-autocomplete="list"
           placeholder="Search the docs"
           value={state.query}
-          onChange={(event) => dispatch(Typed.make({ query: event.target.value }))}
+          onChange={(event) => dispatch(Typed, { query: event.target.value })}
           onKeyDown={(event) => {
             if (event.key === "ArrowDown") {
               event.preventDefault();
-              dispatch(Moved.make({ delta: 1 }));
+              dispatch(Moved, { delta: 1 });
             } else if (event.key === "ArrowUp") {
               event.preventDefault();
-              dispatch(Moved.make({ delta: -1 }));
+              dispatch(Moved, { delta: -1 });
             } else if (event.key === "Enter") {
               event.preventDefault();
-              dispatch(Submitted.make({}));
+              dispatch(Submitted);
             }
           }}
           className="h-9 border-0 text-sm focus-visible:ring-0 md:text-sm"
@@ -185,7 +184,7 @@ export const docsSearch = DocsSearch.create({
                           )
                             return;
                           event.preventDefault();
-                          dispatch(Navigated.make({ href }));
+                          dispatch(Navigated, { href });
                         }}
                       >
                         <div className="flex items-baseline gap-2 text-[11px] text-muted-foreground">

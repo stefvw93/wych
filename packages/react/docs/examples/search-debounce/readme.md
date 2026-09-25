@@ -30,7 +30,7 @@ Command.restart(
       yield* Effect.sleep("300 millis");
       const api = yield* SearchApi;
       const hits = yield* api.hits(query);
-      yield* dispatch(Loaded.make({ hits }));
+      yield* dispatch(Loaded, { hits });
     }),
   ),
 ),
@@ -42,21 +42,24 @@ default `mode: "latest"`, which books under `Command.restart` so a new
 `mode: "every"`, which books under `Command.keyed` and never interrupts.
 
 `pagedSearch` writes `page + 1` into `draft` and needs that number in the
-request. `Task.start` takes a thunk, which receives the finished state with
-`Pending` written, so the request reads the page from that state:
+request. The handle reads the same draft, so the handler writes the page and
+then starts the task with it:
 
 ```tsx fragment
-MoreClicked: (_payload, { draft }) => {
+MoreClicked: (_payload, { draft, tasks }) => {
   draft.page += 1;
-  return Task.start(draft, "results", (next) => searchPage.run(next));
+  return tasks.results.start({ query: draft.query, page: draft.page });
 },
 ```
 
 ## How It Works
 
-`taskSearch`'s two settle handlers come from `search.into("results")`,
-spread into its reducer; writing `SearchResolved` after the spread would
-replace the generated handler. `search-api.ts` declares `SearchApi` as a
+Each task feature declares its operation under `tasks: { results }`, which
+adds the `results` field, starts it `Idle` and writes `Pending` from
+`tasks.results.start`. The runtime writes `Resolved` or `Rejected` into the
+field when the request settles, so none of the three reducers has a settle
+handler. `taskSearch`'s `Cleared` handler calls `tasks.results.cancel()`,
+which writes `Idle` and interrupts the request. `search-api.ts` declares `SearchApi` as a
 service with one `hits` method that takes a query and an optional page.
 `main.tsx` supplies a layer where
 `hits` sleeps 500 ms and mounts `DebouncedSearch`, `Search` and `PagedSearch`

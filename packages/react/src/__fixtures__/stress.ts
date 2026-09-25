@@ -139,29 +139,22 @@ export const slope = (samples: ReadonlyArray<number>): number => {
 // Runtime
 // ---------------------------------------------------------------------------
 
-/**
- * A root runtime with a recorder installed. `createFeatureStore` takes
- * `ManagedRuntime<any, any>`; a root that provides only the sink is narrower
- * than that, so the widening goes through `unknown`, as `lib.test.ts` does.
- */
-export const recordingRuntime = <R = never, E = never>(extra?: Layer.Layer<R, E, never>) => {
+/** A root runtime with a recorder installed. */
+export const recordingRuntime = <R = never, E = never>(extra?: Layer.Layer<R, E>) => {
   const recorder = createRecorder();
   const sink = devtoolsLayer(recorder.sink);
-  const runtime = ManagedRuntime.make(
-    extra === undefined ? sink : Layer.mergeAll(sink, extra),
-  ) as unknown as ManagedRuntime.ManagedRuntime<any, any>;
+  const runtime = ManagedRuntime.make(extra === undefined ? sink : Layer.mergeAll(sink, extra));
   return { runtime, recorder, ...query(recorder) };
 };
 
 /** A bare root runtime, no sink. */
-export const silentRuntime = (): ManagedRuntime.ManagedRuntime<any, any> =>
-  ManagedRuntime.make(Layer.empty) as unknown as ManagedRuntime.ManagedRuntime<any, any>;
+export const silentRuntime = () => ManagedRuntime.make(Layer.empty);
 
 export const hooksEquivalence = Equivalence.Record(Equivalence.strictEqual<unknown>());
 
 /** The `createFeatureStore` arguments every fixture shares, minus the feature and props. */
 export const storeArgs = (
-  runtime: ManagedRuntime.ManagedRuntime<any, any>,
+  runtime: ManagedRuntime.ManagedRuntime<never, unknown>,
   propsSchema: Schema.Struct<any>,
   overrides: {
     readonly layer?: Layer.Layer<any, any, any>;
@@ -172,7 +165,7 @@ export const storeArgs = (
 ) => ({
   runtime,
   layer: overrides.layer,
-  equivalence: { props: Schema.toEquivalence(propsSchema), hooks: hooksEquivalence } as any,
+  equivalence: { props: Schema.toEquivalence(propsSchema), hooks: hooksEquivalence },
   emit: overrides.emit ?? (() => {}),
   defect:
     overrides.defect ??
@@ -196,7 +189,7 @@ export const Noop = Action("Noop", {});
 export const counter = define({
   props: CounterProps,
   state: CounterState,
-  action: Action.of([Bump, Same, Noop]),
+  actions: [Bump, Same, Noop],
 }).create({
   initialState: () => ({ count: 0 }),
   reducer: {
@@ -208,7 +201,7 @@ export const counter = define({
 });
 
 export const counterStore = (
-  runtime: ManagedRuntime.ManagedRuntime<any, any>,
+  runtime: ManagedRuntime.ManagedRuntime<never, unknown>,
   overrides: Parameters<typeof storeArgs>[2] = {},
 ) =>
   createFeatureStore({
@@ -237,7 +230,7 @@ export const restarter = (options: { readonly finalizerMs?: number } = {}) => {
   return define({
     props: RestartProps,
     state: RestartState,
-    action: Action.of([Go, Kill]),
+    actions: [Go, Kill],
   }).create({
     initialState: () => ({ issued: 0, errors: 0 }),
     reducer: {
@@ -283,7 +276,7 @@ export const presence = (
   define({
     props: PresenceProps,
     state: PresenceState,
-    action: Action.of([Declare, Tick]),
+    actions: [Declare, Tick],
   }).create({
     initialState: () => ({ keys: [], seen: 0, errors: 0 }),
     reducer: {
@@ -293,10 +286,7 @@ export const presence = (
     },
     subscriptions: ({ state }: PresenceSnapshot) =>
       Object.fromEntries(
-        state.keys.map((key) => [
-          key,
-          Subscription.effect((dispatch) => source(key, dispatch as any)),
-        ]),
+        state.keys.map((key) => [key, Subscription.effect((dispatch) => source(key, dispatch))]),
       ),
     render: () => null,
   });
@@ -318,7 +308,7 @@ export const Hit = Action("Hit", { i: Schema.Number });
 export const burst = define({
   props: BurstProps,
   state: BurstState,
-  action: Action.of([Fire, Hit]),
+  actions: [Fire, Hit],
 }).create({
   initialState: () => ({ hits: 0, errors: 0 }),
   reducer: {

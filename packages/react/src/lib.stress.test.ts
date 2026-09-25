@@ -39,7 +39,7 @@ import {
   until,
 } from "./__fixtures__/stress";
 import { devtoolsLayer, type DevtoolsSink } from "./devtools";
-import { Action, Command, createFeatureStore, define } from "./lib";
+import { Action, Command, createFeatureStore, define, type FeatureStore } from "./lib";
 import { Task } from "./utils/task";
 
 class Touch extends Context.Service<Touch, { readonly touch: () => void }>()("StressTouch") {}
@@ -93,7 +93,7 @@ describe("many mounts", () => {
     for (const store of stores) store.start();
     for (const store of stores) store.dispatch(Bump.make({}));
     for (const store of stores.slice(1)) await settle(store);
-    await spin(stores[0]!, (p) => p.dead);
+    await spin(stores[0], (p) => p.dead);
 
     expect(rootAcquired).toBe(1);
     expect(tagged("Defect").map((e) => e.from)).toEqual(["Mounted"]);
@@ -152,8 +152,8 @@ describe("high-frequency sources", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ count: Schema.Number }),
-      action: Action.of([Emit, Bump]),
-      output: Action.of([Out]),
+      actions: [Emit, Bump],
+      outputs: [Out],
     }).create({
       initialState: () => ({ count: 0 }),
       reducer: {
@@ -165,7 +165,7 @@ describe("high-frequency sources", () => {
     const runtime = silentRuntime();
     let peakPending = 0;
     // Assigned after the store exists; the handler closes over it.
-    let store: ReturnType<typeof createFeatureStore<{}, { count: number }, any, {}>>;
+    let store: FeatureStore<{}, { count: number }, any, {}>;
     store = createFeatureStore({
       feature,
       props: {},
@@ -201,9 +201,7 @@ describe("high-frequency sources", () => {
         throw new Error("sink down");
       },
     };
-    const withSink = ManagedRuntime.make(
-      devtoolsLayer(throwing),
-    ) as unknown as ManagedRuntime.ManagedRuntime<any, any>;
+    const withSink = ManagedRuntime.make(devtoolsLayer(throwing));
     const a = counterStore(withSink);
     const b = counterStore(silentRuntime());
     a.start();
@@ -255,7 +253,7 @@ describe("high-frequency sources", () => {
     const feature = define({
       props: Props,
       state: Schema.Struct({ changes: Schema.Number }),
-      action: Action.of([Tock]),
+      actions: [Tock],
     }).create({
       initialState: () => ({ changes: 0 }),
       reducer: {
@@ -352,7 +350,7 @@ describe("deep async churn", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ n: Schema.Number }),
-      action: Action.of([Slow]),
+      actions: [Slow],
     }).create({
       initialState: () => ({ n: 0 }),
       reducer: {
@@ -417,8 +415,8 @@ describe("deep async churn", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ n: Schema.Number }),
-      action: Action.of([Late, Follow]),
-      output: Action.of([Out]),
+      actions: [Late, Follow],
+      outputs: [Out],
     }).create({
       initialState: () => ({ n: 0 }),
       reducer: {
@@ -436,7 +434,7 @@ describe("deep async churn", () => {
       render: () => null,
     });
     const { runtime, tagged } = recordingRuntime();
-    let store: ReturnType<typeof createFeatureStore<{}, { n: number }, any, {}>>;
+    let store: FeatureStore<{}, { n: number }, any, {}>;
     store = createFeatureStore({
       feature,
       props: {},
@@ -451,7 +449,7 @@ describe("deep async churn", () => {
     expect(follow).toHaveLength(1);
     expect(tagged("Output")).toHaveLength(1);
     // Exactly one of: it ran on the closing mount, or it was dropped.
-    expect(ran + (follow[0]!.dropped ? 1 : 0)).toBe(1);
+    expect(ran + (follow[0].dropped ? 1 : 0)).toBe(1);
   });
 
   it("1k commands that throw in their builder each raise one defect and fold Error", async () => {
@@ -460,7 +458,7 @@ describe("deep async churn", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ errors: Schema.Number }),
-      action: Action.of([Boom]),
+      actions: [Boom],
     }).create({
       initialState: () => ({ errors: 0 }),
       reducer: {
@@ -498,7 +496,7 @@ describe("deep async churn", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ hits: Schema.Number, errors: Schema.Number }),
-      action: Action.of([Both, Hit]),
+      actions: [Both, Hit],
     }).create({
       initialState: () => ({ hits: 0, errors: 0 }),
       reducer: {
@@ -542,7 +540,7 @@ describe("deep async churn", () => {
       const feature = define({
         props: Schema.Struct({}),
         state: Schema.Struct({ value: Task.schema(Schema.Number), resolved: Schema.Number }),
-        action: Action.of([Issue, ...load.actions]),
+        actions: [Issue, ...load.actions],
       }).create({
         initialState: () => ({ value: Task.idle, resolved: 0 }),
         reducer: {
@@ -588,7 +586,7 @@ describe("deep async churn", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ n: Schema.Number }),
-      action: Action.of([Hang, Kill, Ping]),
+      actions: [Hang, Kill, Ping],
     }).create({
       initialState: () => ({ n: 0 }),
       reducer: {
@@ -632,7 +630,7 @@ describe("deep async churn", () => {
     const feature = define({
       props: Schema.Struct({}),
       state: Schema.Struct({ n: Schema.Number }),
-      action: Action.of([Hold]),
+      actions: [Hold],
     }).create({
       initialState: () => ({ n: 0 }),
       reducer: { Hold: (_a, { state }) => [state, Command.effect(() => Effect.never)] },
@@ -688,7 +686,7 @@ describe("long sessions", () => {
 
   const assertFlat = (heap: ReadonlyArray<number>, refs: ReadonlyArray<WeakRef<object>>) => {
     const tail = heap.slice(-5);
-    const growth = tail[tail.length - 1]! - tail[0]!;
+    const growth = tail[tail.length - 1] - tail[0];
     // The first rounds warm caches and JIT; the tail is what a session pays.
     expect(growth).toBeLessThan(2 * MiB);
     expect(slope(tail)).toBeLessThan(MiB / 2);
@@ -733,7 +731,7 @@ describe("long sessions", () => {
     const feature = define({
       props: Props,
       state: Schema.Struct({ items: Schema.Array(Schema.Number) }),
-      action: Action.of([Push, Trim]),
+      actions: [Push, Trim],
     }).create({
       initialState: () => ({ items: [] }),
       reducer: {
@@ -763,7 +761,7 @@ describe("long sessions", () => {
 
     expect(store.getSnapshot()).toEqual({ items: [] });
     const tail = heap.slice(-5);
-    expect(tail[tail.length - 1]! - tail[0]!).toBeLessThan(2 * MiB);
+    expect(tail[tail.length - 1] - tail[0]).toBeLessThan(2 * MiB);
     expect(slope(tail)).toBeLessThan(MiB / 2);
   });
 
@@ -778,9 +776,7 @@ describe("long sessions", () => {
       error: () => {},
     };
     const sink = createConsoleDevtools({ console: output });
-    const runtime = ManagedRuntime.make(
-      devtoolsLayer(sink),
-    ) as unknown as ManagedRuntime.ManagedRuntime<any, any>;
+    const runtime = ManagedRuntime.make(devtoolsLayer(sink));
 
     // 600 mounts, each with two events, none stopped: the map passes 512 and
     // is cleared wholesale; the next event for a known mount then has no

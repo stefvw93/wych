@@ -41,14 +41,14 @@ import type {
   DevtoolsTransition,
 } from "@wych/react";
 
-const Bumped = Action("Bumped", {});
+const Bumped = Action("Bumped");
 const Reached = Action.output("Reached", { at: Schema.Number });
 
 const Counter = define({
   props: Schema.Struct({ step: Schema.Number }),
   state: Schema.Struct({ count: Schema.Number }),
-  action: Action.of([Bumped]),
-  output: Action.of([Reached]),
+  actions: Bumped,
+  outputs: Reached,
 });
 
 export const counter = Counter.create({
@@ -423,10 +423,19 @@ const commandSummary: CommandSummary = {
   ],
 };
 
+const firstSummary: CommandSummary = {
+  _tag: "Keyed",
+  key: "Task/Save",
+  command: { _tag: "Effect" },
+  first: true,
+};
+
 const defectSummary: DefectSummary = { name: "Error", message: "network down", stack: "..." };
 ```
 
 `CommandSummary` has the shape of the command with the leaf's callback removed.
+A `Keyed` node from a task declared `mode: "first"` carries `first: true`,
+and the console logger prints it as `keyedFirst(Task/Save, effect)`.
 `DefectSummary` flattens an unknown thrown value to `{ name?, message, stack? }`,
 because an `Error` serialises to `{}`.
 

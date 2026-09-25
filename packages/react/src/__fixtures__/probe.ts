@@ -32,11 +32,11 @@ const slotOf = (target: object): symbol => {
 
 /** The store's closure counters, read now. */
 export const probe = (store: object): StoreProbe =>
-  (store as Record<symbol, () => StoreProbe>)[slotOf(store)]!();
+  (store as Record<symbol, () => StoreProbe>)[slotOf(store)]();
 
 /** The size of the module-level `useFeature` context registry. */
 export const contexts = (runtime: object): number =>
-  (runtime as Record<symbol, { readonly contexts: () => number }>)[slotOf(runtime)]!.contexts();
+  (runtime as Record<symbol, { readonly contexts: () => number }>)[slotOf(runtime)].contexts();
 
 /** A probe that is empty of work: nothing booked, nothing queued. */
 export const idle = (p: StoreProbe): boolean =>

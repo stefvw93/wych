@@ -7,7 +7,7 @@ const Changed = Action("Changed", { userId: Schema.String, online: Schema.Boolea
 const Presence = define({
   props: Schema.Struct({ roomId: Schema.String }),
   state: Schema.Struct({ online: Schema.Array(Schema.String) }),
-  action: Action.of([Changed]),
+  actions: [Changed],
 });
 
 export const presence = Presence.create({
@@ -31,9 +31,7 @@ export const presence = Presence.create({
     [`presence:${props.roomId}`]: Subscription.effect((dispatch) =>
       Effect.gen(function* () {
         const api = yield* PresenceApi;
-        yield* Stream.runForEach(api.events(props.roomId), (event) =>
-          dispatch(Changed.make(event)),
-        );
+        yield* Stream.runForEach(api.events(props.roomId), (event) => dispatch(Changed, event));
       }),
     ),
   }),

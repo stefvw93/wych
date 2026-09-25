@@ -3,7 +3,7 @@ import { Next, Task } from "@wych/react";
 import { Effect, Layer } from "effect";
 import { expect, test } from "vitest";
 import { fetchNote } from "./api";
-import { noteEditor, noteKey, Submitted, Typed } from "./note-editor";
+import { actions, noteEditor, noteKey } from "./note-editor";
 import { Queries } from "./queries";
 
 // Hooks are plain data in a fold, so the read path needs no QueryClientProvider.
@@ -26,7 +26,7 @@ test("Submitted saves through the service and invalidates the key", async () => 
   await client.prefetchQuery({ queryKey: noteKey("n1"), queryFn: () => fetchNote("n1") });
 
   const { state, emitted, outputs } = await Effect.runPromise(
-    noteEditor.run([Typed.make({ text: "Oat milk" }), Submitted.make({})], {
+    noteEditor.run([actions.Typed.make({ text: "Oat milk" }), actions.Submitted.make()], {
       props,
       hooks: loaded,
       layer: Layer.succeed(Queries)(client),
@@ -41,7 +41,7 @@ test("Submitted saves through the service and invalidates the key", async () => 
 
 test("an empty draft rejects and announces nothing", async () => {
   const { state, outputs } = await Effect.runPromise(
-    noteEditor.run([Typed.make({ text: "" }), Submitted.make({})], {
+    noteEditor.run([actions.Typed.make({ text: "" }), actions.Submitted.make()], {
       props,
       hooks: loaded,
       layer: Layer.succeed(Queries)(new QueryClient()),

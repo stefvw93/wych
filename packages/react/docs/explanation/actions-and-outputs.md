@@ -11,36 +11,49 @@ A confirm dialog in React talks to its parent through callback props:
 The child may call one twice, or after unmount. Nothing in the type says
 what the dialog can say, only what the parent happened to wire up.
 
-Wych gives a feature two vocabularies. Actions come in and reach the reducer.
-Outputs go out and leave through a prop that the type requires.
+Wych gives a feature two message channels. Actions come in and reach the
+reducer. Outputs go out and leave through a prop that the type requires.
 
 ```tsx
 import { Action, Command, createRuntime, define, Next } from "@wych/react";
 import { Effect, Layer, Schema } from "effect";
 
-const Opened = Action("Opened", {});
-const Typed = Action("Typed", { text: Schema.String });
-const ConfirmClicked = Action("ConfirmClicked", {});
-const Closed = Action("Closed", { reason: Schema.String });
+const actions = Action({
+  Opened: {},
+  Typed: { text: Schema.String },
+  ConfirmClicked: {},
+  Closed: { reason: Schema.String },
+});
 
-const Confirmed = Action.output("Confirmed", {});
-const Dismissed = Action.output("Dismissed", { reason: Schema.String });
+const outputs = Action.output({
+  Confirmed: {},
+  Dismissed: { reason: Schema.String },
+});
 
 const Dialog = define({
   props: Schema.Struct({ title: Schema.String, confirmWord: Schema.String }),
   state: Schema.Struct({ open: Schema.Boolean, typed: Schema.String }),
-  action: Action.of([Opened, Typed, ConfirmClicked, Closed]),
-  output: Action.of([Confirmed, Dismissed]),
+  actions,
+  outputs,
 });
 ```
 
 `Action` brands a message internal and `Action.output` brands it outbound.
 The brand is a runtime property and a type, so the two channels are not
-assignable to each other, and one vocabulary holds one channel.
+assignable to each other. The `define` slot is where that is checked:
+`actions` takes internal messages and `outputs` takes outbound ones, so a
+message in the wrong slot fails to compile, on its own or inside an array.
+`define` repeats the check at runtime, for a value that got past the types
+through a cast.
 
 ```ts continue
-// @ts-expect-error a vocabulary holds one channel
-const Mixed = Action.of([Opened, Confirmed]);
+define({
+  props: Schema.Struct({}),
+  state: Schema.Struct({}),
+  // @ts-expect-error an outbound message cannot be declared as an action
+  actions: [actions.Opened, outputs.Confirmed],
+});
+// throws TypeError: define: "Confirmed" is outbound and cannot be declared in "actions"
 ```
 
 ## Why an output never re-enters the reducer
@@ -64,11 +77,11 @@ const reducer = Dialog.reducer({
   ConfirmClicked: (_payload, { draft, state, props }) => {
     if (state.typed !== props.confirmWord) return draft;
     draft.open = false;
-    return [draft, Command.output(Confirmed, {})];
+    return [draft, Command.output(outputs.Confirmed)];
   },
   Closed: ({ reason }, { draft }) => {
     draft.open = false;
-    return [draft, Command.output(Dismissed, { reason })];
+    return [draft, Command.output(outputs.Dismissed, { reason })];
   },
 });
 
@@ -101,11 +114,14 @@ dialog.reduce(
 
 ```ts continue
 const confirmed = await Effect.runPromise(
-  dialog.run([Opened.make({}), Typed.make({ text: "DELETE" }), ConfirmClicked.make({})], {
-    props: { title: "Delete", confirmWord: "DELETE" },
-    hooks: {},
-    layer: Layer.empty,
-  }),
+  dialog.run(
+    [actions.Opened.make(), actions.Typed.make({ text: "DELETE" }), actions.ConfirmClicked.make()],
+    {
+      props: { title: "Delete", confirmWord: "DELETE" },
+      hooks: {},
+      layer: Layer.empty,
+    },
+  ),
 );
 
 console.log(confirmed.state);
@@ -177,7 +193,7 @@ const announcer = Dialog.create({
   initialState: () => ({ open: true, typed: "" }),
   reducer,
   render: ({ dispatch }) => (
-    <button onClick={() => dispatch(Dismissed.make({ reason: "escape" }))}>Close</button>
+    <button onClick={() => dispatch(outputs.Dismissed, { reason: "escape" })}>Close</button>
   ),
 });
 const Announcer = runtime.component(announcer, { name: "Announcer" });
@@ -232,7 +248,7 @@ own, so the five names are rejected at declaration on both channels.
 
 ```ts continue
 // @ts-expect-error "Mounted" is a lifecycle tag
-const Mounted = Action("Mounted", {});
+const Mounted = Action("Mounted");
 ```
 
 ## What the runtime cannot see
@@ -244,5 +260,5 @@ between them. A devtools UI can draw that edge from adjacency; the runtime
 will not assert it.
 
 Payloads and firing order for the lifecycle actions are in
-[lifecycle](/docs/reference/lifecycle). The vocabulary API is in
-[actions](/docs/reference/actions).
+[lifecycle](/docs/reference/lifecycle). `Action`, `Action.output` and the
+`define` slots are in [actions](/docs/reference/actions).

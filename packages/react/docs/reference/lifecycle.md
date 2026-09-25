@@ -36,7 +36,7 @@ const Arrived = Action("Arrived", { members: Schema.Array(Schema.String) });
 const Room = define({
   props: Schema.Struct({ roomId: Schema.String }),
   state: Schema.Struct({ members: Schema.Array(Schema.String), failed: Schema.String }),
-  action: Action.of([Arrived]),
+  actions: Arrived,
   useUnsafeHooks: (props) => ({ channel: `room:${props.roomId}` }),
 });
 ```
@@ -94,7 +94,7 @@ const room = Room.create({
 
     Unmounted: (_payload, { state, props }) => [
       state,
-      Command.effect<never, Presence>(() =>
+      Command.effect(() =>
         Effect.gen(function* () {
           const presence = yield* Presence;
           yield* presence.leave(props.roomId);
@@ -107,7 +107,7 @@ const room = Room.create({
       Effect.gen(function* () {
         const presence = yield* Presence;
         yield* Stream.runForEach(presence.watch(props.roomId), (members) =>
-          dispatch(Arrived.make({ members })),
+          dispatch(Arrived, { members }),
         );
       }),
     ),

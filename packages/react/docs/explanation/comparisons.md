@@ -30,7 +30,6 @@ const Typed = Action("Typed", { query: Schema.String });
 
 const search = Task("Search", {
   success: Hits,
-  onError: Task.errorMessage,
   run: (query: string) =>
     Effect.gen(function* () {
       const api = yield* SearchApi;
@@ -40,30 +39,23 @@ const search = Task("Search", {
 
 const Search = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({ query: Schema.String, results: Task.schema(Hits) }),
-  action: Action.of([Typed, ...search.actions]),
+  state: Schema.Struct({ query: Schema.String }),
+  tasks: { results: search },
+  actions: Typed,
 });
 
 const searchFeature = Search.create({
-  initialState: () => ({ query: "", results: Task.idle }),
+  initialState: () => ({ query: "" }),
   reducer: {
-    Typed: ({ query }, { draft }) => {
+    Typed: ({ query }, { draft, tasks }) => {
       draft.query = query;
-      return Task.start(draft, "results", search.run(query));
-    },
-    SearchResolved: ({ value }, { draft }) => {
-      draft.results = Task.resolved(value);
-      return draft;
-    },
-    SearchRejected: ({ error }, { draft }) => {
-      draft.results = Task.rejected(error);
-      return draft;
+      return tasks.results.start(query);
     },
   },
   render: ({ state, dispatch }) => (
     <input
       value={state.query}
-      onChange={(event) => dispatch(Typed.make({ query: event.target.value }))}
+      onChange={(event) => dispatch(Typed, { query: event.target.value })}
     />
   ),
 });
@@ -94,7 +86,11 @@ const runSearch = createAsyncThunk("search/run", async (query: string, { extra }
 
 Both reducers mutate a draft (RTK's through Immer inside `createSlice`,
 Wych's through `snapshot.draft`), but where RTK's handler mutates and
-returns nothing, Wych's handler returns the draft it wrote into.
+returns nothing, Wych's handler returns the draft it wrote into. RTK's
+thunk owns no state: the slice declares its loading fields and writes them
+per lifecycle case. Wych's task owns its field: `tasks: { results: search }`
+adds `results` to the state, `start` writes `Pending`, and the fold writes
+`Resolved` or `Rejected` when the work settles.
 
 Wych's state lives on the mount. There is no store to subscribe a component
 to, because `search.results` only exists where `<Search />` is mounted.
@@ -113,8 +109,8 @@ console.log(result.state);
 
 RTK's thunk is a function that closes over `dispatch` and runs outside the
 reducer, so the reducer cannot see what it will do. Wych's reducer returns the
-command as a value: `Task.start` above is data returned from the `Typed`
-handler, not a call made from it. See
+command as a value: `tasks.results.start(query)` above is data returned from
+the `Typed` handler, not a call made from it. See
 [Commands as data](/docs/explanation/commands-as-data) for why that split
 matters for testing and replay.
 
@@ -224,7 +220,7 @@ function useSearch() {
   action does.
 
 Wych does not replace TanStack Query's cache and background refetch; a
-`Task.run` can call a query client the same way it calls any other service.
+task's `run` can call a query client the same way it calls any other service.
 See [Use with the React ecosystem](/docs/how-to/use-with-the-react-ecosystem) for wiring
 the two together.
 
@@ -235,7 +231,7 @@ composition.
 
 | TCA                                  | Wych                                                      |
 | ------------------------------------ | --------------------------------------------------------- |
-| `Reducer` / `State` / `Action`       | `define({ state, action })` + `reducer`                   |
+| `Reducer` / `State` / `Action`       | `define({ state, actions })` + `reducer`                  |
 | `.run` + `.cancellable(id:)`         | `Command.effect` + `Command.keyed` / `cancel` / `restart` |
 | `@Dependency`                        | An Effect `Layer` supplied to `createRuntime`             |
 | `TestStore`                          | `feature.run`, folds to quiescence                        |
@@ -257,9 +253,9 @@ case .typed(let query):
 
 ```ts fragment
 // Wych: the same shape, addressed by a group name instead of a cancellation id
-Typed: ({ query }, { draft }) => {
+Typed: ({ query }, { draft, tasks }) => {
   draft.query = query;
-  return Task.start(draft, "results", search.run(query));
+  return tasks.results.start(query);
 },
 // Task's default mode is "latest": Command.restart under the group "Task/Search"
 ```

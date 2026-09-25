@@ -32,7 +32,14 @@ import {
   type DevtoolsConsole,
 } from "./devtools";
 import { tagged } from "./__fixtures__/devtools";
-import { Action, Command, createFeatureStore, define, Subscription } from "./lib";
+import {
+  Action,
+  Command,
+  createFeatureStore,
+  define,
+  Subscription,
+  type FeatureStore,
+} from "./lib";
 
 // ---------------------------------------------------------------------------
 // Fixture
@@ -61,8 +68,8 @@ type Snap = { readonly state: S; readonly props: { readonly room: string }; read
 const Def = define({
   props: Props,
   state: State,
-  action: Action.of([Go, Same, Kill, Tick]),
-  output: Action.of([Out]),
+  actions: [Go, Same, Kill, Tick],
+  outputs: [Out],
 });
 
 const baseReducer = {
@@ -93,7 +100,7 @@ const makeFeature = (parts: {
 const equivalence = {
   props: Schema.toEquivalence(Props),
   hooks: Equivalence.Record(Equivalence.strictEqual<unknown>()),
-} as any;
+};
 
 /**
  * A store with a recorder installed. `clock: true` puts a `TestClock` in the
@@ -119,14 +126,14 @@ const makeStore = (
     parts.clock
       ? Layer.merge(devtoolsLayer(recorder.sink), TestClock.layer())
       : devtoolsLayer(recorder.sink),
-  ) as unknown as ManagedRuntime.ManagedRuntime<any, any>;
+  );
 
-  const store = createFeatureStore<{ readonly room: string }, S, any, {}>({
+  const store: FeatureStore<{ readonly room: string }, S, any, {}> = createFeatureStore({
     feature: makeFeature(parts),
     props: parts.props ?? { room: "a" },
     equivalence,
     runtime,
-    layer: parts.layer as unknown as Layer.Layer<any, any, any> | undefined,
+    layer: parts.layer,
     emit: parts.emit ?? ((output) => void outputs.push(output)),
     defect: (error) => void defects.push(error),
     name: "room",
@@ -207,7 +214,7 @@ describe("Part 1 — the value", () => {
   // runtime like `reducer` and `render`. Its job is to supply the types.
   it("04 · `Definition.subscriptions(fn)` is an identity typer", () => {
     const hook = () => ({});
-    expect((Def as any).subscriptions(hook)).toBe(hook);
+    expect(Def.subscriptions(hook)).toBe(hook);
   });
 });
 
@@ -459,7 +466,7 @@ describe("Part 3 — the diff", () => {
     store.start();
     expect(evaluated).toBe(1);
 
-    store.dispatch({ _tag: "Out", id: "kick" } as never);
+    store.dispatch({ _tag: "Out", id: "kick" });
     await settle();
 
     expect(evaluated).toBe(2);

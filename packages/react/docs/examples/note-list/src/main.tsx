@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { createRoot } from "react-dom/client";
-import { SaveClicked, editor } from "./note-editor";
+import { actions, editor } from "./note-editor";
 import { NoteList } from "./note-list";
 import { notesApiLayer } from "./notes-api";
 
@@ -13,7 +13,7 @@ root.render(
 
 // Watch the output cross. Outputs are collected, never folded. Open the console.
 const saved = await Effect.runPromise(
-  editor.run([SaveClicked.make({})], {
+  editor.run([actions.SaveClicked.make()], {
     props: { noteId: "n1", initialText: "Buy milk" },
     hooks: {},
     layer: notesApiLayer,

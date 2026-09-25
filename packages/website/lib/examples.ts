@@ -78,7 +78,7 @@ const pickOpenFile = (paths: readonly string[]): string =>
   paths.find((p) => p === "src/main.tsx") ??
   paths.find((p) => /^src\/.*\.test\.tsx?$/.test(p)) ??
   paths.find((p) => p.startsWith("src/")) ??
-  paths[0]!;
+  paths[0];
 
 /**
  * Build the StackBlitz project for `docs/examples/<name>`. Fails when the

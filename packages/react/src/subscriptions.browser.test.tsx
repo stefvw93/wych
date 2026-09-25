@@ -31,11 +31,11 @@ const { tagged, transitions } = query(recorder);
 const Presence = define({
   props: Schema.Struct({ room: Schema.String }),
   state: Schema.Struct({ seen: Schema.Array(Schema.String) }),
-  action: Action.of([
+  actions: [
     Action("Tick", { id: Schema.String }),
     Action("Go", {}),
     Action("Late", { id: Schema.String }),
-  ]),
+  ],
 });
 
 let log: Array<string> = [];
@@ -108,8 +108,8 @@ const live = (): ReadonlyArray<string> => {
   const running = new Set<string>();
   for (const line of log) {
     const [, key, what] = /^(.+):(start|stop)$/.exec(line) ?? [];
-    if (what === "start") running.add(key!);
-    else running.delete(key!);
+    if (what === "start") running.add(key);
+    else running.delete(key);
   }
   return [...running];
 };
@@ -178,7 +178,7 @@ test("unmount stops the subscription and lets a pending command finish", async (
   expect(stopped).toBeGreaterThan(-1);
   expect(stopped).toBeLessThan(unmounted);
   expect(unmounted).toBeLessThan(late);
-  expect(transitions("Late")[0]!.cause).toEqual({ _tag: "Command", action: "Go" });
+  expect(transitions("Late")[0].cause).toEqual({ _tag: "Command", action: "Go" });
   expect(log).toEqual(["room:a:start", "room:a:stop"]);
 });
 

@@ -1,6 +1,7 @@
-import { Context, Effect, Layer, Option, Schema } from "effect";
-import { describe, expect, it } from "vite-plus/test";
-import { Action, Children, Command, define } from "../lib";
+import { Context, Effect, Equivalence, Layer, ManagedRuntime, Option, Schema } from "effect";
+import { describe, expect, it, vi } from "vite-plus/test";
+import { probe } from "../__fixtures__/probe";
+import { Action, Children, Command, createFeatureStore, define } from "../lib";
 import { Task, type TaskCases, type TaskValue } from "./task";
 
 class Api extends Context.Service<Api, { readonly load: Effect.Effect<string, Error> }>()("Api") {}
@@ -14,13 +15,12 @@ const layerOf = (value: Effect.Effect<string, Error>) => Layer.succeed(Api)({ lo
 // --- folded -----------------------------------------------------------------
 
 /**
- * The shape the library now asks for: a field under a name the feature chose, a
- * `Pending` write on the fold that issues the command, and two handlers that say
- * where the result lands. Take-first is a guard in the handler, not a mode.
+ * The manual path: the operation in the `actions` slot, a field under a name
+ * the feature chose, a `Pending` write on the fold that issues the command,
+ * and two handlers that say where the result lands.
  */
 const folded = (options?: {
-  readonly mode?: "every";
-  readonly takeFirst?: boolean;
+  readonly mode?: "every" | "first";
   /** Spread `search.into("search")` instead of writing the two handlers. */
   readonly into?: boolean;
 }) => {
@@ -31,18 +31,15 @@ const folded = (options?: {
   });
 
   const State = Schema.Struct({ colorValue: Schema.String, search: Task.schema(Schema.String) });
-  const Vocab = Action.of([Clicked, Cancelled, ...search.actions]);
-  const F = define({ props: Props, state: State, action: Vocab });
+  const Vocab = [Clicked, Cancelled, ...search.actions];
+  const F = define({ props: Props, state: State, actions: Vocab });
 
   return {
     search,
     feature: F.create({
       initialState: F.initialState(() => ({ colorValue: "#000", search: Task.idle })),
       reducer: F.reducer({
-        Clicked: (_a, { state }) =>
-          options?.takeFirst && Task.isPending(state.search)
-            ? state
-            : [{ ...state, search: Task.pending }, search.run(load)],
+        Clicked: (_a, { state }) => [{ ...state, search: Task.pending }, search.run(load)],
         Cancelled: (_a, { state }) => [{ ...state, search: Task.idle }, search.cancel],
         ...(options?.into
           ? search.into("search")
@@ -72,15 +69,25 @@ const run = (
 const clicks = (n: number) => Array.from({ length: n }, () => Clicked.make({}));
 
 describe("Task", () => {
-  it("declares the two tags from the name, and nothing state-shaped", () => {
+  it("declares the two tags from the name, the command, and the field schema", () => {
     const search = Task("WallhavenSearch", { success: Schema.String, onError: Task.errorMessage });
 
-    expect(search.actions.map((a) => (a.make as any)({ value: "x", error: "x" })._tag)).toEqual([
+    expect(search.actions.map((a) => a.make({ value: "x", error: "x" })._tag)).toEqual([
       "WallhavenSearchResolved",
       "WallhavenSearchRejected",
     ]);
 
-    expect(Object.keys(search).sort()).toEqual(["actions", "cancel", "into", "run"]);
+    expect(Object.keys(search).sort()).toEqual([
+      "Rejected",
+      "Resolved",
+      "actions",
+      "cancel",
+      "into",
+      "rejectedInto",
+      "resolvedInto",
+      "run",
+      "schema",
+    ]);
   });
 
   it("into(key) folds both actions into the field", async () => {
@@ -115,7 +122,7 @@ describe("Task", () => {
     const F = define({
       props: Props,
       state: State,
-      action: Action.of([Clicked, ...search.actions]),
+      actions: [Clicked, ...search.actions],
     });
     const feature = F.create({
       initialState: F.initialState(() => ({ colorValue: "#000", search: Task.idle })),
@@ -190,13 +197,50 @@ describe("Task", () => {
     expect(out.emitted).toHaveLength(2);
   });
 
-  it("take-first is an `isPending` guard in the handler, and it drops the second run", async () => {
+  it("first: on the manual path, a run while one is in flight is dropped", async () => {
     const out = await run(
-      folded({ takeFirst: true }).feature,
+      folded({ mode: "first" }).feature,
       Effect.as(Effect.sleep(50), "first"),
       clicks(2),
     );
     expect(out.emitted).toHaveLength(1);
+    expect(out.state.search).toEqual({ _tag: "Resolved", value: "first" });
+  });
+
+  it("first: a run interrupted without settling does not block the next", async () => {
+    const search = Task("Search", { success: Schema.String, mode: "first", run: () => load });
+    const State = Schema.Struct({ search: search.schema });
+    const F = define({ props: Props, state: State, actions: [Clicked, Cancelled, search] });
+    // `Cancelled` interrupts and leaves the field `Pending`: nothing in the
+    // field says the run is gone, so only the fiber book can.
+    const feature = F.create({
+      initialState: () => ({ search: Task.idle }),
+      reducer: {
+        Clicked: (_a, { draft }) => Task.start(draft, "search", search.run()),
+        Cancelled: (_a, { state }) => [state, search.cancel],
+        ...search.into("search"),
+      },
+      render: () => null,
+    });
+    const out = await run(feature, Effect.as(Effect.sleep(20), "again"), [
+      Clicked.make(),
+      Cancelled.make(),
+      Clicked.make(),
+    ]);
+    expect(out.emitted).toHaveLength(1);
+    expect(out.state.search).toEqual({ _tag: "Resolved", value: "again" });
+  });
+
+  it("first: holds for a `Task.output` operation", async () => {
+    const saved = Task.output("Saved", { success: Schema.String, mode: "first", run: () => load });
+    const F = define({ props: Props, state: Schema.Struct({}), actions: Clicked, outputs: saved });
+    const feature = F.create({
+      initialState: () => ({}),
+      reducer: { Clicked: (_a, { state }) => [state, saved.run()] },
+      render: () => null,
+    });
+    const out = await run(feature, Effect.as(Effect.sleep(20), "once"), clicks(2));
+    expect(out.outputs).toEqual([saved.Resolved.make({ value: "once" })]);
   });
 
   it("cancel interrupts the work, and the handler clears the field", async () => {
@@ -220,6 +264,50 @@ describe("Task", () => {
     expect(Task.pending).toEqual({ _tag: "Pending" });
     expect(Task.resolved("v")).toEqual({ _tag: "Resolved", value: "v" });
     expect(Task.rejected("e")).toEqual({ _tag: "Rejected", error: "e" });
+  });
+
+  it("without `failure`, an omitted `onError` is Task.errorMessage", async () => {
+    const quiet = Task("Quiet", { success: Schema.String, run: () => load });
+    const F = define({
+      props: Props,
+      state: Schema.Struct({ quiet: quiet.schema }),
+      actions: [Clicked, ...quiet.actions],
+    });
+    const feature = F.create({
+      initialState: () => ({ quiet: Task.idle }),
+      reducer: {
+        Clicked: (_a, { state }) => Task.start(state, "quiet", quiet.run()),
+        ...quiet.into("quiet"),
+      },
+      render: () => null,
+    });
+    const out = await run(feature, Effect.fail(new Error("boom")));
+    expect(out.state.quiet).toEqual({ _tag: "Rejected", error: "boom" });
+  });
+
+  it("op.schema is the field schema of the operation's own success and failure", () => {
+    const search = Task("Search", { success: Schema.Number });
+    expect(Object.keys(search.schema.cases).sort()).toEqual([
+      "Idle",
+      "Pending",
+      "Rejected",
+      "Resolved",
+    ]);
+    expect(search.schema.cases.Resolved.make({ value: 1 })).toEqual({ _tag: "Resolved", value: 1 });
+    expect(search.schema.cases.Rejected.make({ error: "e" })).toEqual({
+      _tag: "Rejected",
+      error: "e",
+    });
+
+    const typed = Task("Typed", {
+      success: Schema.Number,
+      failure: Schema.Struct({ code: Schema.Number }),
+      onError: () => ({ code: 500 }),
+    });
+    expect(typed.schema.cases.Rejected.make({ error: { code: 1 } })).toEqual({
+      _tag: "Rejected",
+      error: { code: 1 },
+    });
   });
 
   it("schema carries the four cases, with Schema.String as the default failure", () => {
@@ -284,6 +372,106 @@ describe("Task", () => {
 
 // --- bound work --------------------------------------------------------------
 
+describe("resolvedInto / rejectedInto", () => {
+  const Saved = Action.output("Saved", { revision: Schema.String });
+  const save = Task("Save", { success: Schema.String, run: () => load });
+
+  const build = (then: {
+    readonly resolved?: (value: string, snapshot: any) => any;
+    readonly rejected?: (error: string, snapshot: any) => any;
+  }) => {
+    const F = define({
+      props: Props,
+      state: Schema.Struct({ dirty: Schema.Boolean, save: save.schema, seen: Schema.String }),
+      actions: [Clicked, save],
+      outputs: Saved,
+    });
+    // Built outside the literal and spread as `object`: the fixture varies
+    // which entries exist, which the reducer's own types cannot express.
+    const extra = {
+      ...(then.resolved ? { SaveResolved: save.resolvedInto("save", then.resolved) } : {}),
+      ...(then.rejected ? { SaveRejected: save.rejectedInto("save", then.rejected) } : {}),
+    };
+    return F.create({
+      initialState: () => ({ dirty: true, save: Task.idle, seen: "" }),
+      reducer: {
+        Clicked: (_a, { draft }) => Task.start(draft, "save", save.run()),
+        ...save.into("save"),
+        ...(extra as object),
+      },
+      render: () => null,
+    });
+  };
+
+  it("writes the field into the draft, then hands the follow-up that draft", async () => {
+    const feature = build({
+      resolved: (value, { draft }) => {
+        draft.seen = draft.save._tag;
+        draft.dirty = false;
+        return [draft, Command.output(Saved, { revision: value })];
+      },
+    });
+    const out = await run(feature, Effect.succeed("r1"));
+    expect(out.state).toEqual({
+      dirty: false,
+      save: { _tag: "Resolved", value: "r1" },
+      seen: "Resolved",
+    });
+    expect(out.outputs).toEqual([{ _tag: "Saved", revision: "r1" }]);
+  });
+
+  it("the side without a follow-up is the plain `into` handler", async () => {
+    const feature = build({ resolved: (_v, { draft }) => draft });
+    const out = await run(feature, Effect.fail(new Error("boom")));
+    expect(out.state.save).toEqual({ _tag: "Rejected", error: "boom" });
+    expect(out.state.dirty).toBe(true);
+  });
+
+  it("rejectedInto writes `Rejected` first", async () => {
+    const feature = build({
+      rejected: (error, { draft }) => {
+        draft.seen = `${draft.save._tag}:${error}`;
+        return draft;
+      },
+    });
+    const out = await run(feature, Effect.fail(new Error("boom")));
+    expect(out.state.save).toEqual({ _tag: "Rejected", error: "boom" });
+    expect(out.state.seen).toBe("Rejected:boom");
+  });
+
+  it("a lazy command beside the draft sees the finished state", async () => {
+    const seen: Array<unknown> = [];
+    const feature = build({
+      resolved: (_v, { draft }) => [
+        draft,
+        (next: any) => Command.effect(() => Effect.sync(() => void seen.push(next.save))),
+      ],
+    });
+    await run(feature, Effect.succeed("r1"));
+    expect(seen).toEqual([{ _tag: "Resolved", value: "r1" }]);
+  });
+
+  it("returning `snapshot.state` finishes as the draft, with the field written", async () => {
+    const feature = build({
+      resolved: (value, { state }) => [state, Command.output(Saved, { revision: value })],
+      rejected: (_e, { state }) => state,
+    });
+    const resolved = await run(feature, Effect.succeed("r1"));
+    expect(resolved.state.save).toEqual({ _tag: "Resolved", value: "r1" });
+    expect(resolved.outputs).toEqual([{ _tag: "Saved", revision: "r1" }]);
+    expect(resolved.defects).toEqual([]);
+
+    const rejected = await run(feature, Effect.fail(new Error("boom")));
+    expect(rejected.state.save).toEqual({ _tag: "Rejected", error: "boom" });
+    expect(rejected.defects).toEqual([]);
+  });
+
+  it("returning another state than the draft is the fold's TypeError", async () => {
+    const feature = build({ resolved: (_v, { state }) => ({ ...state }) });
+    await expect(run(feature, Effect.succeed("r1"))).rejects.toThrow(/wrote into snapshot.draft/);
+  });
+});
+
 describe("Task with `run`", () => {
   const search = Task("Search", {
     success: Schema.String,
@@ -292,8 +480,8 @@ describe("Task with `run`", () => {
   });
 
   const State = Schema.Struct({ search: Task.schema(Schema.String) });
-  const Vocab = Action.of([Clicked, ...search.actions]);
-  const F = define({ props: Props, state: State, action: Vocab });
+  const Vocab = [Clicked, ...search.actions];
+  const F = define({ props: Props, state: State, actions: Vocab });
 
   const feature = F.create({
     initialState: F.initialState(() => ({ search: Task.idle })),
@@ -323,7 +511,7 @@ describe("Task.start on a draft", () => {
     const F = define({
       props: Props,
       state: State,
-      action: Action.of([Clicked, ...search.actions]),
+      actions: [Clicked, ...search.actions],
     });
     let handed: unknown;
     let returned: unknown;
@@ -365,9 +553,9 @@ describe("Task.start on a draft", () => {
 describe("Task.output", () => {
   const search = Task.output("Search", { success: Schema.String, onError: Task.errorMessage });
   const State = Schema.Struct({ colorValue: Schema.String });
-  const Vocab = Action.of([Clicked]);
-  const Outputs = Action.of([...search.actions]);
-  const F = define({ props: Props, state: State, action: Vocab, output: Outputs });
+  const Vocab = [Clicked];
+  const Outputs = [...search.actions];
+  const F = define({ props: Props, state: State, actions: Vocab, outputs: Outputs });
 
   const feature = F.create({
     initialState: F.initialState(() => ({ colorValue: "#000" })),
@@ -377,7 +565,14 @@ describe("Task.output", () => {
 
   it("has no into: an announced operation has no reducer handlers", () => {
     expect("into" in search).toBe(false);
-    expect(Object.keys(search).sort()).toEqual(["actions", "cancel", "run"]);
+    expect(Object.keys(search).sort()).toEqual([
+      "Rejected",
+      "Resolved",
+      "actions",
+      "cancel",
+      "run",
+      "schema",
+    ]);
   });
 
   it("announces the result instead of folding it", async () => {
@@ -389,5 +584,453 @@ describe("Task.output", () => {
   it("announces a rejection", async () => {
     const out = await run(feature, Effect.fail(new Error("nope")));
     expect(out.outputs).toEqual([{ _tag: "SearchRejected", error: "nope" }]);
+  });
+});
+
+// --- the `tasks` slot --------------------------------------------------------
+
+describe("the `tasks` slot", () => {
+  const Saved = Action.output("Saved", { revision: Schema.String });
+  const actions = Action({ SaveClicked: {}, Cancelled: {}, Typed: { text: Schema.String } });
+  const props = Schema.Struct({ noteId: Schema.String });
+  const state = Schema.Struct({ text: Schema.String, dirty: Schema.Boolean });
+  const runProps = { props: { noteId: "n1" }, hooks: {} };
+  const snapshotOf = (extra: object = {}) => ({
+    ...runProps,
+    state: { text: "t", dirty: true, save: Task.idle, ...extra },
+  });
+
+  const saveOf = (mode?: "first") =>
+    Task("Save", {
+      success: Schema.String,
+      mode,
+      run: (note: { readonly id: string; readonly text: string }) =>
+        Effect.map(load, (value) => `${value}:${note.id}:${note.text}`),
+    });
+
+  /** The target shape: a key per task, no settle handler unless one is asked for. */
+  const editor = (options?: {
+    readonly mode?: "first";
+    readonly resolved?: (value: string, snapshot: any) => any;
+    readonly rejected?: (error: string, snapshot: any) => any;
+  }) => {
+    const saveNote = saveOf(options?.mode);
+    const Editor = define({ props, state, tasks: { save: saveNote }, actions, outputs: Saved });
+    // Spread as `object`: the fixture varies which settle entries exist.
+    const settle = {
+      ...(options?.resolved
+        ? {
+            SaveResolved: ({ value }: { value: string }, s: unknown) => options.resolved!(value, s),
+          }
+        : {}),
+      ...(options?.rejected
+        ? {
+            SaveRejected: ({ error }: { error: string }, s: unknown) => options.rejected!(error, s),
+          }
+        : {}),
+    };
+    const feature = Editor.create({
+      initialState: (p) => ({ text: p.noteId, dirty: false }),
+      reducer: {
+        SaveClicked: (_p, { state, props, tasks }) =>
+          tasks.save.start({ id: props.noteId, text: state.text }),
+        Cancelled: (_p, { tasks }) => tasks.save.cancel(),
+        Typed: ({ text }, { draft }) => {
+          draft.text = text;
+          draft.dirty = true;
+          return draft;
+        },
+        ...(settle as object),
+      },
+      render: () => null,
+    });
+    return { saveNote, feature };
+  };
+
+  const runEditor = (
+    feature: ReturnType<typeof editor>["feature"],
+    value: Effect.Effect<string, Error>,
+    seeds: ReadonlyArray<Parameters<typeof feature.reduce>[0]>,
+  ) => Effect.runPromise(feature.run(seeds, { ...runProps, layer: layerOf(value) }));
+
+  it("fills each task field with `Task.idle` under the feature's initial state", async () => {
+    const { feature } = editor();
+    const out = await runEditor(feature, Effect.succeed("ok"), []);
+    expect(out.state).toEqual({ text: "n1", dirty: false, save: Task.idle });
+  });
+
+  it("merges the feature's initial state on top, so it may set a task field", async () => {
+    const saveNote = saveOf();
+    const Editor = define({ props, state, tasks: { save: saveNote }, actions });
+    const feature = Editor.create({
+      initialState: () => ({ text: "", dirty: false, save: Task.resolved("r0") }),
+      reducer: {
+        SaveClicked: (_p, { state }) => state,
+        Cancelled: (_p, { state }) => state,
+        Typed: (_p, { state }) => state,
+      },
+      render: () => null,
+    });
+    const out = await Effect.runPromise(
+      feature.run([], { ...runProps, layer: layerOf(Effect.succeed("")) }),
+    );
+    expect(out.state.save).toEqual(Task.resolved("r0"));
+  });
+
+  it("start writes `Pending` and issues the work; the settle lands with no handler", async () => {
+    const { feature } = editor();
+    const next = feature.reduce(actions.SaveClicked.make(), snapshotOf());
+    expect(Array.isArray(next) && next[0].save).toEqual(Task.pending);
+
+    const out = await runEditor(feature, Effect.succeed("ok"), [actions.SaveClicked.make()]);
+    expect(out.state.save).toEqual(Task.resolved("ok:n1:n1"));
+    expect(out.emitted).toEqual([{ _tag: "SaveResolved", value: "ok:n1:n1" }]);
+  });
+
+  it("a rejection lands in the field with no handler", async () => {
+    const { feature } = editor();
+    const out = await runEditor(feature, Effect.fail(new Error("boom")), [
+      actions.SaveClicked.make(),
+    ]);
+    expect(out.state.save).toEqual(Task.rejected("boom"));
+  });
+
+  it("folds a seeded settle action built from `op.Resolved` / `op.Rejected`", () => {
+    const { saveNote, feature } = editor();
+    expect(feature.reduce(saveNote.Resolved.make({ value: "r1" }), snapshotOf())).toEqual({
+      text: "t",
+      dirty: true,
+      save: Task.resolved("r1"),
+    });
+    expect(feature.reduce(saveNote.Rejected.make({ error: "no" }), snapshotOf())).toEqual({
+      text: "t",
+      dirty: true,
+      save: Task.rejected("no"),
+    });
+  });
+
+  it("writes the settled field before the handler runs, in both `state` and `draft`", () => {
+    const seen: Array<unknown> = [];
+    const { saveNote, feature } = editor({
+      resolved: (value, { state, draft }) => {
+        seen.push(state.save, draft.save._tag);
+        draft.dirty = false;
+        return [draft, Command.output(Saved, { revision: value })];
+      },
+    });
+    const next = feature.reduce(saveNote.Resolved.make({ value: "r1" }), snapshotOf());
+    expect(seen).toEqual([Task.resolved("r1"), "Resolved"]);
+    expect(Array.isArray(next) && next[0]).toEqual({
+      text: "t",
+      dirty: false,
+      save: Task.resolved("r1"),
+    });
+  });
+
+  it("a handler returning `snapshot.state` returns the field write alone", () => {
+    const { saveNote, feature } = editor({
+      resolved: (_value, { state }) => state,
+      rejected: (_error, { state }) => [state, Command.none],
+    });
+    expect(feature.reduce(saveNote.Resolved.make({ value: "r1" }), snapshotOf())).toEqual({
+      text: "t",
+      dirty: true,
+      save: Task.resolved("r1"),
+    });
+    const rejected = feature.reduce(saveNote.Rejected.make({ error: "no" }), snapshotOf());
+    expect(Array.isArray(rejected) && rejected[0].save).toEqual(Task.rejected("no"));
+  });
+
+  it("a handler that writes into the draft and returns another state is the fold's TypeError", () => {
+    const { saveNote, feature } = editor({
+      resolved: (_value, { state, draft }) => {
+        draft.dirty = false;
+        return state;
+      },
+    });
+    expect(() => feature.reduce(saveNote.Resolved.make({ value: "r1" }), snapshotOf())).toThrow(
+      /wrote into snapshot.draft/,
+    );
+  });
+
+  it("cancel writes `Idle` and issues the operation's cancel", async () => {
+    const { saveNote, feature } = editor();
+    const next = feature.reduce(actions.Cancelled.make(), snapshotOf({ save: Task.pending }));
+    expect(next).toEqual([{ text: "t", dirty: true, save: Task.idle }, saveNote.cancel]);
+
+    const out = await runEditor(feature, Effect.as(Effect.sleep(50), "never seen"), [
+      actions.SaveClicked.make(),
+      actions.Cancelled.make(),
+    ]);
+    expect(out.emitted).toEqual([]);
+    expect(out.state.save).toEqual(Task.idle);
+  });
+
+  it("a handler writes other fields before or after calling a handle", () => {
+    const Editor = define({ props, state, tasks: { save: saveOf() }, actions });
+    const feature = Editor.create({
+      initialState: () => ({ text: "", dirty: false }),
+      reducer: {
+        SaveClicked: (_p, { draft, tasks }) => {
+          draft.dirty = false;
+          const next = tasks.save.start({ id: "a", text: draft.text });
+          draft.text = "after";
+          return next;
+        },
+        Cancelled: (_p, { tasks }) => {
+          const [written, command] = tasks.save.cancel();
+          written.dirty = false;
+          return [written, command];
+        },
+        Typed: (_p, { state }) => state,
+      },
+      render: () => null,
+    });
+    const started = feature.reduce(actions.SaveClicked.make(), snapshotOf());
+    expect(Array.isArray(started) && started[0]).toEqual({
+      text: "after",
+      dirty: false,
+      save: Task.pending,
+    });
+    const cancelled = feature.reduce(actions.Cancelled.make(), snapshotOf({ save: Task.pending }));
+    expect(Array.isArray(cancelled) && cancelled[0]).toEqual({
+      text: "t",
+      dirty: false,
+      save: Task.idle,
+    });
+  });
+
+  it("an unbound operation's start takes the effect", async () => {
+    const loose = Task("Loose", { success: Schema.String });
+    const F = define({ props, state, tasks: { loose }, actions });
+    const feature = F.create({
+      initialState: () => ({ text: "", dirty: false }),
+      reducer: {
+        SaveClicked: (_p, { tasks }) => tasks.loose.start(load),
+        Cancelled: (_p, { tasks }) => tasks.loose.cancel(),
+        Typed: (_p, { state }) => state,
+      },
+      render: () => null,
+    });
+    const out = await Effect.runPromise(
+      feature.run([actions.SaveClicked.make()], {
+        ...runProps,
+        layer: layerOf(Effect.succeed("loose")),
+      }),
+    );
+    expect(out.state.loose).toEqual(Task.resolved("loose"));
+  });
+
+  it('under `mode: "first"`, a start while a run is in flight is dropped where it is scheduled', async () => {
+    const { feature } = editor({ mode: "first" });
+    const pending = snapshotOf({ save: Task.pending });
+    const next = feature.reduce(actions.SaveClicked.make(), pending);
+    // The fold cannot see the fiber book, so it issues the command and
+    // leaves an already-`Pending` field untouched.
+    expect(Array.isArray(next) && next[0]).toBe(pending.state);
+    expect(Array.isArray(next) && next[1]).toMatchObject({
+      _tag: "Keyed",
+      key: "Task/Save",
+      first: true,
+    });
+
+    const out = await runEditor(feature, Effect.as(Effect.sleep(20), "first"), [
+      actions.SaveClicked.make(),
+      actions.SaveClicked.make(),
+    ]);
+    expect(out.emitted).toHaveLength(1);
+    expect(out.state.save).toEqual(Task.resolved("first:n1:n1"));
+  });
+
+  it('under `mode: "first"`, a start after the settle runs again', async () => {
+    const { feature } = editor({ mode: "first" });
+    const next = feature.reduce(
+      actions.SaveClicked.make(),
+      snapshotOf({ save: Task.resolved("r0") }),
+    );
+    expect(Array.isArray(next) && next[0].save).toEqual(Task.pending);
+  });
+
+  it('`op.run` under `mode: "first"` drops a run while one is in flight', async () => {
+    const saveNote = saveOf("first");
+    const F = define({ props, state, actions: [actions, saveNote] });
+    const feature = F.create({
+      initialState: () => ({ text: "", dirty: false }),
+      reducer: {
+        SaveClicked: (_p, { state }) => [state, saveNote.run({ id: "a", text: "" })],
+        Cancelled: (_p, { state }) => state,
+        Typed: (_p, { state }) => state,
+        SaveResolved: (_p, { state }) => state,
+        SaveRejected: (_p, { state }) => state,
+      },
+      render: () => null,
+    });
+    const out = await Effect.runPromise(
+      feature.run([actions.SaveClicked.make(), actions.SaveClicked.make()], {
+        ...runProps,
+        layer: layerOf(Effect.as(Effect.sleep(20), "raw")),
+      }),
+    );
+    expect(out.emitted).toHaveLength(1);
+  });
+
+  it('under `mode: "first"`, a run cancelled without settling does not block the next start', async () => {
+    const saveNote = saveOf("first");
+    const F = define({ props, state, tasks: { save: saveNote }, actions });
+    // `Cancelled` returns the raw `cancel`, so the field stays `Pending`.
+    const feature = F.create({
+      initialState: () => ({ text: "", dirty: false }),
+      reducer: {
+        SaveClicked: (_p, { tasks }) => tasks.save.start({ id: "a", text: "" }),
+        Cancelled: (_p, { state }) => [state, saveNote.cancel],
+        Typed: (_p, { state }) => state,
+      },
+      render: () => null,
+    });
+    const out = await runEditor(feature, Effect.as(Effect.sleep(20), "again"), [
+      actions.SaveClicked.make(),
+      actions.Cancelled.make(),
+      actions.SaveClicked.make(),
+    ]);
+    expect(out.state.save).toEqual(Task.resolved("again:a:"));
+  });
+
+  it('under `mode: "first"`, a start from `Mounted` runs again after a remount', async () => {
+    // The StrictMode path: `start` folds `Mounted` again over the state the
+    // first mount left, still `Pending`. The first run belongs to the old
+    // mount, which drains it or, past its deadline, interrupts it unsettled;
+    // either way the new mount has nothing in flight, so it books its own.
+    const loadData = Task("Load", {
+      success: Schema.String,
+      mode: "first",
+      run: () => Effect.as(Effect.sleep(100), "loaded"),
+    });
+    const feature = define({
+      props: Schema.Struct({}),
+      state: Schema.Struct({}),
+      tasks: { data: loadData },
+      actions: [],
+    }).create({
+      initialState: () => ({}),
+      reducer: { Mounted: (_p, { tasks }) => tasks.data.start() },
+      render: () => null,
+    });
+    const store = createFeatureStore({
+      feature,
+      props: {},
+      equivalence: {
+        props: Equivalence.strictEqual(),
+        hooks: Equivalence.Record(Equivalence.strictEqual<unknown>()),
+      },
+      runtime: ManagedRuntime.make(Layer.empty),
+      layer: undefined,
+      emit: () => {},
+      defect: (error) => {
+        throw error;
+      },
+    });
+
+    store.start();
+    expect(store.getSnapshot().data).toEqual(Task.pending);
+    store.stop();
+    store.start();
+    await vi.waitFor(() => expect(probe(store).fibers).toBe(1));
+    await vi.waitFor(() => expect(store.getSnapshot().data).toEqual(Task.resolved("loaded")));
+    store.stop();
+    await vi.waitFor(() => expect(probe(store).fibers).toBe(0));
+  });
+
+  it("keeps the snapshot's own keys to `state`, `props` and `hooks`", () => {
+    let keys: Array<string> = [];
+    const F = define({ props, state, tasks: { save: saveOf() }, actions });
+    const feature = F.create({
+      initialState: () => ({ text: "", dirty: false }),
+      reducer: {
+        SaveClicked: (_p, snapshot) => {
+          keys = Object.keys(snapshot);
+          return snapshot.tasks.save.start({ id: "a", text: "" });
+        },
+        Cancelled: (_p, { state }) => state,
+        Typed: (_p, { state }) => state,
+      },
+      render: () => null,
+    });
+    feature.reduce(actions.SaveClicked.make(), snapshotOf());
+    expect(keys.sort()).toEqual(["hooks", "props", "state"]);
+  });
+
+  it("a feature with no `tasks` hands an empty `snapshot.tasks`", () => {
+    let tasks: unknown;
+    const F = define({ props, state, actions });
+    const feature = F.create({
+      initialState: () => ({ text: "", dirty: false }),
+      reducer: {
+        SaveClicked: (_p, snapshot) => {
+          tasks = snapshot.tasks;
+          return snapshot.state;
+        },
+        Cancelled: (_p, { state }) => state,
+        Typed: (_p, { state }) => state,
+      },
+      render: () => null,
+    });
+    feature.reduce(actions.SaveClicked.make(), { ...runProps, state: { text: "", dirty: false } });
+    expect(tasks).toEqual({});
+  });
+
+  describe("clash rules, at `define`", () => {
+    // Each call gets past the types through a loosened `define`: these are
+    // the runtime checks, for a slot the types did not see.
+    const defineLoose = define as unknown as (spec: object) => unknown;
+
+    it("refuses a task key that is also a state field", () => {
+      expect(() => defineLoose({ props, state, tasks: { text: saveOf() }, actions })).toThrow(
+        new TypeError("define: tasks.text is also a field of the state schema"),
+      );
+    });
+
+    it("refuses a task tag that is also declared in `actions` or `outputs`", () => {
+      const SaveResolved = Action.output("SaveResolved", {});
+      expect(() =>
+        defineLoose({ props, state, tasks: { save: saveOf() }, actions, outputs: SaveResolved }),
+      ).toThrow(
+        new TypeError(
+          'define: tag "SaveResolved" of tasks.save is also declared in "actions" or "outputs"',
+        ),
+      );
+    });
+
+    it("refuses one operation under two keys", () => {
+      const saveNote = saveOf();
+      expect(() =>
+        defineLoose({ props, state, tasks: { a: saveNote, b: saveNote }, actions }),
+      ).toThrow(new TypeError('define: one Task operation is under two keys, "a" and "b"'));
+    });
+
+    it("refuses two operations sharing a name under two keys", () => {
+      expect(() =>
+        defineLoose({ props, state, tasks: { a: saveOf(), b: saveOf() }, actions }),
+      ).toThrow(new TypeError('define: tag "SaveResolved" is declared twice'));
+    });
+
+    it("refuses an operation in both `tasks` and `actions`", () => {
+      const saveNote = saveOf();
+      expect(() =>
+        defineLoose({ props, state, tasks: { save: saveNote }, actions: [actions, saveNote] }),
+      ).toThrow(/tag "SaveResolved" of tasks.save is also declared in "actions" or "outputs"/);
+    });
+
+    it("refuses a `Task.output` operation", () => {
+      const shout = Task.output("Shout", { success: Schema.String });
+      expect(() => defineLoose({ props, state, tasks: { shout }, actions })).toThrow(
+        /tasks.shout is a Task.output operation/,
+      );
+    });
+
+    it("refuses a value that is not a Task operation", () => {
+      expect(() => defineLoose({ props, state, tasks: { save: Saved }, actions })).toThrow(
+        new TypeError("define: tasks.save is not a Task operation"),
+      );
+    });
   });
 });

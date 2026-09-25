@@ -33,11 +33,11 @@ const Changed = Action("Changed", { userId: Schema.String, online: Schema.Boolea
 const Presence = define({
   props: Schema.Struct({ roomId: Schema.String }),
   state: Schema.Struct({ online: Schema.Array(Schema.String) }),
-  action: Action.of([Changed]),
+  actions: [Changed],
 });
 ```
 
-One decision here: the stream's element type is the action's payload, so `Changed.make(event)` needs no mapping. Map inside the service when the wire format differs.
+One decision here: the stream's element type is the action's payload, so `dispatch(Changed, event)` needs no mapping. Map inside the service when the wire format differs.
 
 ## Declare the subscription
 
@@ -65,9 +65,7 @@ const presence = Presence.create({
     [`presence:${props.roomId}`]: Subscription.effect((dispatch) =>
       Effect.gen(function* () {
         const api = yield* PresenceApi;
-        yield* Stream.runForEach(api.events(props.roomId), (event) =>
-          dispatch(Changed.make(event)),
-        );
+        yield* Stream.runForEach(api.events(props.roomId), (event) => dispatch(Changed, event));
       }),
     ),
   }),
@@ -85,7 +83,7 @@ The key carries everything the effect depends on. `` `presence:${props.roomId}` 
 
 `Mounted` and `Unmounted` are gone from this feature. `PropsChanged` still resets `online` to `[]` on a room change, since the new room's feed reports its own members and the old list must not linger until they arrive. It returns `state` unchanged for any other prop change.
 
-`dispatch` is typed by the feature's vocabulary and `PresenceApi` is read off the effect, with no type argument: the hook's slot supplies the contextual type, the same rule `Command.effect` follows in a handler. A `Subscription.effect` written outside the hook needs the type argument. See [Subscriptions](/docs/reference/subscriptions#contextual-typing) for the rule.
+`dispatch` is typed by the feature's declared messages and `PresenceApi` is read off the effect, with no type argument: the hook's slot supplies the contextual type, the same rule `Command.effect` follows in a handler. A `Subscription.effect` written outside the hook needs the type argument. See [Subscriptions](/docs/reference/subscriptions#contextual-typing) for the rule.
 
 ## Test it with a finite stream
 

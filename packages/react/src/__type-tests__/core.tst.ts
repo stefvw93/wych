@@ -1,12 +1,11 @@
-import { Effect, Layer, Option, Schema } from "effect";
+import { Effect, Layer, Option, Schema, Stream } from "effect";
 import { expect, test } from "tstyche";
 import type { ComponentProps, FC, ReactNode } from "react";
 import { drafterLayer, mutativeDrafter, type Draft } from "../draft";
 import { Task, type TaskValue } from "../utils/task";
 import {
   Action,
-  type AnyVocabulary,
-  type ChannelOf,
+  type AnyMessage,
   Children,
   Command,
   createRuntime,
@@ -16,6 +15,7 @@ import {
   type Exhaustive,
   type FeatureComponent,
   type MemberOf,
+  type MembersOf,
   type Message,
   Next,
   type LazyCommand,
@@ -24,6 +24,7 @@ import {
   type OutputProps,
   type RenderSnapshot,
   type ServicesOf,
+  Subscription,
   type TagsOf,
 } from "../lib";
 
@@ -84,6 +85,47 @@ test("a reserved lifecycle tag cannot be declared as an action or output", () =>
   expect(Action.output).type.toBeCallableWith("Unmount", {});
 });
 
+test("`fields` is optional, and `make()` takes no argument only when nothing is required", () => {
+  const Reverted = Action("Reverted");
+  expect(Reverted.make()).type.toBe<{ readonly _tag: "Reverted" }>();
+  expect(Reverted.make({})).type.toBe<{ readonly _tag: "Reverted" }>();
+
+  const Typed = Action("Typed", { query: Schema.String });
+  // @ts-expect-error Expected 1-2 arguments
+  Typed.make();
+  expect(Typed.make({ query: "a" })).type.toBe<{
+    readonly _tag: "Typed";
+    readonly query: string;
+  }>();
+
+  const Saved = Action.output("Saved");
+  expect(Saved.make()).type.toBe<{ readonly _tag: "Saved" }>();
+});
+
+test("the record form declares one message per key, tag from the key", () => {
+  const actions = Action({ Typed: { query: Schema.String }, Cleared: {} });
+  expect(actions.Typed.make({ query: "a" })).type.toBe<{
+    readonly _tag: "Typed";
+    readonly query: string;
+  }>();
+  expect(actions.Cleared.make()).type.toBe<{ readonly _tag: "Cleared" }>();
+  expect(actions.Typed).type.toBeAssignableTo<AnyMessage<"internal">>();
+  expect(actions.Typed).type.not.toBeAssignableTo<AnyMessage<"outbound">>();
+
+  const outputs = Action.output({ Saved: { id: Schema.String } });
+  expect(outputs.Saved).type.toBeAssignableTo<AnyMessage<"outbound">>();
+  expect(outputs.Saved).type.not.toBeAssignableTo<AnyMessage<"internal">>();
+});
+
+test("the record form rejects a lower-case key and a lifecycle key", () => {
+  // @ts-expect-error must be capitalized
+  Action({ typed: {} });
+  // @ts-expect-error is a reserved lifecycle tag
+  Action({ Mounted: {} });
+  // @ts-expect-error is a reserved lifecycle tag
+  Action.output({ Fine: {}, Unmounted: {} });
+});
+
 // ---------------------------------------------------------------------------
 // Command.output — channel enforced at the point of use
 // ---------------------------------------------------------------------------
@@ -110,55 +152,62 @@ test("`Command.output` rejects an internal message, accepts an outbound one", ()
 });
 
 // ---------------------------------------------------------------------------
-// Vocabulary composition (`.of`), flattening
+// Member sources: the `action` and `output` slots
 // ---------------------------------------------------------------------------
 
-test("`.of` composes members and flattens nested vocabularies into `cases`", () => {
-  const Started = Action("Started", {});
-  const Failed = Action("Failed", { reason: Schema.String });
-  const Async = Action.of([Started, Failed]);
-  const CheckoutRequested = Action("CheckoutRequested", {});
-  const CartActions = Action.of([Async, CheckoutRequested]);
+test("`MemberOf` flattens messages, records, tasks and nested arrays", () => {
+  const Started = Action("Started");
+  const records = Action({ Failed: { reason: Schema.String } });
+  const load = Task("Load", { success: Schema.Number });
+  const Source = [Started, [records, load]] as const;
 
-  expect<TagsOf<typeof CartActions>>().type.toBe<"Started" | "Failed" | "CheckoutRequested">();
-  expect<MemberOf<typeof CartActions>>().type.toBe<
+  expect<TagsOf<typeof Source>>().type.toBe<
+    "Started" | "Failed" | "LoadResolved" | "LoadRejected"
+  >();
+  expect<MembersOf<typeof Source>>().type.toBe<
     | { readonly _tag: "Started" }
     | { readonly _tag: "Failed"; readonly reason: string }
-    | { readonly _tag: "CheckoutRequested" }
+    | ({ readonly _tag: "LoadResolved"; readonly value: number } & {
+        readonly _tag: "LoadResolved";
+      })
+    | ({ readonly _tag: "LoadRejected"; readonly error: string } & {
+        readonly _tag: "LoadRejected";
+      })
   >();
+  expect<TagsOf<typeof records>>().type.toBe<"Failed">();
+  expect<TagsOf<typeof Started>>().type.toBe<"Started">();
 });
 
-test("`.of` reads its channel off the members rather than being told", () => {
-  const Internal = Action.of([Action("Foo", {})]);
-  const Outbound = Action.of([Action.output("Bar", {})]);
+test("each slot takes its own channel only", () => {
+  const props = Schema.Struct({});
+  const state = Schema.Struct({});
+  const In = Action("In");
+  const Out = Action.output("Out");
+  const announced = Task.output("Announced", { success: Schema.String });
+  const folded = Task("Folded", { success: Schema.String });
 
-  // The brand is what `define` checks, so proving it survives inference is the
-  // whole point of dropping the per-channel `of`.
-  expect<ChannelOf<readonly [typeof Internal]>>().type.toBe<"internal">();
-  expect<ChannelOf<readonly [typeof Outbound]>>().type.toBe<"outbound">();
+  // Positive controls: a single message, a record, a task, an inline array.
+  expect(define).type.toBeCallableWith({ props, state, actions: In });
+  expect(define).type.toBeCallableWith({ props, state, actions: Action({ A: {} }) });
+  expect(define).type.toBeCallableWith({ props, state, actions: folded });
+  expect(define).type.toBeCallableWith({
+    props,
+    state,
+    actions: [In, folded],
+    outputs: [Out, announced],
+  });
 
-  expect(Internal).type.toBeAssignableTo<AnyVocabulary<"internal">>();
-  expect(Internal).type.not.toBeAssignableTo<AnyVocabulary<"outbound">>();
-  expect(Outbound).type.toBeAssignableTo<AnyVocabulary<"outbound">>();
-  expect(Outbound).type.not.toBeAssignableTo<AnyVocabulary<"internal">>();
-
-  // And there is no per-channel `of` to disagree with the brand: the outbound
-  // constructor is a bare `MessageConstructor`, call signature and nothing
-  // else, so `Action.output.of` cannot be written.
-  expect<keyof typeof Action.output>().type.toBe<never>();
-});
-
-test("`.of` rejects a member list that straddles both channels", () => {
-  // Positive control: without it the rejection below passes vacuously for any
-  // reason `.of` might be uncallable, rather than because of `SameChannel`.
-  expect(Action.of).type.toBeCallableWith([Action("Foo", {}), Action("Baz", {})]);
-  expect(Action.of).type.toBeCallableWith([Action.output("Bar", {}), Action.output("Qux", {})]);
-
-  expect(Action.of).type.not.toBeCallableWith([Action("Foo", {}), Action.output("Bar", {})]);
-
-  // Empty is the one ambiguous list: it satisfies both guards, so the channel
-  // is unresolvable and `ChannelOf` refuses rather than picking one.
-  expect<ChannelOf<readonly []>>().type.toBe<never>();
+  expect(define).type.not.toBeCallableWith({ props, state, actions: Out });
+  expect(define).type.not.toBeCallableWith({ props, state, actions: [In, Out] });
+  expect(define).type.not.toBeCallableWith({ props, state, actions: announced });
+  expect(define).type.not.toBeCallableWith({ props, state, actions: In, outputs: In });
+  expect(define).type.not.toBeCallableWith({ props, state, actions: In, outputs: folded });
+  expect(define).type.not.toBeCallableWith({
+    props,
+    state,
+    actions: In,
+    outputs: Action({ B: {} }),
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -166,12 +215,16 @@ test("`.of` rejects a member list that straddles both channels", () => {
 // ---------------------------------------------------------------------------
 
 test("`Disjoint` rejects an action/output tag collision", () => {
-  const Actions = Action.of([Action("Foo", {})]);
-  const NonCollidingOutputs = Action.of([Action.output("Bar", {})]);
-  const CollidingOutputs = Action.of([Action.output("Foo", {})]);
+  const Actions = [Action("Foo", {})];
+  const NonCollidingOutputs = [Action.output("Bar", {})];
+  const CollidingOutputs = [Action.output("Foo", {})];
 
-  expect<Disjoint<typeof Actions, typeof NonCollidingOutputs>>().type.toBe<unknown>();
-  expect<Disjoint<typeof Actions, typeof CollidingOutputs>>().type.toBe<never>();
+  expect<
+    Disjoint<MembersOf<typeof Actions>, MembersOf<typeof NonCollidingOutputs>>
+  >().type.toBe<unknown>();
+  expect<
+    Disjoint<MembersOf<typeof Actions>, MembersOf<typeof CollidingOutputs>>
+  >().type.toBe<never>();
 
   // Computing to `never` is only half of it — the guard has to be *wired* to
   // `define`'s `output` property. Intersected onto the wrong one, or dropped,
@@ -179,18 +232,18 @@ test("`Disjoint` rejects an action/output tag collision", () => {
   const props = Schema.Struct({});
   const state = Schema.Struct({});
 
-  expect(define).type.toBeCallableWith({ props, state, action: Actions });
+  expect(define).type.toBeCallableWith({ props, state, actions: Actions });
   expect(define).type.toBeCallableWith({
     props,
     state,
-    action: Actions,
-    output: NonCollidingOutputs,
+    actions: Actions,
+    outputs: NonCollidingOutputs,
   });
   expect(define).type.not.toBeCallableWith({
     props,
     state,
-    action: Actions,
-    output: CollidingOutputs,
+    actions: Actions,
+    outputs: CollidingOutputs,
   });
 });
 
@@ -199,34 +252,36 @@ test("`Disjoint` rejects an action/output tag collision", () => {
 // ---------------------------------------------------------------------------
 
 test("`NoPropCollision` rejects a declared prop colliding with a derived `on<Tag>` name", () => {
-  const Outputs = Action.of([Action.output("Foo", {})]);
+  const Outputs = [Action.output("Foo", {})];
   const NonCollidingProps = Schema.Struct({ somethingElse: Schema.String });
   const CollidingProps = Schema.Struct({ onFoo: Schema.String });
 
-  expect<NoPropCollision<typeof NonCollidingProps, typeof Outputs>>().type.toBe<unknown>();
-  expect<NoPropCollision<typeof CollidingProps, typeof Outputs>>().type.toBe<never>();
+  expect<
+    NoPropCollision<typeof NonCollidingProps, MembersOf<typeof Outputs>>
+  >().type.toBe<unknown>();
+  expect<NoPropCollision<typeof CollidingProps, MembersOf<typeof Outputs>>>().type.toBe<never>();
 
   // Wired to `define`, not merely computing. The guard sits on `output`
   // alongside `Disjoint`, so a mis-wiring shows up here and nowhere above.
   const state = Schema.Struct({});
-  const Actions = Action.of([Action("Bar", {})]);
+  const Actions = [Action("Bar", {})];
 
   expect(define).type.toBeCallableWith({
     props: NonCollidingProps,
     state,
-    action: Actions,
-    output: Outputs,
+    actions: Actions,
+    outputs: Outputs,
   });
   expect(define).type.not.toBeCallableWith({
     props: CollidingProps,
     state,
-    action: Actions,
-    output: Outputs,
+    actions: Actions,
+    outputs: Outputs,
   });
 
   // And the collision is with the *derived* name specifically: `onFoo` is a
   // perfectly good prop until an output called `Foo` exists to derive it.
-  expect(define).type.toBeCallableWith({ props: CollidingProps, state, action: Actions });
+  expect(define).type.toBeCallableWith({ props: CollidingProps, state, actions: Actions });
 });
 
 // ---------------------------------------------------------------------------
@@ -238,15 +293,15 @@ test("a transforming props schema is accepted, and props surface as its `Type`",
   const TransformingProps = Schema.Struct({ id: Schema.NumberFromString });
 
   const state = Schema.Struct({});
-  const Actions = Action.of([Action("Bar", {})]);
+  const Actions = [Action("Bar", {})];
 
-  expect(define).type.toBeCallableWith({ props: PlainProps, state, action: Actions });
-  expect(define).type.toBeCallableWith({ props: TransformingProps, state, action: Actions });
+  expect(define).type.toBeCallableWith({ props: PlainProps, state, actions: Actions });
+  expect(define).type.toBeCallableWith({ props: TransformingProps, state, actions: Actions });
 
   // Props are validated, never decoded: `define` normalizes the schema to its
   // `Type` side, so a codec field surfaces downstream as the decoded shape —
   // the parent passes `number`, never the wire string.
-  const Transformed = define({ props: TransformingProps, state, action: Actions });
+  const Transformed = define({ props: TransformingProps, state, actions: Actions });
 
   expect<Parameters<Parameters<typeof Transformed.initialState>[0]>[0]>().type.toBe<{
     readonly id: number;
@@ -254,7 +309,7 @@ test("a transforming props schema is accepted, and props surface as its `Type`",
 
   // `PropsSchema` stays the inference site: were it to fall back to its
   // constraint, props would degrade to a record of `unknown` downstream.
-  const Defined = define({ props: PlainProps, state, action: Actions });
+  const Defined = define({ props: PlainProps, state, actions: Actions });
 
   expect<Parameters<Parameters<typeof Defined.initialState>[0]>[0]>().type.toBe<{
     readonly id: string;
@@ -270,11 +325,11 @@ test("`Children` is a props field that surfaces as `ReactNode`", () => {
   const OptionalChildrenProps = Schema.Struct({ children: Schema.optionalKey(Children) });
 
   const state = Schema.Struct({});
-  const Actions = Action.of([Action("Bar", {})]);
+  const Actions = [Action("Bar", {})];
 
-  expect(define).type.toBeCallableWith({ props: ChildrenProps, state, action: Actions });
+  expect(define).type.toBeCallableWith({ props: ChildrenProps, state, actions: Actions });
 
-  const Defined = define({ props: ChildrenProps, state, action: Actions });
+  const Defined = define({ props: ChildrenProps, state, actions: Actions });
 
   // What a reducer, `initialState` and `render` see: the node itself, not a
   // wrapper anything has to unwrap before rendering it.
@@ -282,7 +337,7 @@ test("`Children` is a props field that surfaces as `ReactNode`", () => {
     readonly children: ReactNode;
   }>();
 
-  const OptionalDefined = define({ props: OptionalChildrenProps, state, action: Actions });
+  const OptionalDefined = define({ props: OptionalChildrenProps, state, actions: Actions });
 
   expect<Parameters<Parameters<typeof OptionalDefined.initialState>[0]>[0]>().type.toBe<{
     readonly children?: ReactNode;
@@ -294,7 +349,7 @@ test("`Children` is a props field that surfaces as `ReactNode`", () => {
   type Row = { readonly id: string };
   const RenderProp = Schema.Struct({ children: Children.as<(row: Row) => ReactNode>() });
 
-  const RenderPropDefined = define({ props: RenderProp, state, action: Actions });
+  const RenderPropDefined = define({ props: RenderProp, state, actions: Actions });
 
   expect<Parameters<Parameters<typeof RenderPropDefined.initialState>[0]>[0]>().type.toBe<{
     readonly children: (row: Row) => ReactNode;
@@ -329,7 +384,7 @@ test("`Exhaustive` catches a reducer handler returning an unknown state key", ()
   const Defined = define({
     props: Schema.Struct({}),
     state: Schema.Struct({ count: Schema.Number }),
-    action: Action.of([Action("Inc", {})]),
+    actions: [Action("Inc", {})],
   });
 
   expect(Defined.create).type.toBeCallableWith({
@@ -389,7 +444,7 @@ test("`ServicesOf` unions services across handlers instead of collapsing to `nev
   const Defined = define({
     props: Schema.Struct({}),
     state: Schema.Struct({ count: Schema.Number }),
-    action: Action.of([Action("A", {}), Action("B", {}), Action("C", {})]),
+    actions: [Action("A", {}), Action("B", {}), Action("C", {})],
   });
 
   const feature = Defined.create({
@@ -414,10 +469,10 @@ test("`ServicesOf` unions services across handlers instead of collapsing to `nev
 // ---------------------------------------------------------------------------
 
 test("`OutputProps` derives one required `on<Tag>` prop per output, with `_tag` stripped", () => {
-  const Outputs = Action.of([
+  const Outputs = [
     Action.output("OrderPlaced", { orderId: Schema.String }),
     Action.output("Cancelled", { reason: Schema.String }),
-  ]);
+  ];
   type Props = OutputProps<MemberOf<typeof Outputs>>;
 
   // Two outputs, because "one per case" is exactly what a single-output
@@ -460,7 +515,7 @@ declare const named: Command<{ readonly _tag: "X" }, PipeableFooService>;
 const Contextual = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ count: Schema.Number }),
-  action: Action.of([Action("Ping", {}), Action("Pong", { at: Schema.Number })]),
+  actions: [Action("Ping", {}), Action("Pong", { at: Schema.Number })],
 });
 
 test("`Command.effect` carries `R` out of its effect and emits nothing by default", () => {
@@ -553,8 +608,8 @@ test("`render`'s dispatch carries the outbound vocabulary too", () => {
   const Defined = define({
     props: Schema.Struct({}),
     state: Schema.Struct({}),
-    action: Action.of([Action("Ping", {})]),
-    output: Action.of([Sent]),
+    actions: [Action("Ping", {})],
+    outputs: [Sent],
   });
 
   Defined.create({
@@ -572,13 +627,93 @@ test("`render`'s dispatch carries the outbound vocabulary too", () => {
   });
 });
 
+test("`dispatch(Message, payload)` is the same message, on every dispatch", () => {
+  // The schema form: the message's own schema and its payload, payload
+  // omitted when there is none. Checked against the same vocabulary as the
+  // value form, so an undeclared schema and a wrong payload are both errors.
+  const Ping = Action("Ping");
+  const Pong = Action("Pong", { at: Schema.Number });
+  const Sent = Action.output("Sent", { at: Schema.Number });
+  const Stray = Action("Stray");
+  const Defined = define({
+    props: Schema.Struct({}),
+    state: Schema.Struct({}),
+    actions: [Ping, Pong],
+    outputs: [Sent],
+  });
+
+  Defined.create({
+    initialState: () => ({}),
+    reducer: {
+      Ping: (_action, { state }) => [
+        state,
+        Command.effect((dispatch) =>
+          Effect.gen(function* () {
+            yield* dispatch(Pong, { at: 1 });
+            yield* dispatch(Ping);
+            yield* dispatch(Sent, { at: 2 });
+            // @ts-expect-error No overload matches this call
+            yield* dispatch(Stray);
+            // @ts-expect-error is not assignable to parameter of type
+            yield* dispatch(Pong);
+            // @ts-expect-error is not assignable to type 'number'
+            yield* dispatch(Pong, { at: "1" });
+          }),
+        ),
+      ],
+      Pong: (_action, { state }) => state,
+    },
+    render: ({ dispatch }) => {
+      dispatch(Ping);
+      dispatch(Pong, { at: 1 });
+      dispatch(Sent, { at: 1 });
+      // @ts-expect-error No overload matches this call
+      dispatch(Stray);
+      // @ts-expect-error is not assignable to parameter of type
+      dispatch(Sent, {});
+      return null;
+    },
+    subscriptions: () => ({
+      tick: Subscription.effect((dispatch) => dispatch(Pong, { at: 1 })),
+    }),
+  });
+
+  // Standalone, `A` is `never` and the schema form admits nothing either.
+  // @ts-expect-error No overload matches this call
+  Command.effect((dispatch) => dispatch(Ping));
+
+  // `Command.output` takes the same payload rule.
+  const Saved = Action.output("Saved");
+  expect(Command.output(Saved)).type.toBe<Command<{ readonly _tag: "Saved" }>>();
+  expect(Command.output).type.not.toBeCallableWith(Sent);
+});
+
+test("`dispatch` passed as a callback infers the value form", () => {
+  const Pong = Action("Pong", { at: Schema.Number });
+  const Defined = define({
+    props: Schema.Struct({}),
+    state: Schema.Struct({}),
+    actions: [Pong],
+  });
+  Defined.create({
+    initialState: () => ({}),
+    reducer: { Pong: (_action, { state }) => state },
+    render: () => null,
+    subscriptions: () => ({
+      feed: Subscription.effect((dispatch) =>
+        Stream.runForEach(Stream.make(Pong.make({ at: 1 })), dispatch),
+      ),
+    }),
+  });
+});
+
 test("a reducer handler receives the payload — `_tag` stripped by the runtime", () => {
   // The handler key already names the tag, so the parameter is the remainder:
   // plain data, storable in state or forwardable into a command whole.
   const Defined = define({
     props: Schema.Struct({ id: Schema.String }),
     state: Schema.Struct({ count: Schema.Number }),
-    action: Action.of([Action("Set", { count: Schema.Number })]),
+    actions: [Action("Set", { count: Schema.Number })],
   });
 
   const reducer = Defined.reducer({
@@ -875,8 +1010,8 @@ const OrderPlaced = Action.output("OrderPlaced", { orderId: Schema.String });
 const Cart = define({
   props: Schema.Struct({ customerId: Schema.String }),
   state: Schema.Struct({ count: Schema.Number }),
-  action: Action.of([Action("Added", {})]),
-  output: Action.of([OrderPlaced]),
+  actions: [Action("Added", {})],
+  outputs: [OrderPlaced],
 });
 
 const cart = Cart.create({
@@ -911,7 +1046,7 @@ test("`component` is closed over the root's `R`", () => {
   const needsFoo = define({
     props: Schema.Struct({}),
     state: Schema.Struct({ count: Schema.Number }),
-    action: Action.of([Action("A", {})]),
+    actions: [Action("A", {})],
   }).create({
     initialState: () => ({ count: 0 }),
     reducer: { A: () => [{ count: 1 }, Command.effect(() => fooEffect)] as const },
@@ -934,7 +1069,7 @@ test("`component` is closed over the root's `R`", () => {
   const needsBoth = define({
     props: Schema.Struct({}),
     state: Schema.Struct({ count: Schema.Number }),
-    action: Action.of([Action("A", {}), Action("B", {})]),
+    actions: [Action("A", {}), Action("B", {})],
   }).create({
     initialState: () => ({ count: 0 }),
     reducer: {
@@ -1034,7 +1169,7 @@ test("`useFeature` is on both `component` overloads, and on a feature with no ou
   const needsBar = define({
     props: Schema.Struct({}),
     state: Schema.Struct({ count: Schema.Number }),
-    action: Action.of([Action("B", {})]),
+    actions: [Action("B", {})],
   }).create({
     initialState: () => ({ count: 0 }),
     reducer: { B: () => [{ count: 1 }, Command.effect(() => barEffect)] as const },
@@ -1072,7 +1207,7 @@ test("`component` requires a `name`, on both overloads", () => {
   const needsBar = define({
     props: Schema.Struct({}),
     state: Schema.Struct({ count: Schema.Number }),
-    action: Action.of([Action("B", {})]),
+    actions: [Action("B", {})],
   }).create({
     initialState: () => ({ count: 0 }),
     reducer: { B: () => [{ count: 1 }, Command.effect(() => barEffect)] as const },
@@ -1152,7 +1287,7 @@ test("a lazy command over a narrower tuple state still fits `Next<State>`", () =
   const Optional = define({
     props: Schema.Struct({}),
     state: Schema.Struct({ picked: Schema.optional(Schema.String) }),
-    action: Action.of([Action("Pick", { id: Schema.String }), Action("Seen", {})]),
+    actions: [Action("Pick", { id: Schema.String }), Action("Seen", {})],
   });
 
   Optional.create({
@@ -1193,7 +1328,7 @@ test("`Next.lazy` infers the tuple state from its first argument and fits the ha
   const Optional = define({
     props: Schema.Struct({}),
     state: Schema.Struct({ picked: Schema.optional(Schema.String) }),
-    action: Action.of([Action("Pick", { id: Schema.String }), Action("Seen", {})]),
+    actions: [Action("Pick", { id: Schema.String }), Action("Seen", {})],
   });
 
   Optional.create({
@@ -1262,7 +1397,7 @@ const Drafting = define({
     opt: Schema.Option(Schema.Number),
     load: Task.schema(Schema.String),
   }),
-  action: Action.of([Toggled, Ping]),
+  actions: [Toggled, Ping],
 });
 
 test("`snapshot.draft` is a mutable `Draft<State>` that keeps the key set", () => {
@@ -1274,7 +1409,7 @@ test("`snapshot.draft` is a mutable `Draft<State>` that keeps the key set", () =
         // Arrays and plain objects lose `readonly`, recursively.
         expect(draft.todos).type.toBe<Array<{ id: string; done: boolean }>>();
         draft.todos.push({ id, done: false });
-        draft.todos[0]!.done = true;
+        draft.todos[0].done = true;
         // An Effect data type passes through: same type, still immutable.
         expect(draft.opt).type.toBe<Option.Option<number>>();
         // The read-only snapshot beside it is untouched.
@@ -1296,7 +1431,7 @@ test("`snapshot.draft` is a mutable `Draft<State>` that keeps the key set", () =
     reducer: {
       Toggled: (_action, { draft }) => {
         // @ts-expect-error 'string' is not assignable to type 'boolean'
-        draft.todos[0]!.done = "yes";
+        draft.todos[0].done = "yes";
         return draft;
       },
       Ping: (_action, { draft }) => draft,
@@ -1310,7 +1445,7 @@ test("`Task.start` and `Next.lazy` accept a draft, and `Exhaustive` sees no exce
   const WithTask = define({
     props: Schema.Struct({}),
     state: Schema.Struct({ todos: Schema.Array(Todo), load: Task.schema(Schema.String) }),
-    action: Action.of([Toggled, ...load.actions]),
+    actions: [Toggled, ...load.actions],
   });
 
   // Direct calls, not `toBeCallableWith`: the handlers need the contextual
@@ -1359,7 +1494,7 @@ test("`Task.resolved` of a readonly array lands in a drafted field and in the st
   const Loading = define({
     props: Schema.Struct({}),
     state: Schema.Struct({ load: Task.schema(Schema.Array(Todo)) }),
-    action: Action.of([...load.actions]),
+    actions: [...load.actions],
   });
 
   Loading.create({
@@ -1432,4 +1567,51 @@ test("`reduce` takes an optional drafter; the `Drafter` service is a `Reference`
   );
   // Installing one widens nothing: a `Reference` layer has no requirement.
   expect(drafterLayer(mutativeDrafter)).type.toBe<Layer.Layer<never>>();
+});
+
+// ---------------------------------------------------------------------------
+// A command written outside a handler names its messages
+// ---------------------------------------------------------------------------
+
+test("`Command.effect(source, effect)` types `dispatch` by the source and infers `R`", () => {
+  const Loaded = Action("Loaded", { value: Schema.Number });
+  const Retry = Action("Retry");
+  const Saved = Action.output("Saved");
+
+  const one = Command.effect(Loaded, (dispatch) =>
+    Effect.gen(function* () {
+      yield* fooEffect;
+      yield* dispatch(Loaded, { value: 1 });
+    }),
+  );
+  expect(one).type.toBe<Command<{ readonly _tag: "Loaded"; readonly value: number }, FooService>>();
+
+  // An array, a record, both channels: whatever a `define` slot takes.
+  const many = Command.effect([Loaded, Action({ Other: {} }), Saved], (dispatch) =>
+    Stream.runForEach(Stream.make(1, 2), (value) => dispatch(Loaded, { value })),
+  );
+  expect(many).type.toBe<
+    Command<
+      | { readonly _tag: "Loaded"; readonly value: number }
+      | { readonly _tag: "Other" }
+      | { readonly _tag: "Saved" }
+    >
+  >();
+
+  // @ts-expect-error No overload matches this call
+  Command.effect(Loaded, (dispatch) => dispatch(Retry));
+  // @ts-expect-error is not assignable to type 'number'
+  Command.effect(Loaded, (dispatch) => dispatch(Loaded, { value: "1" }));
+
+  // It fits a handler of a feature that declares the message, and carries `R`.
+  const Def = define({
+    props: Schema.Struct({}),
+    state: Schema.Struct({}),
+    actions: [Loaded, Retry],
+  });
+  const reducer = Def.reducer({
+    Retry: (_p, { state }) => [state, one],
+    Loaded: (_p, { state }) => state,
+  });
+  expect<ServicesOf<typeof reducer>>().type.toBe<FooService>();
 });

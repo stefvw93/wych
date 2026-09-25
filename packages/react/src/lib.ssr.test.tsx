@@ -24,8 +24,8 @@ const Announced = Action.output("Announced", { at: Schema.Number });
 const counter = define({
   props: Schema.Struct({ start: Schema.Number }),
   state: Schema.Struct({ count: Schema.Number }),
-  action: Action.of([Action("Bumped", {})]),
-  output: Action.of([Announced]),
+  actions: [Action("Bumped", {})],
+  outputs: [Announced],
 }).create({
   initialState: (props) => ({ count: props.start }),
   reducer: {

@@ -129,5 +129,5 @@ above the floor.
       per page with an `example:` (checked fence lines not found in the
       example's `.ts`/`.tsx` files; imports, comments, `console.log`, `expect`
       and a leading `export ` ignored); `--drift` lists the lines. Warn-only,
-      like the ratio. Deliberate drift today: chapter 2 (36), index (4),
-      debounce (4), ecosystem (3), presence (2), chapter 3 (2).
+      like the ratio. Deliberate drift today: chapter 2 (43), test how-to (12),
+      index (9), debounce (4), ecosystem (3), presence (2), chapter 3 (2).

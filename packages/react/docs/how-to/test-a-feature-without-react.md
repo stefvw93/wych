@@ -29,13 +29,14 @@ class Payments extends Context.Service<
   { readonly charge: (total: number) => Effect.Effect<string, Error> }
 >()("Payments") {}
 
-const Added = Action("Added", { id: Schema.String, price: Schema.Number });
-const Submitted = Action("Submitted", {});
+const actions = Action({
+  Added: { id: Schema.String, price: Schema.Number },
+  Submitted: {},
+});
 const Ordered = Action.output("Ordered", { total: Schema.Number });
 
 const charge = Task("Charge", {
   success: Schema.String,
-  onError: Task.errorMessage,
   run: (total: number) =>
     Effect.gen(function* () {
       const api = yield* Payments;
@@ -48,34 +49,28 @@ const total = (items: ReadonlyArray<{ readonly price: number }>) =>
 
 const cart = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({
-    items: Schema.Array(Item),
-    charge: Task.schema(Schema.String),
-  }),
-  action: Action.of([Added, Submitted, ...charge.actions]),
-  output: Action.of([Ordered]),
+  state: Schema.Struct({ items: Schema.Array(Item) }),
+  tasks: { charge },
+  actions,
+  outputs: Ordered,
 }).create({
-  initialState: () => ({ items: [], charge: Task.idle }),
+  initialState: () => ({ items: [] }),
   reducer: {
     Added: (item, { draft }) => {
       draft.items.push(item);
       return draft;
     },
-    Submitted: (_payload, { draft }) => Task.start(draft, "charge", charge.run(total(draft.items))),
-    ChargeResolved: ({ value }, { draft, state }) => {
-      draft.charge = Task.resolved(value);
-      return [draft, Command.output(Ordered, { total: total(state.items) })];
-    },
-    ChargeRejected: ({ error }, { draft }) => {
-      draft.charge = Task.rejected(error);
-      return draft;
-    },
+    Submitted: (_payload, { state, tasks }) => tasks.charge.start(total(state.items)),
+    ChargeResolved: (_receipt, { state }) => [
+      state,
+      Command.output(Ordered, { total: total(state.items) }),
+    ],
   },
   render: () => null,
 });
 ```
 
-The payment provider is a service, so each test picks its own `Payments` layer. `render` returns `null`: nothing on this page mounts the feature, and the view is a separate concern.
+The payment provider is a service, so each test picks its own `Payments` layer. `tasks: { charge }` gives the task the `charge` state field, so `initialState` leaves it out and `tasks.charge.start` writes `Pending` into it. The fold writes the receipt into `charge` before `ChargeResolved` runs; the handler announces the order beside that write. A rejection needs no handler. `render` returns `null`: nothing on this page mounts the feature, and the view is a separate concern.
 
 ## One step with reduce
 
@@ -85,7 +80,7 @@ The payment provider is a service, so each test picks its own `Payments` layer. 
 const empty = { items: [], charge: Task.idle } as const;
 
 test("Added appends and issues no command", () => {
-  const next = cart.reduce(Added.make({ id: "a", price: 10 }), {
+  const next = cart.reduce(actions.Added.make({ id: "a", price: 10 }), {
     state: empty,
     props: {},
     hooks: {},
@@ -97,13 +92,13 @@ test("Added appends and issues no command", () => {
 });
 ```
 
-Pick `reduce` when the claim is about one transition. You supply the snapshot, so any state is one object literal away, and there is no layer to build. A handler's `draft` is finished before `reduce` returns the `Next`, so `Next.state(next)` is always a plain value, never the proxy.
+Pick `reduce` when the claim is about one transition. You supply the snapshot, so any state is one object literal away, and there is no layer to build. The `charge` field is part of `State`, so a hand-built state includes `charge: Task.idle`. A handler's `draft` is finished before `reduce` returns the `Next`, so `Next.state(next)` is always a plain value, never the proxy.
 
 `reduce` runs nothing. A handler that returns a command hands you the command as data, so a test can assert that work was requested without running it.
 
 ```ts continue
 test("Submitted writes Pending and issues a command", () => {
-  const next = cart.reduce(Submitted.make({}), {
+  const next = cart.reduce(actions.Submitted.make(), {
     state: { items: [{ id: "a", price: 10 }], charge: Task.idle },
     props: {},
     hooks: {},
@@ -127,7 +122,7 @@ const paid = Layer.succeed(Payments)({
 
 test("a paid cart resolves the task and announces the order", async () => {
   const { state, emitted, outputs } = await Effect.runPromise(
-    cart.run([Added.make({ id: "a", price: 10 }), Submitted.make({})], {
+    cart.run([actions.Added.make({ id: "a", price: 10 }), actions.Submitted.make()], {
       props: {},
       hooks: {},
       layer: paid,
@@ -157,10 +152,10 @@ test("a second Submitted supersedes the charge in flight", async () => {
   const { emitted, outputs } = await Effect.runPromise(
     cart.run(
       [
-        Added.make({ id: "a", price: 10 }),
-        Submitted.make({}),
-        Added.make({ id: "b", price: 5 }),
-        Submitted.make({}),
+        actions.Added.make({ id: "a", price: 10 }),
+        actions.Submitted.make(),
+        actions.Added.make({ id: "b", price: 5 }),
+        actions.Submitted.make(),
       ],
       { props: {}, hooks: {}, layer: slow },
     ),
@@ -171,7 +166,7 @@ test("a second Submitted supersedes the charge in flight", async () => {
 });
 ```
 
-The first charge is asleep in `Effect.delay` when the second `Submitted` folds. `Task` runs in `"latest"` mode by default, so `Task.start` restarts the group and interrupts that fiber. An interrupted task dispatches nothing, which is why `emitted` holds one `ChargeResolved`.
+The first charge is asleep in `Effect.delay` when the second `Submitted` folds. `Task` runs in `"latest"` mode by default, so `tasks.charge.start` restarts the group and interrupts that fiber. An interrupted task dispatches nothing, which is why `emitted` holds one `ChargeResolved`.
 
 One claim stays out of `run`'s reach: a command that never completes keeps `run` from resolving, because `run` resolves at command quiescence. A long-lived source belongs in a subscription instead, declared through the `subscriptions` hook: `run` resolves once command work settles regardless of which subscriptions are still running, and the result's `subscriptions` field lists the keys still declared at that point. See [subscribe to a stream](/docs/how-to/subscribe-to-a-stream) for the recipe.
 
@@ -182,11 +177,11 @@ A command can die: a bug in the effect, or a layer that fails to build. `run` re
 ```ts continue
 const dying = Command.effect(() => Effect.die(new Error("card reader offline")));
 
-const Scanned = Action("Scanned", {});
+const Scanned = Action("Scanned");
 const scanner = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ status: Schema.String }),
-  action: Action.of([Scanned]),
+  actions: [Scanned],
 }).create({
   initialState: () => ({ status: "idle" }),
   reducer: {
@@ -201,7 +196,7 @@ const scanner = define({
 
 test("a dying command recovers through Error and is recorded as a defect", async () => {
   const { state, defects } = await Effect.runPromise(
-    scanner.run([Scanned.make({})], { props: {}, hooks: {}, layer: Layer.empty }),
+    scanner.run([Scanned.make()], { props: {}, hooks: {}, layer: Layer.empty }),
   );
 
   expect(state).toEqual({ status: "failed" });
@@ -224,7 +219,7 @@ const declined = Layer.succeed(Payments)({
 
 test("a declined charge rejects the task and announces nothing", async () => {
   const { state, outputs } = await Effect.runPromise(
-    cart.run([Added.make({ id: "a", price: 10 }), Submitted.make({})], {
+    cart.run([actions.Added.make({ id: "a", price: 10 }), actions.Submitted.make()], {
       props: {},
       hooks: {},
       layer: declined,
@@ -236,7 +231,7 @@ test("a declined charge rejects the task and announces nothing", async () => {
 });
 ```
 
-`Task.errorMessage` mapped the `Cause` to its message. `onError` covers typed failures and defects, so a bug inside the effect lands in the field. The `Error` lifecycle handler never sees it.
+`charge` declares no `failure`, so its `onError` is the default, `Task.errorMessage`, which maps the `Cause` to its message. `onError` covers typed failures and defects, so a bug inside the effect lands in the field. The `Error` lifecycle handler never sees it.
 
 For a feature with no services, pass `Layer.empty`.
 

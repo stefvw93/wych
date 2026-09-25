@@ -122,7 +122,7 @@ declare const fooLayer: Layer.Layer<FooService>;
 const needsFoo = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ count: Schema.Number }),
-  action: Action.of([Action("A", {})]),
+  actions: [Action("A", {})],
 }).create({
   initialState: () => ({ count: 0 }),
   reducer: { A: () => [{ count: 1 }, Command.effect(() => fooEffect)] as const },
@@ -179,6 +179,7 @@ test("`CommandSummary` preserves the structure and drops only the effect", () =>
     readonly _tag: "Keyed";
     readonly key: string;
     readonly command: CommandSummary;
+    readonly first?: true;
   }>();
   expect<Extract<CommandSummary, { readonly _tag: "Batch" }>>().type.toBe<{
     readonly _tag: "Batch";

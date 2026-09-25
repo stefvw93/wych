@@ -7,11 +7,13 @@ import { component } from "./runtime";
 // `note-editor.tsx` is the same feature with Task; `note-editor.test.ts`
 // runs the same sequences through both.
 
-const TextChanged = Action("TextChanged", { text: Schema.String });
-const Reverted = Action("Reverted", {});
-export const SaveClicked = Action("SaveClicked", {});
-const Saved = Action("Saved", { revision: Schema.String });
-const SaveFailed = Action("SaveFailed", { message: Schema.String });
+export const actions = Action({
+  TextChanged: { text: Schema.String },
+  Reverted: {},
+  SaveClicked: {},
+  Saved: { revision: Schema.String },
+  SaveFailed: { message: Schema.String },
+});
 
 const ByHand = define({
   props: Schema.Struct({ noteId: Schema.String, initialText: Schema.String }),
@@ -21,7 +23,7 @@ const ByHand = define({
     saving: Schema.Boolean,
     error: Schema.String,
   }),
-  action: Action.of([TextChanged, Reverted, SaveClicked, Saved, SaveFailed]),
+  actions,
 });
 
 const initialState = ByHand.initialState((props) => ({
@@ -54,12 +56,12 @@ const reducer = ByHand.reducer({
         Effect.gen(function* () {
           const api = yield* NotesApi;
           const revision = yield* api.save({ id: props.noteId, text: state.text });
-          yield* dispatch(Saved.make({ revision }));
+          yield* dispatch(actions.Saved, { revision });
         }).pipe(
           Effect.catchCause((cause) => {
             const error = Cause.squash(cause);
             const message = error instanceof Error ? error.message : String(error);
-            return dispatch(SaveFailed.make({ message }));
+            return dispatch(actions.SaveFailed, { message });
           }),
         ),
       ),
@@ -81,12 +83,12 @@ const render = ByHand.render(({ state, dispatch }) => (
   <form>
     <textarea
       value={state.text}
-      onChange={(event) => dispatch(TextChanged.make({ text: event.target.value }))}
+      onChange={(event) => dispatch(actions.TextChanged, { text: event.target.value })}
     />
-    <button type="button" disabled={!state.dirty} onClick={() => dispatch(Reverted.make({}))}>
+    <button type="button" disabled={!state.dirty} onClick={() => dispatch(actions.Reverted)}>
       Revert
     </button>
-    <button type="button" disabled={state.saving} onClick={() => dispatch(SaveClicked.make({}))}>
+    <button type="button" disabled={state.saving} onClick={() => dispatch(actions.SaveClicked)}>
       {state.saving ? "Saving..." : "Save"}
     </button>
     {state.error !== "" && <span role="alert">{state.error}</span>}

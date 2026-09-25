@@ -3,8 +3,8 @@
 A feature runtime for React: pure reducers, Effect commands, headless tests.
 Built on [Effect](https://effect.website). Docs at [wych.build](https://wych.build).
 
-A feature is schema-typed props and state, a tagged action vocabulary, an
-optional output vocabulary, and a pure reducer. The reducer returns the next
+A feature is schema-typed props and state, its actions, its outputs (optional),
+and a pure reducer. The reducer returns the next
 state and, when there is work to do, a `Command`: an Effect the runtime forks,
 books under a name, and interrupts when a later action says so. A feature can
 also declare subscriptions: long-lived sources, keyed on the snapshot, that the
@@ -32,12 +32,10 @@ class SearchApi extends Context.Service<
   { readonly hits: (query: string) => Effect.Effect<ReadonlyArray<string>> }
 >()("SearchApi") {}
 
-const Typed = Action("Typed", { query: Schema.String });
-const Cleared = Action("Cleared", {});
+const actions = Action({ Typed: { query: Schema.String }, Cleared: {} });
 
 const search = Task("Search", {
   success: Hits,
-  onError: Task.errorMessage,
   run: (query: string) =>
     Effect.gen(function* () {
       const api = yield* SearchApi;
@@ -47,29 +45,28 @@ const search = Task("Search", {
 
 const taskSearch = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({ query: Schema.String, results: Task.schema(Hits) }),
-  action: Action.of([Typed, Cleared, ...search.actions]),
+  state: Schema.Struct({ query: Schema.String }),
+  tasks: { results: search },
+  actions,
 }).create({
-  initialState: () => ({ query: "", results: Task.idle }),
+  initialState: () => ({ query: "" }),
   reducer: {
-    Typed: ({ query }, { draft }) => {
+    Typed: ({ query }, { draft, tasks }) => {
       draft.query = query;
-      return Task.start(draft, "results", search.run(query));
+      return tasks.results.start(query);
     },
-    Cleared: (_payload, { draft }) => {
+    Cleared: (_payload, { draft, tasks }) => {
       draft.query = "";
-      draft.results = Task.idle;
-      return [draft, search.cancel];
+      return tasks.results.cancel();
     },
-    ...search.into("results"),
   },
   render: ({ state, dispatch }) => (
     <div>
       <input
         value={state.query}
-        onChange={(event) => dispatch(Typed.make({ query: event.target.value }))}
+        onChange={(event) => dispatch(actions.Typed, { query: event.target.value })}
       />
-      <button onClick={() => dispatch(Cleared.make({}))}>clear</button>
+      <button onClick={() => dispatch(actions.Cleared)}>clear</button>
       {Task.match(state.results, {
         Idle: () => null,
         Pending: () => <p>Searching</p>,
@@ -98,6 +95,10 @@ export const Search = component(taskSearch, { name: "Search" });
 <Search />
 ```
 
+`tasks: { results: search }` gives the task a state field of its own. The
+runtime writes `Pending` when a handler starts it and `Resolved` or
+`Rejected` when it settles, so the reducer owes no handler for the outcome.
+
 The same feature folds without React. `taskSearch` takes the latest result: a
 slow request for `"a"` is still in flight when `"ab"` arrives, and `Task`'s
 default `mode: "latest"` interrupts it.
@@ -108,7 +109,7 @@ const slowApi = Layer.succeed(SearchApi)({
 });
 
 const result = await Effect.runPromise(
-  taskSearch.run([Typed.make({ query: "a" }), Typed.make({ query: "ab" })], {
+  taskSearch.run([actions.Typed.make({ query: "a" }), actions.Typed.make({ query: "ab" })], {
     props: {},
     hooks: {},
     layer: slowApi,

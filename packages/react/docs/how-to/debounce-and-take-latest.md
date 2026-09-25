@@ -30,7 +30,7 @@ const Loaded = Action("Loaded", { hits: Hits });
 const searchFeature = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ query: Schema.String, hits: Hits }),
-  action: Action.of([Typed, Loaded]),
+  actions: [Typed, Loaded],
 }).create({
   initialState: () => ({ query: "", hits: [] }),
   reducer: {
@@ -45,7 +45,7 @@ const searchFeature = define({
               yield* Effect.sleep("300 millis");
               const api = yield* SearchApi;
               const hits = yield* api.hits(query);
-              yield* dispatch(Loaded.make({ hits }));
+              yield* dispatch(Loaded, { hits });
             }),
           ),
         ),
@@ -60,7 +60,7 @@ const searchFeature = define({
     <div>
       <input
         value={state.query}
-        onChange={(event) => dispatch(Typed.make({ query: event.target.value }))}
+        onChange={(event) => dispatch(Typed, { query: event.target.value })}
       />
       <ul>
         {state.hits.map((hit) => (
@@ -78,12 +78,11 @@ The next keystroke returns the same command again. Its `cancel` half interrupts 
 
 ## Take latest with a task
 
-`Task` declares the two result actions and the command. Its default `mode` is `"latest"`, which books the work under `Task/${Name}` with `Command.restart`.
+`Task` declares the two settle actions and the command. `tasks: { results: search }` on `define` gives the task the `results` state field: the field is a `TaskValue`, starts `Idle`, and the two actions join the reducer. Its default `mode` is `"latest"`, which books the work under `Task/${Name}` with `Command.restart`.
 
 ```tsx continue
 const search = Task("Search", {
   success: Hits,
-  onError: Task.errorMessage,
   run: (query: string) =>
     Effect.gen(function* () {
       const api = yield* SearchApi;
@@ -91,33 +90,32 @@ const search = Task("Search", {
     }),
 });
 
-const Cleared = Action("Cleared", {});
+const Cleared = Action("Cleared");
 
 const taskSearch = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({ query: Schema.String, results: Task.schema(Hits) }),
-  action: Action.of([Typed, Cleared, ...search.actions]),
+  state: Schema.Struct({ query: Schema.String }),
+  tasks: { results: search },
+  actions: [Typed, Cleared],
 }).create({
-  initialState: () => ({ query: "", results: Task.idle }),
+  initialState: () => ({ query: "" }),
   reducer: {
-    Typed: ({ query }, { draft }) => {
+    Typed: ({ query }, { draft, tasks }) => {
       draft.query = query;
-      return Task.start(draft, "results", search.run(query));
+      return tasks.results.start(query);
     },
-    Cleared: (_payload, { draft }) => {
+    Cleared: (_payload, { draft, tasks }) => {
       draft.query = "";
-      draft.results = Task.idle;
-      return [draft, search.cancel];
+      return tasks.results.cancel();
     },
-    ...search.into("results"),
   },
   render: ({ state, dispatch }) => (
     <div>
       <input
         value={state.query}
-        onChange={(event) => dispatch(Typed.make({ query: event.target.value }))}
+        onChange={(event) => dispatch(Typed, { query: event.target.value })}
       />
-      <button onClick={() => dispatch(Cleared.make({}))}>clear</button>
+      <button onClick={() => dispatch(Cleared)}>clear</button>
       {Task.match(state.results, {
         Idle: () => null,
         Pending: () => <p>Searching</p>,
@@ -135,11 +133,11 @@ const taskSearch = define({
 });
 ```
 
-`Task.start` writes `Pending` into `results` on the same fold that issues the command, so the view never paints a gap. `search.cancel` interrupts the group and dispatches nothing, so the `Cleared` handler writes `Task.idle` itself.
+`tasks.results.start(query)` writes `Pending` into `results` on the same fold that issues the command, so the view never paints a gap. When the request settles, the fold writes `Resolved` or `Rejected` into the field; no handler is needed. `tasks.results.cancel()` writes `Idle` and interrupts the group, which dispatches nothing. No `failure` schema is declared, so the error is the cause's message.
 
 ### Where the delay lives
 
-`mode` is a property of the operation. It is declared once, and every handler that calls `search.run` gets it. A delay in `run` follows the same rule: every trigger of the search waits.
+`mode` is a property of the operation. It is declared once, and every handler that calls `start` gets it. A delay in `run` follows the same rule: every trigger of the search waits.
 
 ```ts fragment
 run: (query: string) =>
@@ -159,7 +157,6 @@ Put the delay in `run` when the wait belongs to the search itself, wherever it i
 ```tsx continue
 const searchEvery = Task("SearchEvery", {
   success: Hits,
-  onError: Task.errorMessage,
   mode: "every",
   run: (query: string) =>
     Effect.gen(function* () {
@@ -170,20 +167,13 @@ const searchEvery = Task("SearchEvery", {
 
 const everySearch = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({ results: Task.schema(Hits) }),
-  action: Action.of([Typed, ...searchEvery.actions]),
+  state: Schema.Struct({}),
+  tasks: { results: searchEvery },
+  actions: Typed,
 }).create({
-  initialState: () => ({ results: Task.idle }),
+  initialState: () => ({}),
   reducer: {
-    Typed: ({ query }, { draft }) => Task.start(draft, "results", searchEvery.run(query)),
-    SearchEveryResolved: ({ value }, { draft }) => {
-      draft.results = Task.resolved(value);
-      return draft;
-    },
-    SearchEveryRejected: ({ error }, { draft }) => {
-      draft.results = Task.rejected(error);
-      return draft;
-    },
+    Typed: ({ query }, { tasks }) => tasks.results.start(query),
   },
   render: () => null,
 });
@@ -191,7 +181,7 @@ const everySearch = define({
 
 `mode: "every"` is for work where every run must finish: a save per row, an upload per file, or a result the `Resolved` handler appends to state. Each run dispatches its own `SearchEveryResolved`, in the order the requests settle.
 
-A single `TaskValue` field holds whichever result arrived last. If an older request settles after a newer one, the field shows the older hits. That is why a search box keeps the default `"latest"`. Both modes book under `Task/SearchEvery`, so `searchEvery.cancel` interrupts every run in flight.
+A single `TaskValue` field holds whichever result arrived last. If an older request settles after a newer one, the field shows the older hits. That is why a search box keeps the default `"latest"`. Both modes book under `Task/SearchEvery`, so `tasks.results.cancel()` interrupts every run in flight.
 
 `feature.run` folds a sequence of actions and reports what the commands emitted. Two keystrokes, one slow API, and the two modes diverge.
 
@@ -219,12 +209,11 @@ The `search-debounce` example ships this comparison as a vitest file, `src/searc
 
 ## Load the next page
 
-A "more" button asks for the page after the one on screen. The handler writes `page + 1` into the state and the request needs that same number. `Task.start` accepts a thunk in place of the command. The thunk receives the finished state, with `Pending` already written, so the page number is read once, from the state that holds it. The fold replaces `draft` before the thunk runs.
+A "more" button asks for the page after the one on screen. The handler writes `page + 1` into the draft and the request needs that same number. A handler may write other draft fields before it calls `start`, and reads them back from the draft, so the page number is written once and read from the draft that holds it.
 
 ```tsx continue
 const searchPage = Task("SearchPage", {
   success: Hits,
-  onError: Task.errorMessage,
   run: ({ query, page }: { readonly query: string; readonly page: number }) =>
     Effect.gen(function* () {
       const api = yield* SearchApi;
@@ -232,40 +221,33 @@ const searchPage = Task("SearchPage", {
     }),
 });
 
-const MoreClicked = Action("MoreClicked", {});
+const MoreClicked = Action("MoreClicked");
 
 const pagedSearch = define({
   props: Schema.Struct({}),
-  state: Schema.Struct({ query: Schema.String, page: Schema.Number, results: Task.schema(Hits) }),
-  action: Action.of([Typed, MoreClicked, ...searchPage.actions]),
+  state: Schema.Struct({ query: Schema.String, page: Schema.Number }),
+  tasks: { results: searchPage },
+  actions: [Typed, MoreClicked],
 }).create({
-  initialState: () => ({ query: "", page: 1, results: Task.idle }),
+  initialState: () => ({ query: "", page: 1 }),
   reducer: {
-    Typed: ({ query }, { draft }) => {
+    Typed: ({ query }, { draft, tasks }) => {
       draft.query = query;
       draft.page = 1;
-      return Task.start(draft, "results", (next) => searchPage.run(next));
+      return tasks.results.start({ query, page: 1 });
     },
-    MoreClicked: (_payload, { draft }) => {
+    MoreClicked: (_payload, { draft, tasks }) => {
       draft.page += 1;
-      return Task.start(draft, "results", (next) => searchPage.run(next));
-    },
-    SearchPageResolved: ({ value }, { draft }) => {
-      draft.results = Task.resolved(value);
-      return draft;
-    },
-    SearchPageRejected: ({ error }, { draft }) => {
-      draft.results = Task.rejected(error);
-      return draft;
+      return tasks.results.start({ query: draft.query, page: draft.page });
     },
   },
   render: ({ state, dispatch }) => (
     <div>
       <input
         value={state.query}
-        onChange={(event) => dispatch(Typed.make({ query: event.target.value }))}
+        onChange={(event) => dispatch(Typed, { query: event.target.value })}
       />
-      <button onClick={() => dispatch(MoreClicked.make({}))}>more</button>
+      <button onClick={() => dispatch(MoreClicked)}>more</button>
       {Task.match(state.results, {
         Idle: () => null,
         Pending: () => <p>Loading page {state.page}</p>,
@@ -283,7 +265,7 @@ const pagedSearch = define({
 });
 ```
 
-Use the thunk when the command reads a field the handler computes: the incremented `page`, a trimmed query, a generated id. Pass the command outright when its input is the payload, as `taskSearch` does with `query`. The [features reference](/docs/reference/features#next) shows the same form for a handler without a task field.
+`start` returns the one draft that holds every write, `page` and `Pending` alike, beside the command. Read the input off the draft when the command needs a field the handler computes: the incremented `page`, a trimmed query, a generated id. Pass the payload outright when it is the input, as `taskSearch` does with `query`.
 
 `searchPage` keeps the default `"latest"`, so a click on "more" while page 1 is still loading interrupts that request. One result arrives, for the page the state holds.
 
@@ -293,7 +275,7 @@ const pagedApi = Layer.succeed(SearchApi)({
 });
 
 const paged = await Effect.runPromise(
-  pagedSearch.run([Typed.make({ query: "a" }), MoreClicked.make({})], {
+  pagedSearch.run([Typed.make({ query: "a" }), MoreClicked.make()], {
     props: {},
     hooks: {},
     layer: pagedApi,

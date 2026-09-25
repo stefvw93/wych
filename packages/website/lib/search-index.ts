@@ -139,7 +139,7 @@ export const buildSearchIndexEffect = Effect.fn("search.index.build")(function* 
   const docs = yield* allDocsEffect;
   const records = docs.flatMap(indexDoc);
   yield* Effect.annotateCurrentSpan("search.records", records.length);
-  return records as readonly SearchRecord[];
+  return records;
 });
 
 export const buildSearchIndex = (): Promise<readonly SearchRecord[]> =>

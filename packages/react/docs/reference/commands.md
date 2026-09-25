@@ -1,6 +1,6 @@
 ---
 title: Commands
-description: Every Command constructor, the dispatcher, groups, Pipeable, and the contextual typing rule.
+description: Every Command constructor, the two dispatch forms, groups, Pipeable, and the contextual typing rule.
 order: 4
 ---
 
@@ -24,14 +24,16 @@ class SearchApi extends Context.Service<
 
 const SearchApiLayer = Layer.succeed(SearchApi)({ query: () => Effect.succeed(["one", "two"]) });
 
-const Queried = Action("Queried", { text: Schema.String });
-const Cleared = Action("Cleared", {});
-const Results = Action("Results", { hits: Schema.Array(Schema.String) });
+const actions = Action({
+  Queried: { text: Schema.String },
+  Cleared: {},
+  Results: { hits: Schema.Array(Schema.String) },
+});
 
 const Search = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ text: Schema.String, hits: Schema.Array(Schema.String) }),
-  action: Action.of([Queried, Cleared, Results]),
+  actions,
 });
 ```
 
@@ -60,14 +62,22 @@ const noneReducer = Search.reducer({
 ## `Command.effect`
 
 ```ts fragment
-Command.effect<A, R>(
+Command.effect<A = never, R = never>(
   effect: (dispatch: Dispatcher<A>) => Effect.Effect<unknown, never, R>,
 ): Command<A, R>
+
+Command.effect<const S extends MemberSource<Channel>, R = never>(
+  source: S,
+  effect: (dispatch: Dispatcher<MembersOf<S>>) => Effect.Effect<unknown, never, R>,
+): Command<MembersOf<S>, R>
 ```
 
 The only leaf. The effect runs and emits by calling `dispatch`: zero times,
 once, or forever. The effect's error channel is `never`, so the effect handles
-its own failures before it returns.
+its own failures before it returns. The second overload takes a `source`
+first: a message, a record, a `Task` or an array of those, the same value a
+`define` slot takes. The source types `dispatch` and is not stored; see
+[Contextual typing](#contextual-typing).
 
 ```ts continue
 const effectReducer = Search.reducer({
@@ -79,7 +89,7 @@ const effectReducer = Search.reducer({
         Effect.gen(function* () {
           const api = yield* SearchApi;
           const hits = yield* api.query(text);
-          yield* dispatch({ _tag: "Results", hits });
+          yield* dispatch(actions.Results, { hits });
         }),
       ),
     ];
@@ -114,18 +124,116 @@ a subscription, not a command; see
 ## `Dispatcher` and `Dispatch`
 
 ```ts fragment
-type Dispatcher<A> = (action: A) => Effect.Effect<void>;
-type Dispatch<A> = (action: A) => void;
+interface Dispatcher<A> {
+  <M extends MessageOf<A>>(message: M, ...payload: PayloadArgs<M>): Effect.Effect<void>;
+  (action: A): Effect.Effect<void>;
+}
+
+interface Dispatch<A> {
+  <M extends MessageOf<A>>(message: M, ...payload: PayloadArgs<M>): void;
+  (action: A): void;
+}
+
+type MessageOf<A> = AnyMessage<Channel> & { readonly Type: A }; // a schema whose values A admits
+type PayloadOf<M> = Omit<M["~type.make.in"], "_tag">; // what M.make takes
+type PayloadArgs<M> = {} extends PayloadOf<M> ? [payload?: PayloadOf<M>] : [payload: PayloadOf<M>];
 ```
 
 `Dispatcher` is what a command's effect receives. It returns an `Effect`, so it
 composes with the effect that calls it. `Dispatch` is what `render` and
 `useFeature` receive. It returns `void` and is called from an event handler.
 
+Both take a message schema and its payload, or a built message.
+`dispatch(actions.Results, { hits })` is `dispatch(actions.Results.make({ hits }))`.
+The payload argument is optional when every field of the message is optional,
+so `dispatch(actions.Cleared)` needs none.
+
+```ts continue
+const search = Search.create({
+  initialState: Search.initialState(() => ({ text: "", hits: [] })),
+  reducer: Search.reducer({
+    Queried: ({ text }, { draft }) => {
+      draft.text = text;
+      return [
+        draft,
+        Command.effect((dispatch) =>
+          Effect.gen(function* () {
+            const api = yield* SearchApi;
+            const hits = yield* api.query(text);
+            yield* dispatch(actions.Results, { hits });
+            if (hits.length === 0) yield* dispatch(actions.Cleared);
+          }),
+        ),
+      ];
+    },
+    Cleared: (_payload, { draft }) => {
+      draft.hits = [];
+      return draft;
+    },
+    Results: ({ hits }, { draft }) => {
+      draft.hits = [...hits];
+      return draft;
+    },
+  }),
+  render: Search.render(() => null),
+});
+
+const queried = await Effect.runPromise(
+  search.run([actions.Queried.make({ text: "cats" })], {
+    props: {},
+    hooks: {},
+    layer: SearchApiLayer,
+  }),
+);
+
+console.log(queried.state);
+// => { text: "cats", hits: ["one", "two"] }
+console.log(queried.emitted);
+// => [{ _tag: "Results", hits: ["one", "two"] }]
+```
+
+`make` validates the payload. A payload the schema rejects is a defect of the
+command that sent it: `Error` folds when the feature handles it, and `run`
+reports it in `defects`.
+
+```ts continue
+const malformed = Search.create({
+  initialState: Search.initialState(() => ({ text: "", hits: [] })),
+  reducer: Search.reducer({
+    Queried: (_payload, { state }) => [
+      state,
+      Command.effect((dispatch) => dispatch(actions.Results, { hits: "one" as never })),
+    ],
+    Cleared: (_payload, { state }) => state,
+    Results: ({ hits }, { draft }) => {
+      draft.hits = [...hits];
+      return draft;
+    },
+  }),
+  render: Search.render(() => null),
+});
+
+const rejected = await Effect.runPromise(
+  malformed.run([actions.Queried.make({ text: "cats" })], {
+    props: {},
+    hooks: {},
+    layer: SearchApiLayer,
+  }),
+);
+
+console.log(rejected.state);
+// => { text: "", hits: [] }
+console.log(rejected.defects.map(({ from, handled }) => ({ from, handled })));
+// => [{ from: "Queried", handled: false }]
+```
+
+`Dispatch` takes the same two forms from the view. A rejected payload there
+throws out of the event handler; see [Runtime](/docs/reference/runtime#dispatch).
+
 ```tsx continue
 const dispatchRender = Search.render(({ state, dispatch }) => {
   const send: Dispatch<{ readonly _tag: "Cleared" }> = dispatch;
-  return <button onClick={() => send({ _tag: "Cleared" })}>Clear {state.text}</button>;
+  return <button onClick={() => send(actions.Cleared)}>Clear {state.text}</button>;
 });
 ```
 
@@ -151,7 +259,7 @@ const keyedReducer = Search.reducer({
           Effect.gen(function* () {
             const api = yield* SearchApi;
             const hits = yield* api.query(text);
-            yield* dispatch({ _tag: "Results", hits });
+            yield* dispatch(actions.Results, { hits });
           }),
         ),
       ),
@@ -244,7 +352,7 @@ const takeLatest = Search.reducer({
             yield* Effect.sleep("300 millis");
             const api = yield* SearchApi;
             const hits = yield* api.query(text);
-            yield* dispatch({ _tag: "Results", hits });
+            yield* dispatch(actions.Results, { hits });
           }),
         ),
       ),
@@ -277,37 +385,41 @@ runtime owns naming and cancelling. See
 ## `Command.output`
 
 ```ts fragment
-Command.output<Tag, Fields>(
-  message: Message<Tag, Fields, "outbound">,
-  payload: Omit<Schema.Struct<Fields>["Type"], "_tag">,
-): Command<{ readonly _tag: Tag } & ...>
+Command.output<M extends AnyMessage<"outbound">>(
+  message: M,
+  ...payload: PayloadArgs<M>
+): Command<M["Type"]>
 ```
 
-Emits an outbound message, which leaves through its `on<Tag>` prop. An
-internal message as the argument is a compile error, shown in
-[Actions and outputs](/docs/reference/actions).
+Emits an outbound message, which leaves through its `on<Tag>` prop. The
+payload follows the same rule as `dispatch`: required when a field is,
+omitted when every field is optional. An internal message as the argument is
+a compile error, shown in [Actions and outputs](/docs/reference/actions).
 
 ```ts continue
-const Picked = Action.output("Picked", { hit: Schema.String });
+const outputs = Action.output({ Picked: { hit: Schema.String }, Dismissed: {} });
 
 const WithOutput = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ text: Schema.String, hits: Schema.Array(Schema.String) }),
-  action: Action.of([Queried, Cleared, Results]),
-  output: Action.of([Picked]),
+  actions,
+  outputs,
 });
 
 const outputReducer = WithOutput.reducer({
   Queried: ({ text }, { draft }) => {
     draft.text = text;
-    return [draft, Command.output(Picked, { hit: text })];
+    return [draft, Command.output(outputs.Picked, { hit: text })];
   },
-  Cleared: (_payload, { state }) => state,
+  Cleared: (_payload, { state }) => [state, Command.output(outputs.Dismissed)],
   Results: ({ hits }, { draft }) => {
     draft.hits = [...hits];
     return draft;
   },
 });
+
+// @ts-expect-error Picked has a required field
+const missingPayload = Command.output(outputs.Picked);
 ```
 
 ## `Group`
@@ -363,27 +475,37 @@ const pipedRestart = Command.none.pipe(Command.restart("query"));
 
 `A` is inferred from the contextual type alone. Inside a handler's return,
 `dispatch`'s action type comes from the contextual type of that return. A
-standalone leaf has no contextual type, so `A` falls back to `never` unless a
-type argument names it.
+standalone leaf has no contextual type, so it names the messages it may emit
+as its first argument, and `dispatch` accepts those.
 
 ```ts continue
-const named = Command.effect<{ readonly _tag: "Results"; readonly hits: ReadonlyArray<string> }>(
-  (dispatch) => dispatch({ _tag: "Results", hits: [] }),
+const named = Command.effect(actions.Results, (dispatch) =>
+  dispatch(actions.Results, { hits: [] }),
 );
 ```
 
-`R` falls back to `never` the same way, so a standalone leaf that needs a
-service names both type arguments.
+`R` is inferred from the effect in both forms, so a standalone leaf that
+needs a service writes nothing more.
 
 ```ts continue
-const namedWithService = Command.effect<
-  { readonly _tag: "Results"; readonly hits: ReadonlyArray<string> },
-  SearchApi
->((dispatch) =>
+const namedWithService = Command.effect(actions.Results, (dispatch) =>
   Effect.gen(function* () {
     const api = yield* SearchApi;
     const hits = yield* api.query("cats");
-    yield* dispatch({ _tag: "Results", hits });
+    yield* dispatch(actions.Results, { hits });
+  }),
+);
+```
+
+A type argument names `A` too, but TypeScript has no partial inference: naming
+`A` that way also names `R`, which then must be written out.
+
+```ts continue
+const typeArguments = Command.effect<typeof actions.Results.Type, SearchApi>((dispatch) =>
+  Effect.gen(function* () {
+    const api = yield* SearchApi;
+    const hits = yield* api.query("cats");
+    yield* dispatch(actions.Results, { hits });
   }),
 );
 ```
@@ -399,7 +521,7 @@ const contextual = Search.reducer({
     return [
       draft,
       // @ts-expect-error dispatch is typed never through .pipe
-      Command.effect((dispatch) => dispatch({ _tag: "Results", hits: [] })).pipe(
+      Command.effect((dispatch) => dispatch(actions.Results, { hits: [] })).pipe(
         Command.keyed("query"),
       ),
     ];
@@ -425,7 +547,7 @@ const cancelFirst = Search.reducer({
         Command.cancel("query"),
         Command.keyed(
           "query",
-          Command.effect((dispatch) => dispatch({ _tag: "Results", hits: [] })),
+          Command.effect((dispatch) => dispatch(actions.Results, { hits: [] })),
         ),
       ),
     ];

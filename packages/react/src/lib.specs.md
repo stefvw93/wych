@@ -3,7 +3,8 @@
 ## Overview & Purpose
 
 A **feature** is declared with `define` and built with `create`: schema-typed props and state, a tagged
-action vocabulary, an optional outbound output vocabulary, optional ambient
+action vocabulary, an optional outbound output vocabulary (each a message, a
+record of messages, a `Task`, or an array of those), optional ambient
 hooks, and a reducer. The reducer is pure — it returns the next state and,
 optionally, a `Command` describing work to do. The runtime interprets commands
 as Effects. A handler builds the next state by hand or through
@@ -188,13 +189,19 @@ already express is left to Effect.
 type Command<A, R> =
   | { _tag: "None" }
   | { _tag: "Effect"; effect: (dispatch: Dispatcher<A>) => Effect<unknown, never, R> }
-  | { _tag: "Keyed"; key: string; command: Command<A, R> }
+  // `first` is set only by a `Task` declared `mode: "first"`: the node is
+  // skipped while a fiber is booked at its address.
+  | { _tag: "Keyed"; key: string; command: Command<A, R>; first?: true }
   | { _tag: "Batch"; commands: ReadonlyArray<Command<A, R>> }
   | { _tag: "Cancel"; target: Group };
 
 // `Dispatcher`, not `Dispatch`: the latter is the React-facing dispatch handed
 // to `render`, which returns void because it is called from an event handler.
-type Dispatcher<A> = (action: A) => Effect<void>;
+// A message schema and its payload, or a built message.
+interface Dispatcher<A> {
+  <M extends MessageOf<A>>(message: M, ...payload: PayloadArgs<M>): Effect<void>;
+  (action: A): Effect<void>;
+}
 type Group = string;
 ```
 
@@ -349,13 +356,49 @@ Immer is not shipped; a user who wants it writes
 
 **What is not drafted.** `render` and `subscriptions` receive a plain
 `Snapshot`: neither is a place to change state. `Task.into`'s generated
-handlers spread `snapshot.state` and are unaffected. Effect data types
+handlers spread `snapshot.state` and are unaffected; `resolvedInto` and
+`rejectedInto` write into `snapshot.draft` and hand it on. Effect data types
 inside state (`Option`, `Chunk`, anything with `pipe`) are atomic to the
 drafter and to `Draft<T>`: same value, same type, still immutable.
 
 **Rejected shapes**, recorded under Deferred decisions: a `mutate(handler)`
 wrapper, and `Drafter` as a required service with `mutative` an optional
 peer.
+
+## `snapshot.tasks`, the slot tasks' handles
+
+`define({ tasks: { save: saveNote } })` binds a `Task` operation to a state
+field under its key; `task.specs.md` holds the slot's semantics and its
+clash rules. What it changes here:
+
+- **`define`.** `State` is `StateOf<StateSchema> & TaskFields<TS>`
+  (simplified; the schema's own type when the slot is empty), and the action
+  union gains `TaskActionsOf<TS>`. The runtime checks the slot and builds a
+  settle map from each operation's two tags to its key. Nothing validates
+  state against a schema, the task fields included: `op.schema` types the
+  field.
+- **`FeatureDefinition` / `Reducer` / `LifecycleHandlers`** take a trailing
+  `TS = {}`. The task tags are optional reducer keys; `Exhaustive` allows
+  them because they are in `A`. `initialState` returns
+  `InitialStateOf<State, TS>`, the state without the task keys, and the
+  runtime spreads it over one `Task.idle` per key.
+- **`reduce`.** For a settle tag, the field is written through a draft of
+  its own (the same drafter, so the result is frozen), then the handler, if
+  there is one, folds over that state on the finishing rules above; with no
+  handler the written state is the result. `handles(tag)` is true for a
+  settle tag either way.
+- **`ReducerSnapshot<Props, State, H, TS = {}>`** gains
+  `tasks: TaskHandles<TS, State>`. `tasks` is a second prototype getter on
+  `FoldSnapshot`, built on first read and cached for the fold, so the own
+  keys stay `state`, `props`, `hooks`. Each handle writes through `draft`,
+  so what it writes and what the handler writes finish as one state. A
+  feature with no slot hands a frozen `{}`.
+
+`render` and `subscriptions` get no handles, for the reason they get no
+draft. `subscriptions` also stays on `create` rather than moving to `define`
+beside `tasks`: it is a function of the snapshot, while the task binding is
+a static declaration the state, reducer and snapshot types are all read
+from.
 
 ## Acceptance Criteria
 
@@ -365,13 +408,15 @@ here. The devtools pass closed the last two (its criteria live in
 `devtools.specs.md`), and the flat-group-namespace + `Command.restart` pass
 landed with every box checked again.
 
-### Vocabularies (`Action`, `Action.output`, `Action.of`)
+### Vocabularies (`Action`, `Action.output`, the `define` slots)
 
 - [x] `Action("Tag", fields)` / `Action.output("Tag", fields)` constructs a `Schema.TaggedStruct` branded with its channel (`"internal"` vs `"outbound"`).
-- [x] `Action.of([...])` builds a branded tagged union exposing `cases`, `guards`, `match`, `mapMembers`, and a `make` per case.
-- [x] `Action.of` infers the channel from its members' brand; there is no per-channel `of`.
-- [x] `Action.of` rejects a member list mixing channels, at the call rather than at `define`.
-- [x] A vocabulary built with `.of` nests inside another `.of`, and the outer `cases` include the flattened inner tags.
+- [x] `fields` is optional: `Action("Reverted")` is `Action("Reverted", {})`. A message whose fields are all optional has `make()` with no argument, equal to `make({})`; a message with a required field does not.
+- [x] `Action({ Tag: fields, … })` / `Action.output({ … })` is the record form: one branded message per key, the key as its tag, frozen, in key order. A lower-case key or a lifecycle key is a compile error naming the key.
+- [x] `define`'s `actions` and `outputs` slots take a `MemberSource`: a message, a record of messages, a `Task` operation, or an array of those, one array deep inside another at most. There is no vocabulary wrapper; `define` flattens the source once, and `MemberOf`/`TagsOf` flatten it at the type level.
+- [x] The slot is the channel check: `actions` takes internal members only and `outputs` outbound ones, so an outbound message, a `Task.output` operation or a mixed array in `actions` is a compile error, and the reverse in `outputs`. `define` repeats the check at runtime and throws a `TypeError` naming the tag, for a source that got past the types through a cast.
+- [x] A tag declared twice across both slots throws a `TypeError` at `define`. The types do not catch it: two members with one tag unify into a union payload.
+- [x] A `Task` operation is a member source through a module-private `members` brand, which survives the `{ ...operation, into }` spread; `op.actions` is the same pair, for reading.
 - [x] The channels are not mutually assignable in either direction.
 - [x] A reserved `LifecycleTag` (`Mounted`/`PropsChanged`/`Error`/`Unmounted`/`HookChanged`) as a message tag is a compile error.
 
@@ -379,6 +424,7 @@ landed with every box checked again.
 
 - [x] `Command.none` is the `{ _tag: "None" }` no-op.
 - [x] `Command.effect((dispatch) => Effect<unknown, never, R>)` is the only leaf. A command that emits nothing ignores the parameter.
+- [x] `Command.effect(source, (dispatch) => …)` is the same leaf for a command written outside a handler: `source` is any `MemberSource` (a message, record, `Task` or array, either channel) and types `dispatch` as `Dispatcher<MembersOf<source>>`; `R` is inferred from the effect. The source is not stored: the command is the one-argument form's value.
 - [x] `Command.stream` and the `Stream` variant are removed. A long-lived source is `Stream.runForEach(source, dispatch)` inside the effect, so the whole `Stream` vocabulary stays available one call earlier.
 - [x] `Command.keyed(key, command)` names the group a command's fibers book under — the whole address, outermost wins. Also curried (`Command.keyed(key)`) and so pipeable. An unkeyed command books under its issuing action's tag.
 - [x] `Command.ignore`, `Command.queue`, the `Policy` type and the `Guarded` node are removed.
@@ -387,6 +433,7 @@ landed with every box checked again.
 - [x] `Command.cancel(name)` interrupts the one group booked under `name`, whatever action tags forked its members. The fiber book is a flat map by name — no tag level, no delimiter encoding.
 - [x] Bare-tag `cancel("Tag")` reaches only the **unkeyed** fibers of that tag; work forked under `keyed(name)` is addressed by `name` alone.
 - [x] Cancelling work started from several action tags under one `keyed(name)` is one line — `cancel(name)` — naming no foreign tag.
+- [x] Every `dispatch` — `render`'s, `useFeature().dispatch`, and the `Dispatcher` a `Command.effect` or `Subscription.effect` leaf is handed — takes a built message or a message schema and its payload: `dispatch(Bump, { by: 2 })` is `dispatch(Bump.make({ by: 2 }))`, and the payload is omitted when every field is optional (`dispatch(Reverted)`). `make` validates, so a rejected payload is a defect of the command or subscription that sent it, and throws out of the event handler that called `render`'s dispatch.
 - [x] `Command.output(message, payload)` emits an outbound message; passing an internal message is a compile error. _Re-expressed on the new leaf internally; signature unchanged. Removing it is deferred — see Deferred decisions._
 - [x] Commands are `Pipeable`, and piping preserves `A` and `R`.
 
@@ -417,6 +464,14 @@ landed with every box checked again.
 - [x] A handler that throws with a draft open still closes it: the proxy is revoked and the handler's own error propagates.
 - [x] `Task.start(draft, key, command)` writes `Pending` into the draft and returns the draft, so its result is the finished state; given a plain state it spreads as before.
 - [x] The snapshot's own keys are `state`, `props`, `hooks`; `draft` is reachable and lives on the prototype; the drafter is not reachable.
+
+### `snapshot.tasks` and the `tasks` slot
+
+- [x] `define({ tasks })` adds one `TaskValue` field per key and fills it with `Task.idle` under the feature's initial state, which is spread on top.
+- [x] `reduce` writes a settle tag's field before the handler runs, and with no handler returns the written state; a handler returning `snapshot.state` returns the field write alone.
+- [x] `snapshot.tasks.<key>.start` / `.cancel()` write `Pending` / `Idle` into the draft and return `[draft, command]`; a start while the field is already `Pending` leaves it untouched. `mode: "first"` is not decided here: the command is a `Keyed` node flagged `first`, skipped by the interpreter while its address has a booked fiber.
+- [x] `snapshot.tasks` is on the prototype: the snapshot's own keys stay `state`, `props`, `hooks`, and a feature without a slot hands `{}`.
+- [x] `define` throws a `TypeError` for each clash rule in `task.specs.md`.
 - [x] `reduce` drafts with its optional third argument, `run` with the `Drafter` in `options.layer`, the store with the `Drafter` in the root runtime; each defaults to `mutativeDrafter`.
 
 ### `Feature.run`
@@ -479,11 +534,13 @@ landed with every box checked again.
 ### Type-level (TSTyche)
 
 - [x] `Disjoint`, `NoPropCollision`, `Exhaustive`/`Excess`, `ServiceOf`/`ServicesOf` reject what they document and accept what they document.
+- [x] `MemberOf` over `[Started, [Action({ Failed }), load]]` is the union of the four message values, `TagsOf` their tags; each slot rejects a member of the other channel, alone, in an array, or as a `Task`. `MemberSource`'s depth is bounded because `MemberOf` recurses over it, and over a recursive constraint it never bottoms out (`Type instantiation is excessively deep`).
 - [x] A transforming props schema is accepted: `define` normalizes it to its `Type` side with `Schema.toType`, so a codec field surfaces to `initialState`, the reducer and `render` as its decoded `Type`, the parent passes decoded values, and the wire shape is rejected by `validateProps` rather than decoded.
 - [x] A props schema declaring `children: Children` surfaces the field to `initialState`, the reducer and `render` as `ReactNode`, optional under `Schema.optionalKey` and as the given function type under `Children.as<T>()`.
 - [x] `Command<Narrow>` stays assignable to `Command<Wide>` under the callback leaf, and `Command.none: Command<never>` stays the bottom. `Dispatcher<A>` is contravariant in `A` and sits in a parameter position — contravariant again — so the two compose to covariant. **The existing covariance test passes unchanged.**
 - [x] `Command.effect` carries `R` out of the effect it is handed. `A` has no inference site of its own, so it defaults to `never`: a command that emits nothing is `Command<never, R>` and fits every slot. Passing a bare `Effect` — the pre-redesign shape — no longer compiles, and neither does an effect with an open error channel.
 - [x] Inside a handler, `dispatch` is typed by the feature's own vocabulary: `A` arrives from the contextual type of the handler's return. An undeclared tag and a declared tag with the wrong payload are both compile errors.
+- [x] `Dispatcher<A>` and `Dispatch<A>` are two overloads: `<M extends MessageOf<A>>(message: M, ...payload: PayloadArgs<M>)`, then `(action: A)`. A schema whose `Type` is not in `A`, a missing required payload and a wrong payload are compile errors; `MessageOf<never>` admits nothing, so a standalone leaf still accepts nothing. The value form is last, so `Stream.runForEach(stream, dispatch)` infers it. The covariance of `Command` in `A` is unchanged. A lambda written against `Dispatcher` by hand needs its parameter annotated: an overloaded target gives no contextual parameter type.
 - [x] `Command.keyed` preserves `A` and `R`, through `.pipe`, applied directly, and nested. The key is a required string.
 - [x] `Command.batch` preserves `A` and `R`, and a `Command<never>` member — the `Cancel` the variant exists to sequence — does not collapse the batch to `never`.
 - [x] `Command.cancel` is `Command<never>` and takes exactly one string. An object target — `{ tag }` or `{ tag, key }` — is a compile error, as are a number and a zero-argument call.
@@ -499,6 +556,7 @@ landed with every box checked again.
 - [x] `Task.start` and `Next.lazy` accept a draft; `Task.start`'s key is still constrained to the task fields; the lazy thunk's parameter is the draft's type. `Exhaustive` reports no excess for a drafting handler.
 - [x] A command returned beside a draft still carries `R` to `component`.
 - [x] `render` and `subscriptions` snapshots have no `draft`.
+- [x] `ReducerSnapshot`'s `tasks` is `TaskHandles<TS, State>`, `{}` without a slot; the `tasks` slot's types (merged `State`, `initialState` without the task keys, optional settle keys, `start`'s input and `R`, the clash guards) are pinned in `task.tst.ts`.
 - [x] `reduce` accepts an optional `DrafterService`; `drafterLayer(…)` is `Layer.Layer<never>`.
 
 **How `A` reaches the leaf.** `A` appears only inside `Dispatcher<A>`, in a
@@ -506,8 +564,12 @@ parameter position, so nothing in the argument can infer it — it is resolved f
 the contextual type of the call, which the reducer's return type supplies through
 `create`'s `U extends Reducer<…>` constraint. Written standalone, with no
 contextual type, `A` falls back to `never` and `dispatch` accepts nothing; the
-call site names it (`Command.effect<Action>(…)`). The spec's examples rely on the
-contextual path, and a type test compiles each of them to say so.
+call site names the messages it may emit as a value, `Command.effect(Loaded,
+(dispatch) => …)`, which also leaves `R` to inference. A type argument names
+them too (`Command.effect<Action, R>(…)`), but TypeScript has no partial
+inference, so naming `A` that way forces `R` to be spelled as well. The spec's
+examples rely on the contextual path, and a type test compiles each of them to
+say so.
 
 Two consequences the surface had to absorb, both found by compiling the example
 above rather than by reasoning about it:
@@ -1177,10 +1239,10 @@ Mutative default keeps every call site as it was; the override stays.
 removed, and outbound messages go through the same `dispatch`, routed by `_tag`
 against the declared output cases — which is already how routing works and
 already own-keys checked. The channel brand keeps its declaration-time jobs
-(`ChannelOf`, `SameChannel`, `Disjoint`, `OutputProps`); it stops being checked
+(the slot types, `Disjoint`, `OutputProps`); it stops being checked
 at the command call site, where it never affected routing anyway.
 
-**Partially executed.** `dispatch` now carries `Emit<A, O>` everywhere — the
+**Partially executed.** `dispatch` takes `(Message, payload)` as well as a built message, so every send site has the one shape `Command.output(Message, payload)` already had. `dispatch` now carries `Emit<A, O>` everywhere — the
 command dispatcher always did, and `render`'s dispatch is widened to match, so
 a passthrough view announces without a mirror action. A purely type-level
 change: the store routed by tag all along. `Command.output` **stays**, as

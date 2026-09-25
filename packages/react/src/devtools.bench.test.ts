@@ -12,8 +12,7 @@ import {
   type DevtoolsSink,
 } from "./devtools";
 
-const withSink = (sink: DevtoolsSink) =>
-  ManagedRuntime.make(devtoolsLayer(sink)) as unknown as ManagedRuntime.ManagedRuntime<any, any>;
+const withSink = (sink: DevtoolsSink) => ManagedRuntime.make(devtoolsLayer(sink));
 
 /** A console that does nothing, so the logger's own work is what is measured. */
 const silentConsole: DevtoolsConsole = {
@@ -55,9 +54,7 @@ describe("fold with a sink", () => {
 
   // Control: the same store shape on a sink-less runtime, in this file, so
   // the comparison does not cross a process boundary.
-  const bare = counterStore(
-    ManagedRuntime.make(Layer.empty) as unknown as ManagedRuntime.ManagedRuntime<any, any>,
-  );
+  const bare = counterStore(ManagedRuntime.make(Layer.empty));
   bare.start();
 
   bench("dispatch: no sink (control)", () => {

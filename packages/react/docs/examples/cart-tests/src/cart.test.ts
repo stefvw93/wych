@@ -1,14 +1,14 @@
 import { createRecorder, createRuntime, devtoolsLayer, Next, Task } from "@wych/react";
 import { Effect, Layer } from "effect";
 import { expect, test } from "vitest";
-import { Added, cart, Payments, Submitted } from "./cart";
+import { actions, cart, Payments } from "./cart";
 
 // --- one step with reduce ---------------------------------------------------
 
 const empty = { items: [], charge: Task.idle } as const;
 
 test("Added appends and issues no command", () => {
-  const next = cart.reduce(Added.make({ id: "a", price: 10 }), {
+  const next = cart.reduce(actions.Added.make({ id: "a", price: 10 }), {
     state: empty,
     props: {},
     hooks: {},
@@ -19,7 +19,7 @@ test("Added appends and issues no command", () => {
 });
 
 test("Submitted writes Pending and issues a command", () => {
-  const next = cart.reduce(Submitted.make({}), {
+  const next = cart.reduce(actions.Submitted.make(), {
     state: { items: [{ id: "a", price: 10 }], charge: Task.idle },
     props: {},
     hooks: {},
@@ -37,7 +37,7 @@ const paid = Layer.succeed(Payments)({
 
 test("a paid cart resolves the task and announces the order", async () => {
   const { state, emitted, outputs } = await Effect.runPromise(
-    cart.run([Added.make({ id: "a", price: 10 }), Submitted.make({})], {
+    cart.run([actions.Added.make({ id: "a", price: 10 }), actions.Submitted.make()], {
       props: {},
       hooks: {},
       layer: paid,
@@ -59,10 +59,10 @@ test("a second Submitted supersedes the charge in flight", async () => {
   const { emitted, outputs } = await Effect.runPromise(
     cart.run(
       [
-        Added.make({ id: "a", price: 10 }),
-        Submitted.make({}),
-        Added.make({ id: "b", price: 5 }),
-        Submitted.make({}),
+        actions.Added.make({ id: "a", price: 10 }),
+        actions.Submitted.make(),
+        actions.Added.make({ id: "b", price: 5 }),
+        actions.Submitted.make(),
       ],
       { props: {}, hooks: {}, layer: slow },
     ),
@@ -80,7 +80,7 @@ const declined = Layer.succeed(Payments)({
 
 test("a declined charge rejects the task and announces nothing", async () => {
   const { state, outputs } = await Effect.runPromise(
-    cart.run([Added.make({ id: "a", price: 10 }), Submitted.make({})], {
+    cart.run([actions.Added.make({ id: "a", price: 10 }), actions.Submitted.make()], {
       props: {},
       hooks: {},
       layer: declined,

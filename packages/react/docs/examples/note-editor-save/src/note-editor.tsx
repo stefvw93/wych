@@ -3,9 +3,9 @@ import { Action, Task, define } from "@wych/react";
 import { NotesApi } from "./notes-api";
 import { component } from "./runtime";
 
-const saveNote = Task("Save", {
+export const saveNote = Task("Save", {
   success: Schema.String,
-  onError: Task.errorMessage,
+  mode: "first",
   run: (note: { readonly id: string; readonly text: string }) =>
     Effect.gen(function* () {
       const api = yield* NotesApi;
@@ -13,55 +13,44 @@ const saveNote = Task("Save", {
     }),
 });
 
-const TextChanged = Action("TextChanged", { text: Schema.String });
-const Reverted = Action("Reverted", {});
-export const SaveClicked = Action("SaveClicked", {});
-export const SaveCancelled = Action("SaveCancelled", {});
+export const actions = Action({
+  TextChanged: { text: Schema.String },
+  Reverted: {},
+  SaveClicked: {},
+  SaveCancelled: {},
+});
 
 const Editor = define({
   props: Schema.Struct({ noteId: Schema.String, initialText: Schema.String }),
   state: Schema.Struct({
     text: Schema.String,
     dirty: Schema.Boolean,
-    save: Task.schema(Schema.String),
   }),
-  action: Action.of([TextChanged, Reverted, SaveClicked, SaveCancelled, ...saveNote.actions]),
+  tasks: { save: saveNote },
+  actions,
 });
 
 const initialState = Editor.initialState((props) => ({
   text: props.initialText,
   dirty: false,
-  save: Task.idle,
 }));
 
 const reducer = Editor.reducer({
-  TextChanged: ({ text }, { draft, props }) => {
+  TextChanged: ({ text }, { draft, props, tasks }) => {
     draft.text = text;
     draft.dirty = text !== props.initialText;
-    draft.save = Task.idle;
-    return draft;
+    return tasks.save.cancel();
   },
-  Reverted: (_payload, { draft, props }) => {
+  Reverted: (_payload, { draft, props, tasks }) => {
     draft.text = props.initialText;
     draft.dirty = false;
-    draft.save = Task.idle;
-    return draft;
+    return tasks.save.cancel();
   },
-  SaveClicked: (_payload, { draft, state, props }) =>
-    Task.isPending(state.save)
-      ? draft
-      : Task.start(draft, "save", saveNote.run({ id: props.noteId, text: state.text })),
-  SaveCancelled: (_payload, { draft }) => {
-    draft.save = Task.idle;
-    return [draft, saveNote.cancel];
-  },
-  SaveResolved: ({ value }, { draft }) => {
+  SaveClicked: (_payload, { state, props, tasks }) =>
+    tasks.save.start({ id: props.noteId, text: state.text }),
+  SaveCancelled: (_payload, { tasks }) => tasks.save.cancel(),
+  SaveResolved: (_payload, { draft }) => {
     draft.dirty = false;
-    draft.save = Task.resolved(value);
-    return draft;
-  },
-  SaveRejected: ({ error }, { draft }) => {
-    draft.save = Task.rejected(error);
     return draft;
   },
 });
@@ -70,15 +59,15 @@ const render = Editor.render(({ state, dispatch }) => (
   <form>
     <textarea
       value={state.text}
-      onChange={(event) => dispatch(TextChanged.make({ text: event.target.value }))}
+      onChange={(event) => dispatch(actions.TextChanged, { text: event.target.value })}
     />
-    <button type="button" disabled={!state.dirty} onClick={() => dispatch(Reverted.make({}))}>
+    <button type="button" disabled={!state.dirty} onClick={() => dispatch(actions.Reverted)}>
       Revert
     </button>
-    <button type="button" onClick={() => dispatch(SaveClicked.make({}))}>
+    <button type="button" onClick={() => dispatch(actions.SaveClicked)}>
       Save
     </button>
-    <button type="button" onClick={() => dispatch(SaveCancelled.make({}))}>
+    <button type="button" onClick={() => dispatch(actions.SaveCancelled)}>
       Cancel
     </button>
     {Task.match(state.save, {

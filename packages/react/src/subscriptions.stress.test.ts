@@ -34,7 +34,7 @@ const holding = presence(() => Effect.never);
 
 const presenceStore = (
   feature: ReturnType<typeof presence>,
-  runtime: ManagedRuntime.ManagedRuntime<any, any>,
+  runtime: ManagedRuntime.ManagedRuntime<never, unknown>,
 ) => {
   const store = createFeatureStore({
     feature,
@@ -86,7 +86,7 @@ describe("high-frequency sources", () => {
     expect(tagged("Defect")).toHaveLength(0);
     // The source completed: booked as done until undeclared.
     await until(store, () => tagged("SubscriptionStopped").length === 1);
-    expect(tagged("SubscriptionStopped")[0]!.reason).toBe("Completed");
+    expect(tagged("SubscriptionStopped")[0].reason).toBe("Completed");
     expect(probe(store).subscriptions).toBe(1);
 
     store.dispatch(Declare.make({ keys: [] }));
@@ -106,7 +106,7 @@ describe("high-frequency sources", () => {
         last: Schema.Record(Schema.String, Schema.Number),
         total: Schema.Number,
       }),
-      action: Action.of([Seen, Start]),
+      actions: [Seen, Start],
     }).create({
       initialState: () => ({ last: {}, total: 0 }),
       reducer: {
@@ -252,9 +252,7 @@ describe("long sessions", () => {
       onEvent: (event) => void counts.set(event._tag, (counts.get(event._tag) ?? 0) + 1),
     };
     const count = (tag: DevtoolsEvent["_tag"]) => counts.get(tag) ?? 0;
-    const runtime = ManagedRuntime.make(
-      devtoolsLayer(sink),
-    ) as unknown as ManagedRuntime.ManagedRuntime<any, any>;
+    const runtime = ManagedRuntime.make(devtoolsLayer(sink));
 
     const refs: Array<WeakRef<object>> = [];
     const heap: Array<number> = [];
@@ -281,7 +279,7 @@ describe("long sessions", () => {
     expect(count("SubscriptionStarted")).toBe(3 * rounds * perRound);
     expect(count("SubscriptionStopped")).toBe(3 * rounds * perRound);
     const tail = heap.slice(-5);
-    expect(tail[tail.length - 1]! - tail[0]!).toBeLessThan(2 * MiB);
+    expect(tail[tail.length - 1] - tail[0]).toBeLessThan(2 * MiB);
     expect(slope(tail)).toBeLessThan(MiB / 2);
     expect(alive(refs)).toBeLessThan(refs.length / 100);
   });

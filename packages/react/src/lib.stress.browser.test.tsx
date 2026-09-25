@@ -34,7 +34,7 @@ const Bump = Action("Bump", {});
 const Counter = define({
   props: Schema.Struct({ id: Schema.Number }),
   state: Schema.Struct({ count: Schema.Number }),
-  action: Action.of([Bump]),
+  actions: [Bump],
 });
 
 const counter = Counter.create({
@@ -57,7 +57,7 @@ const Tick = Action("Tick", {});
 const Presence = define({
   props: Schema.Struct({ room: Schema.String, id: Schema.Number }),
   state: Schema.Struct({ ticks: Schema.Number }),
-  action: Action.of([Tick]),
+  actions: [Tick],
 });
 
 /** One key per room. `emit` makes it tick every few milliseconds. */
@@ -262,7 +262,7 @@ test("2000 mount/unmount cycles under three names keep three contexts and a flat
 
   if (heap.length === rounds) {
     const tail = heap.slice(-5);
-    const growth = tail[tail.length - 1]! - tail[0]!;
+    const growth = tail[tail.length - 1] - tail[0];
     console.info(
       `[stress] 2000 cycles: heap ${heap.map((h) => (h / MiB).toFixed(1)).join(" → ")} MiB`,
     );

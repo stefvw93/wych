@@ -33,27 +33,28 @@ yet.
 ## 2. Declare the shapes
 
 `define` declares what a feature is made of. Props and state are
-`Schema.Struct`s. Actions are a tagged vocabulary. Outputs, the fourth
-declaration, wait until [chapter 3](/docs/tutorial/composing-features).
+`Schema.Struct`s. Actions are messages, declared as one record keyed by tag.
+Outputs, the fourth declaration, wait until
+[chapter 3](/docs/tutorial/composing-features).
 
 ```ts continue
 // note-editor.tsx
 import { Schema } from "effect";
 import { Action, define } from "@wych/react";
 
-const TextChanged = Action("TextChanged", { text: Schema.String });
-const Reverted = Action("Reverted", {});
+const actions = Action({ TextChanged: { text: Schema.String }, Reverted: {} });
 
 const Editor = define({
   props: Schema.Struct({ noteId: Schema.String, initialText: Schema.String }),
   state: Schema.Struct({ text: Schema.String, dirty: Schema.Boolean }),
-  action: Action.of([TextChanged, Reverted]),
+  actions,
 });
 ```
 
-`Editor` is a definition. It hands back four helpers
-(`initialState`, `reducer`, `render`, `create`), each already typed against
-these schemas.
+`Action` turns each key into a message schema: `actions.TextChanged` carries
+a `text` field, `actions.Reverted` carries nothing. `Editor` is a definition.
+It hands back four helpers (`initialState`, `reducer`, `render`, `create`),
+each already typed against these schemas.
 
 ## 3. Write the initial state
 
@@ -103,17 +104,17 @@ rules `draft` follows.
 
 `render` receives the same snapshot the reducer does, plus `dispatch`. The
 text stays in `state`, where the reducer and the test in step 8 can see it.
-A `useState` inside `render` would hide it from both. `dispatch` takes a whole
-message, which `make` builds from the payload.
+A `useState` inside `render` would hide it from both. `dispatch` takes a
+message and its payload. A message with no fields takes no payload.
 
 ```tsx continue
 const render = Editor.render(({ state, dispatch }) => (
   <form>
     <textarea
       value={state.text}
-      onChange={(event) => dispatch(TextChanged.make({ text: event.target.value }))}
+      onChange={(event) => dispatch(actions.TextChanged, { text: event.target.value })}
     />
-    <button type="button" disabled={!state.dirty} onClick={() => dispatch(Reverted.make({}))}>
+    <button type="button" disabled={!state.dirty} onClick={() => dispatch(actions.Reverted)}>
       Revert
     </button>
   </form>
@@ -157,12 +158,12 @@ prop or a wrong type throws a `TypeError` to the nearest error boundary.
 
 `feature.reduce` is the reducer as one pure function. It needs no DOM and no
 Effect runtime, so a test hands it an action and a snapshot and reads what
-came back.
+came back. `reduce` takes a built message: `make` builds one from the payload.
 
 ```ts continue
 import { Next } from "@wych/react";
 
-const next = editor.reduce(TextChanged.make({ text: "Buy oats" }), {
+const next = editor.reduce(actions.TextChanged.make({ text: "Buy oats" }), {
   state: { text: "Buy milk", dirty: false },
   props: { noteId: "n1", initialText: "Buy milk" },
   hooks: {},
@@ -181,10 +182,10 @@ mocked.
 // note-editor.test.ts
 import { Next } from "@wych/react";
 import { expect, test } from "vitest";
-import { editor, TextChanged } from "./note-editor";
+import { actions, editor } from "./note-editor";
 
 test("typing marks the note dirty", () => {
-  const next = editor.reduce(TextChanged.make({ text: "Buy oats" }), {
+  const next = editor.reduce(actions.TextChanged.make({ text: "Buy oats" }), {
     state: { text: "Buy milk", dirty: false },
     props: { noteId: "n1", initialText: "Buy milk" },
     hooks: {},
@@ -215,7 +216,7 @@ imports between them are:
 ```ts fragment
 import { component } from "./runtime"; // note-editor.tsx
 import { NoteEditor } from "./note-editor"; // main.tsx
-import { editor, TextChanged } from "./note-editor"; // note-editor.test.ts
+import { actions, editor } from "./note-editor"; // note-editor.test.ts
 ```
 
 `npm run dev` starts the app and `npm test` runs the test. The example behind
