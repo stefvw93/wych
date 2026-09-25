@@ -1138,13 +1138,10 @@ describe("snapshot.draft", () => {
 
     // Under the store it is routed like every other handler throw: a defect
     // from that action, the state it had kept.
-    const runtime = ManagedRuntime.make(Layer.empty) as unknown as ManagedRuntime.ManagedRuntime<
-      any,
-      any
-    >;
+    const runtime = ManagedRuntime.make(Layer.empty);
     const defects: unknown[] = [];
     const store = createFeatureStore({
-      feature: todos as never,
+      feature: todos,
       props: {},
       equivalence: { props: Equivalence.strictEqual(), hooks: Equivalence.strictEqual() },
       runtime,
@@ -1153,7 +1150,7 @@ describe("snapshot.draft", () => {
       defect: (error) => void defects.push(error),
     });
     store.start();
-    store.dispatch(Mixed.make({}) as never);
+    store.dispatch(Mixed.make({}));
     expect(defects.map((error) => (error as Error).message)).toEqual([
       "handler wrote into snapshot.draft and returned a different state",
     ]);
@@ -1245,11 +1242,9 @@ describe("snapshot.draft", () => {
       }),
     );
 
-    const runtime = ManagedRuntime.make(
-      drafterLayer(spy("store")),
-    ) as unknown as ManagedRuntime.ManagedRuntime<any, any>;
+    const runtime = ManagedRuntime.make(drafterLayer(spy("store")));
     const store = createFeatureStore({
-      feature: todos as never,
+      feature: todos,
       props: {},
       equivalence: { props: Equivalence.strictEqual(), hooks: Equivalence.strictEqual() },
       runtime,
@@ -1258,7 +1253,7 @@ describe("snapshot.draft", () => {
       defect: () => {},
     });
     store.start();
-    store.dispatch(Toggled.make({ id: "a" }) as never);
+    store.dispatch(Toggled.make({ id: "a" }));
     store.stop();
     await runtime.dispose();
 
@@ -1325,14 +1320,7 @@ describe("Feature internals slot", () => {
   });
 });
 
-/**
- * `createFeatureStore` takes `ManagedRuntime<any, any>` because the real `R` is
- * computed the way `ServicesOf` computes it and this scope cannot name it. A
- * root providing nothing is `ManagedRuntime<never, never>`, and `never` does not
- * convert to `any` directly, so the widening goes through `unknown`.
- */
-const testRuntime = () =>
-  ManagedRuntime.make(Layer.empty) as unknown as ManagedRuntime.ManagedRuntime<any, any>;
+const testRuntime = () => ManagedRuntime.make(Layer.empty);
 
 describe("createFeatureStore", () => {
   const Props = Schema.Struct({ id: Schema.String });
@@ -1363,7 +1351,7 @@ describe("createFeatureStore", () => {
       props: Props,
       state: State,
       action: [Action("Bump", {}), Action("Echo", {})],
-      ...(overrides.outputs ? { output: overrides.outputs as any } : {}),
+      ...(overrides.outputs ? { output: overrides.outputs } : {}),
     } as any).create({
       initialState: () => ({ count: 0, seen: 0 }),
       reducer: overrides.reducer ?? {
@@ -1377,9 +1365,9 @@ describe("createFeatureStore", () => {
     } as any);
 
     const store = createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: overrides.props ?? { id: "a" },
-      equivalence: equivalence as any,
+      equivalence: equivalence,
       runtime: makeRuntime(),
       layer: undefined,
       emit: (output) => void emitted.push(output),
@@ -1399,7 +1387,7 @@ describe("createFeatureStore", () => {
     let notified = 0;
     store.subscribe(() => void notified++);
 
-    store.dispatch({ _tag: "Bump" } as never);
+    store.dispatch({ _tag: "Bump" });
 
     // Synchronous: readable on the very next line, with no await and no tick.
     expect(store.getSnapshot()).toEqual({ count: 1, seen: 0 });
@@ -1411,7 +1399,7 @@ describe("createFeatureStore", () => {
     expect(store.getSnapshot()).toBe(store.getSnapshot());
 
     const before = store.getSnapshot();
-    store.dispatch({ _tag: "Echo" } as never);
+    store.dispatch({ _tag: "Echo" });
     // The handler returned the same state object, so nothing moved.
     expect(store.getSnapshot()).toBe(before);
   });
@@ -1421,14 +1409,14 @@ describe("createFeatureStore", () => {
     let notified = 0;
     const unsubscribe = store.subscribe(() => void notified++);
     unsubscribe();
-    store.dispatch({ _tag: "Bump" } as never);
+    store.dispatch({ _tag: "Bump" });
     expect(notified).toBe(0);
   });
 
   it("keeps `dispatch` reference-stable, so a memoised child is not invalidated", () => {
     const { store } = setup();
     const first = store.dispatch;
-    store.dispatch({ _tag: "Bump" } as never);
+    store.dispatch({ _tag: "Bump" });
     expect(store.dispatch).toBe(first);
   });
 });
@@ -1439,7 +1427,7 @@ describe("createFeatureStore — sync", () => {
   const equivalence = {
     props: Schema.toEquivalence(Props),
     hooks: Equivalence.Record(Equivalence.strictEqual<unknown>()),
-  } as any;
+  };
 
   const setup = () => {
     const seen: Array<string> = [];
@@ -1465,7 +1453,7 @@ describe("createFeatureStore — sync", () => {
     });
 
     const store = createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: { id: "a" },
       equivalence,
       runtime: testRuntime(),
@@ -1525,7 +1513,7 @@ describe("createFeatureStore — sync", () => {
       render: () => null,
     });
     const store = createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: { id: "a" },
       equivalence,
       runtime: testRuntime(),
@@ -1604,7 +1592,7 @@ describe("createFeatureStore — lifecycle", () => {
   const equivalence = {
     props: Schema.toEquivalence(Schema.Struct({})),
     hooks: Equivalence.Record(Equivalence.strictEqual<unknown>()),
-  } as any;
+  };
 
   const setup = (reducer: Record<string, any>) => {
     const log: Array<string> = [];
@@ -1619,7 +1607,7 @@ describe("createFeatureStore — lifecycle", () => {
     });
 
     const store = createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: {},
       equivalence,
       runtime: testRuntime(),
@@ -1658,14 +1646,14 @@ describe("createFeatureStore — lifecycle", () => {
     });
 
     store.start();
-    store.dispatch({ _tag: "Bump" } as never);
+    store.dispatch({ _tag: "Bump" });
     store.stop();
     store.start();
 
     // State survives the dev remount, and the store still works afterwards —
     // a single `dispose` leaves a closed scope and this second dispatch is
     // silently lost.
-    store.dispatch({ _tag: "Bump" } as never);
+    store.dispatch({ _tag: "Bump" });
     expect(store.getSnapshot()).toEqual({ count: 2 });
   });
 
@@ -1702,7 +1690,7 @@ describe("createFeatureStore — outputs", () => {
   const equivalence = {
     props: Schema.toEquivalence(Schema.Struct({})),
     hooks: Equivalence.Record(Equivalence.strictEqual<unknown>()),
-  } as any;
+  };
 
   it("routes a declared output through `emit` and never back into the reducer", async () => {
     const folded: Array<string> = [];
@@ -1725,7 +1713,7 @@ describe("createFeatureStore — outputs", () => {
     });
 
     const store = createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: {},
       equivalence,
       runtime: testRuntime(),
@@ -1735,7 +1723,7 @@ describe("createFeatureStore — outputs", () => {
     });
 
     store.start();
-    store.dispatch({ _tag: "Bump" } as never);
+    store.dispatch({ _tag: "Bump" });
 
     // Commands are Effects, so an output leaves on a fiber rather than on the
     // dispatching stack. The fold is synchronous; what it *starts* is not.
@@ -1752,7 +1740,7 @@ describe("createFeatureStore — defects", () => {
   const equivalence = {
     props: Schema.toEquivalence(Schema.Struct({})),
     hooks: Equivalence.Record(Equivalence.strictEqual<unknown>()),
-  } as any;
+  };
 
   const setup = (reducer: Record<string, any>) => {
     const defects: Array<unknown> = [];
@@ -1767,7 +1755,7 @@ describe("createFeatureStore — defects", () => {
     });
 
     const store = createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: {},
       equivalence,
       runtime: testRuntime(),
@@ -1787,7 +1775,7 @@ describe("createFeatureStore — defects", () => {
       Error: (_action: any, s: any) => ({ handled: s.state.handled + 1 }),
     });
 
-    store.dispatch({ _tag: "Boom" } as never);
+    store.dispatch({ _tag: "Boom" });
 
     expect(store.getSnapshot()).toEqual({ handled: 1 });
     // Handled means handled: it must not also reach the error boundary.
@@ -1806,7 +1794,7 @@ describe("createFeatureStore — defects", () => {
       },
     });
 
-    store.dispatch({ _tag: "Boom" } as never);
+    store.dispatch({ _tag: "Boom" });
 
     // oxlint-disable-next-line no-unsafe-optional-chaining
     expect((seen?.error as Error).message).toBe("kaboom");
@@ -1820,7 +1808,7 @@ describe("createFeatureStore — defects", () => {
       },
     });
 
-    store.dispatch({ _tag: "Boom" } as never);
+    store.dispatch({ _tag: "Boom" });
 
     expect(defects).toHaveLength(1);
     expect((defects[0] as Error).message).toBe("kaboom");
@@ -1836,7 +1824,7 @@ describe("createFeatureStore — defects", () => {
       },
     });
 
-    store.dispatch({ _tag: "Boom" } as never);
+    store.dispatch({ _tag: "Boom" });
 
     // Straight out, rather than feeding itself forever.
     expect(defects).toHaveLength(1);
@@ -1850,7 +1838,7 @@ describe("createFeatureStore — feature layers", () => {
   const equivalence = {
     props: Schema.toEquivalence(Schema.Struct({})),
     hooks: Equivalence.Record(Equivalence.strictEqual<unknown>()),
-  } as any;
+  };
 
   it("builds the layer per mount and releases it on stop", async () => {
     const log: Array<string> = [];
@@ -1877,22 +1865,22 @@ describe("createFeatureStore — feature layers", () => {
           snapshot.state,
           Command.effect(() => Effect.flatMap(Probe, (probe) => Effect.sync(() => probe.mark()))),
         ],
-      } as any,
+      },
       render: () => null,
     });
 
     const store = createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: {},
       equivalence,
       runtime: testRuntime(),
-      layer: layer as any,
+      layer: layer,
       emit: () => {},
       defect: () => {},
     });
 
     store.start();
-    store.dispatch({ _tag: "Use" } as never);
+    store.dispatch({ _tag: "Use" });
     await Effect.runPromise(Effect.sleep("20 millis"));
 
     expect(log).toEqual(["acquired", "used"]);
@@ -1926,13 +1914,13 @@ describe("createFeatureStore — feature layers", () => {
             ),
           ),
         ],
-      } as any,
+      },
       render: () => null,
     });
 
     const defects: Array<unknown> = [];
     const store = createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: {},
       equivalence,
       runtime: testRuntime(),
@@ -1942,7 +1930,7 @@ describe("createFeatureStore — feature layers", () => {
     });
 
     store.start();
-    store.dispatch({ _tag: "Open" } as never);
+    store.dispatch({ _tag: "Open" });
     await Effect.runPromise(Effect.sleep("20 millis"));
 
     expect(defects).toEqual([]);
@@ -2014,7 +2002,7 @@ describe("createFeatureStore — defects from commands (review regression)", () 
   const equivalence = {
     props: Schema.toEquivalence(Schema.Struct({})),
     hooks: Equivalence.Record(Equivalence.strictEqual<unknown>()),
-  } as any;
+  };
 
   const setup = (reducer: Record<string, any>, layer?: Layer.Layer<any, any, any>) => {
     const defects: Array<unknown> = [];
@@ -2029,7 +2017,7 @@ describe("createFeatureStore — defects from commands (review regression)", () 
     });
 
     const store = createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: {},
       equivalence,
       runtime: testRuntime(),
@@ -2053,7 +2041,7 @@ describe("createFeatureStore — defects from commands (review regression)", () 
     });
 
     store.start();
-    store.dispatch({ _tag: "Boom" } as never);
+    store.dispatch({ _tag: "Boom" });
     await Effect.runPromise(Effect.sleep("30 millis"));
 
     expect(store.getSnapshot()).toEqual({ handled: 1 });
@@ -2069,7 +2057,7 @@ describe("createFeatureStore — defects from commands (review regression)", () 
     });
 
     store.start();
-    store.dispatch({ _tag: "Boom" } as never);
+    store.dispatch({ _tag: "Boom" });
     await Effect.runPromise(Effect.sleep("30 millis"));
 
     expect(defects).toHaveLength(1);
@@ -2096,8 +2084,8 @@ describe("createFeatureStore — defects from commands (review regression)", () 
     });
 
     store.start();
-    store.dispatch({ _tag: "Boom" } as never);
-    store.dispatch({ _tag: "Boom" } as never);
+    store.dispatch({ _tag: "Boom" });
+    store.dispatch({ _tag: "Boom" });
     await Effect.runPromise(Effect.sleep("30 millis"));
 
     expect(store.getSnapshot()).toEqual({ handled: 0 });
@@ -2127,7 +2115,7 @@ describe("createFeatureStore — remount races (review regression)", () => {
   const equivalence = {
     props: Schema.toEquivalence(Schema.Struct({})),
     hooks: Equivalence.Record(Equivalence.strictEqual<unknown>()),
-  } as any;
+  };
 
   it("runs the remount's `Mounted` command instead of interrupting it", async () => {
     // The StrictMode path. The previous mount's fiber was still parked on the
@@ -2151,12 +2139,12 @@ describe("createFeatureStore — remount races (review regression)", () => {
             Effect.sleep("10 millis").pipe(Effect.andThen(Effect.sync(() => ran.push("loaded")))),
           ),
         ],
-      } as any,
+      },
       render: () => null,
     });
 
     const store = createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: {},
       equivalence,
       runtime: testRuntime(),
@@ -2218,11 +2206,11 @@ describe("createFeatureStore — remount races (review regression)", () => {
     });
 
     const store = createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: {},
       equivalence,
       runtime: testRuntime(),
-      layer: layer as any,
+      layer: layer,
       emit: () => {},
       defect: () => {},
     });
@@ -2242,7 +2230,7 @@ describe("createFeatureStore — output handler throw (review regression)", () =
   const equivalence = {
     props: Schema.toEquivalence(Schema.Struct({})),
     hooks: Equivalence.Record(Equivalence.strictEqual<unknown>()),
-  } as any;
+  };
 
   it("does not let the feature's `Error` handler swallow a missing `on<Tag>`", async () => {
     // A missing handler is the parent's bug. Routing it into this feature's
@@ -2271,7 +2259,7 @@ describe("createFeatureStore — output handler throw (review regression)", () =
     });
 
     const store = createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: {},
       equivalence,
       runtime: testRuntime(),
@@ -2284,7 +2272,7 @@ describe("createFeatureStore — output handler throw (review regression)", () =
     });
 
     store.start();
-    store.dispatch({ _tag: "Announce" } as never);
+    store.dispatch({ _tag: "Announce" });
     await Effect.runPromise(Effect.sleep("20 millis"));
 
     expect(handledHere).toBe(0);
@@ -2297,7 +2285,7 @@ describe("createFeatureStore — review iteration 2 regressions", () => {
   const equivalence = {
     props: Schema.toEquivalence(Schema.Struct({})),
     hooks: Equivalence.Record(Equivalence.strictEqual<unknown>()),
-  } as any;
+  };
 
   const make = (reducer: Record<string, any>, layer?: Layer.Layer<any, any, any>) => {
     const defects: Array<unknown> = [];
@@ -2311,7 +2299,7 @@ describe("createFeatureStore — review iteration 2 regressions", () => {
       render: () => null,
     });
     const store = createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: {},
       equivalence,
       runtime: testRuntime(),
@@ -2341,7 +2329,7 @@ describe("createFeatureStore — review iteration 2 regressions", () => {
     });
 
     store.start();
-    store.dispatch({ _tag: "Boom" } as never);
+    store.dispatch({ _tag: "Boom" });
     await Effect.runPromise(Effect.sleep("100 millis"));
 
     // The handler runs for the original defect; the defect its own command
@@ -2377,8 +2365,8 @@ describe("createFeatureStore — review iteration 2 regressions", () => {
     });
 
     store.start();
-    store.dispatch({ _tag: "Boom" } as never);
-    store.dispatch({ _tag: "Step" } as never);
+    store.dispatch({ _tag: "Boom" });
+    store.dispatch({ _tag: "Step" });
     await Effect.runPromise(Effect.sleep("50 millis"));
 
     expect(ran).toEqual(["second"]);
@@ -2437,7 +2425,7 @@ describe("createFeatureStore — review iteration 2 regressions", () => {
     expect(defects).toHaveLength(1);
     expect(probe(store)).toMatchObject({ mounted: true, active: true, dead: false });
 
-    store.dispatch({ _tag: "Step" } as never);
+    store.dispatch({ _tag: "Step" });
     await Effect.runPromise(Effect.sleep("20 millis"));
     expect(ran).toEqual(["step"]);
     store.stop();
@@ -2476,7 +2464,7 @@ describe("createFeatureStore — review iteration 2 regressions", () => {
     });
 
     const store = createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: {},
       equivalence,
       runtime: testRuntime(),
@@ -2505,7 +2493,7 @@ describe("createFeatureStore — review iteration 2 regressions", () => {
       ],
     });
 
-    store.dispatch({ _tag: "Step" } as never);
+    store.dispatch({ _tag: "Step" });
     store.start();
     await Effect.runPromise(Effect.sleep("30 millis"));
 
@@ -2517,7 +2505,7 @@ describe("Command.batch grouping (review iteration 3)", () => {
   const equivalence = {
     props: Schema.toEquivalence(Schema.Struct({})),
     hooks: Equivalence.Record(Equivalence.strictEqual<unknown>()),
-  } as any;
+  };
 
   const store = (reducer: Record<string, any>) => {
     const feature = define({
@@ -2530,7 +2518,7 @@ describe("Command.batch grouping (review iteration 3)", () => {
       render: () => null,
     });
     return createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: {},
       equivalence,
       runtime: testRuntime(),
@@ -2560,9 +2548,9 @@ describe("Command.batch grouping (review iteration 3)", () => {
     });
 
     s.start();
-    s.dispatch({ _tag: "Go" } as never);
+    s.dispatch({ _tag: "Go" });
     await Effect.runPromise(Effect.sleep("15 millis"));
-    s.dispatch({ _tag: "Stop" } as never);
+    s.dispatch({ _tag: "Stop" });
     await Effect.runPromise(Effect.sleep("100 millis"));
 
     expect(log).toEqual([]);
@@ -2573,7 +2561,7 @@ describe("createFeatureStore — a dead mount re-arms on demand", () => {
   const equivalence = {
     props: Schema.toEquivalence(Schema.Struct({})),
     hooks: Equivalence.Record(Equivalence.strictEqual<unknown>()),
-  } as any;
+  };
 
   /**
    * A layer that fails `failures` times, then builds. `attempts` counts
@@ -2611,7 +2599,7 @@ describe("createFeatureStore — a dead mount re-arms on demand", () => {
     });
 
     const store = createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: {},
       equivalence,
       runtime: testRuntime(),
@@ -2636,7 +2624,7 @@ describe("createFeatureStore — a dead mount re-arms on demand", () => {
     expect(store.getSnapshot()).toEqual({ count: 0, errors: 1 });
     expect(attempts.count).toBe(1);
 
-    store.dispatch({ _tag: "Go" } as never);
+    store.dispatch({ _tag: "Go" });
     await settle();
 
     expect(attempts.count).toBe(2);
@@ -2644,7 +2632,7 @@ describe("createFeatureStore — a dead mount re-arms on demand", () => {
     expect(store.getSnapshot()).toEqual({ count: 1, errors: 1 });
 
     // Alive for good: the next dispatch goes to the rebuilt mount, no rebuild.
-    store.dispatch({ _tag: "Go" } as never);
+    store.dispatch({ _tag: "Go" });
     await settle();
     expect(attempts.count).toBe(2);
     expect(ran).toEqual(["go", "go"]);
@@ -2657,8 +2645,8 @@ describe("createFeatureStore — a dead mount re-arms on demand", () => {
     await settle();
     expect(attempts.count).toBe(1);
 
-    store.dispatch({ _tag: "Go" } as never);
-    store.dispatch({ _tag: "Go" } as never);
+    store.dispatch({ _tag: "Go" });
+    store.dispatch({ _tag: "Go" });
     await settle();
 
     // One rebuild per demand, each reported to the handler; state still folds;
@@ -2682,7 +2670,7 @@ describe("createFeatureStore — a dead mount re-arms on demand", () => {
 
     store.start();
     await settle();
-    store.dispatch({ _tag: "Go" } as never);
+    store.dispatch({ _tag: "Go" });
     await settle();
 
     expect(attempts.count).toBe(2);
@@ -2703,7 +2691,7 @@ describe("createFeatureStore — a dead mount re-arms on demand", () => {
     expect(log).toEqual(["unmounted"]);
 
     // The component is gone: no re-arm, however good the layer would be now.
-    store.dispatch({ _tag: "Go" } as never);
+    store.dispatch({ _tag: "Go" });
     await settle();
     expect(attempts.count).toBe(1);
     expect(ran).toEqual([]);
@@ -2728,7 +2716,7 @@ describe("createFeatureStore — teardown belongs to the mount that started it",
   const equivalence = {
     props: Schema.toEquivalence(Schema.Struct({})),
     hooks: Equivalence.Record(Equivalence.strictEqual<unknown>()),
-  } as any;
+  };
 
   it("a remount does not strand the previous mount's teardown drain", async () => {
     // `stop` leaves `mount` pointed at the dying cells on purpose, so a `start`
@@ -2772,11 +2760,11 @@ describe("createFeatureStore — teardown belongs to the mount that started it",
     });
 
     const s = createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: {},
       equivalence,
       runtime: testRuntime(),
-      layer: layer as any,
+      layer: layer,
       emit: () => {},
       defect: (error) => void defects.push(error),
     });
@@ -2848,11 +2836,11 @@ describe("createFeatureStore — teardown belongs to the mount that started it",
     });
 
     const s = createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: {},
       equivalence,
       runtime: testRuntime(),
-      layer: layer as any,
+      layer: layer,
       emit: () => {},
       defect: () => {},
     });
@@ -2902,7 +2890,7 @@ describe("createFeatureStore — teardown belongs to the mount that started it",
     });
 
     const s = createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: {},
       equivalence,
       runtime: testRuntime(),
@@ -2945,7 +2933,7 @@ describe("createFeatureStore — teardown belongs to the mount that started it",
     });
 
     const s = createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: {},
       equivalence,
       runtime: testRuntime(),
@@ -2965,7 +2953,7 @@ describe("createFeatureStore — teardown belongs to the mount that started it",
     // The re-arm the release makes possible: this time the command runs.
     s.start();
     await Effect.runPromise(Effect.sleep("30 millis"));
-    s.dispatch({ _tag: "Noop" } as never);
+    s.dispatch({ _tag: "Noop" });
     s.stop();
   });
 
@@ -3000,7 +2988,7 @@ describe("createFeatureStore — teardown belongs to the mount that started it",
     });
 
     const s = createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: {},
       equivalence,
       runtime: testRuntime(),
@@ -3011,7 +2999,7 @@ describe("createFeatureStore — teardown belongs to the mount that started it",
 
     s.start();
     await Effect.runPromise(Effect.sleep("30 millis"));
-    s.dispatch({ _tag: "Go" } as never);
+    s.dispatch({ _tag: "Go" });
     await Effect.runPromise(Effect.sleep("20 millis"));
 
     // The `Error` handler absorbed the layer failure; nothing reached the
@@ -3092,17 +3080,17 @@ describe("createFeatureStore — recovery after a dead mount (review iteration 4
           { count: snap.state.count + 1 },
           Command.effect(() => Effect.sync(() => void ran.push("retried"))),
         ],
-      } as any,
+      },
       render: () => null,
     });
 
     const store = createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: {},
       equivalence: {
         props: Schema.toEquivalence(Schema.Struct({})),
         hooks: Equivalence.Record(Equivalence.strictEqual<unknown>()),
-      } as any,
+      },
       runtime: testRuntime(),
       layer: layer as unknown as Layer.Layer<any, any, any>,
       emit: () => {},
@@ -3115,7 +3103,7 @@ describe("createFeatureStore — recovery after a dead mount (review iteration 4
     // The mount died. A caller re-arming must actually get a live mount.
     failLayer = false;
     store.start();
-    store.dispatch({ _tag: "Retry" } as never);
+    store.dispatch({ _tag: "Retry" });
     await Effect.runPromise(Effect.sleep("40 millis"));
 
     expect(ran).toEqual(["retried"]);
@@ -3126,7 +3114,7 @@ describe("createFeatureStore — teardown drains to quiescence (review iteration
   const equivalence = {
     props: Schema.toEquivalence(Schema.Struct({})),
     hooks: Equivalence.Record(Equivalence.strictEqual<unknown>()),
-  } as any;
+  };
 
   const make = (reducer: Record<string, any>) => {
     const defects: Array<unknown> = [];
@@ -3140,7 +3128,7 @@ describe("createFeatureStore — teardown drains to quiescence (review iteration
       render: () => null,
     });
     const store = createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: {},
       equivalence,
       runtime: testRuntime(),
@@ -3244,7 +3232,7 @@ describe("createFeatureStore — teardown drains to quiescence (review iteration
     });
 
     store.start();
-    store.dispatch({ _tag: "Go" } as never);
+    store.dispatch({ _tag: "Go" });
     store.stop();
     await Effect.runPromise(Effect.sleep("80 millis"));
 
@@ -3268,7 +3256,7 @@ describe("createFeatureStore — teardown drains to quiescence (review iteration
     });
 
     store.start();
-    store.dispatch({ _tag: "Go" } as never);
+    store.dispatch({ _tag: "Go" });
     await Effect.runPromise(Effect.sleep("20 millis"));
     store.stop();
 
@@ -3452,13 +3440,10 @@ describe("dispatch(Message, payload)", () => {
       },
       render: () => null,
     });
-    const runtime = ManagedRuntime.make(Layer.empty) as unknown as ManagedRuntime.ManagedRuntime<
-      any,
-      any
-    >;
+    const runtime = ManagedRuntime.make(Layer.empty);
     const emitted: unknown[] = [];
     const store = createFeatureStore({
-      feature: feature as never,
+      feature,
       props: {},
       equivalence: { props: Equivalence.strictEqual(), hooks: Equivalence.strictEqual() },
       runtime,
@@ -3469,12 +3454,12 @@ describe("dispatch(Message, payload)", () => {
       },
     });
     store.start();
-    store.dispatch(Go as never);
-    store.dispatch(Bump as never, { by: 3 } as never);
-    store.dispatch(Out as never, { n: 1 } as never);
+    store.dispatch(Go);
+    store.dispatch(Bump, { by: 3 });
+    store.dispatch(Out, { n: 1 });
     expect(store.getSnapshot()).toEqual({ n: 4 });
     expect(emitted).toEqual([{ _tag: "Out", n: 1 }]);
-    expect(() => store.dispatch(Bump as never, { by: "x" } as never)).toThrow();
+    expect(() => store.dispatch(Bump, { by: "x" as never })).toThrow();
     store.stop();
     await runtime.dispose();
   });
@@ -4121,7 +4106,7 @@ describe("createFeatureStore — devtools", () => {
   const equivalence = {
     props: Schema.toEquivalence(Schema.Struct({ id: Schema.String })),
     hooks: Equivalence.Record(Equivalence.strictEqual<unknown>()),
-  } as any;
+  };
 
   const Placed = Action.output("Placed", { at: Schema.Number });
 
@@ -4144,25 +4129,22 @@ describe("createFeatureStore — devtools", () => {
       state: Schema.Struct({ count: Schema.Number }),
       action: [Action("Bump", {}), Action("Land", {})],
       ...(options.outputs ? { output: [Placed] } : {}),
-    } as any).create({
+    }).create({
       initialState: () => ({ count: 0 }),
       reducer: options.reducer as any,
       render: () => null,
     });
 
     const store = createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: { id: "a" },
       equivalence,
-      runtime: ManagedRuntime.make(devtoolsLayer(sink)) as unknown as ManagedRuntime.ManagedRuntime<
-        any,
-        any
-      >,
+      runtime: ManagedRuntime.make(devtoolsLayer(sink)),
       layer: undefined,
       emit: options.emit ?? ((output: { readonly _tag: string }) => void emitted.push(output)),
       defect: (error: unknown) => void defects.push(error),
       ...(options.name === undefined ? {} : { name: options.name }),
-    } as any);
+    });
 
     return { store, recorder, defects, emitted };
   };
@@ -4212,7 +4194,7 @@ describe("createFeatureStore — devtools", () => {
     store.start();
     recorder.clear();
     const before = store.getSnapshot();
-    store.dispatch({ _tag: "Bump" } as never);
+    store.dispatch({ _tag: "Bump" });
 
     const [event] = only(recorder, "Transition");
     expect(event.action).toEqual({ _tag: "Bump" });
@@ -4231,7 +4213,7 @@ describe("createFeatureStore — devtools", () => {
     });
 
     store.start();
-    store.dispatch({ _tag: "Bump" } as never);
+    store.dispatch({ _tag: "Bump" });
 
     expect(recorder.events[0].name).toBe("WychFeature");
   });
@@ -4272,12 +4254,12 @@ describe("createFeatureStore — devtools", () => {
       },
     });
 
-    store.dispatch({ _tag: "Bump" } as never);
+    store.dispatch({ _tag: "Bump" });
     expect(recorder.events).toHaveLength(0);
 
     // And it recovers: the window closes at `start`, it does not latch.
     store.start();
-    store.dispatch({ _tag: "Bump" } as never);
+    store.dispatch({ _tag: "Bump" });
     expect(recorder.events.length).toBeGreaterThan(0);
   });
 
@@ -4299,7 +4281,7 @@ describe("createFeatureStore — devtools", () => {
     });
 
     store.start();
-    store.dispatch({ _tag: "Bump" } as never);
+    store.dispatch({ _tag: "Bump" });
     await settle();
 
     const commands = only(recorder, "Command");
@@ -4335,7 +4317,7 @@ describe("createFeatureStore — devtools", () => {
     store.stop();
     await settle();
     recorder.clear();
-    store.dispatch({ _tag: "Bump" } as never);
+    store.dispatch({ _tag: "Bump" });
 
     const commands = only(recorder, "Command");
     expect(commands).toHaveLength(1);
@@ -4360,7 +4342,7 @@ describe("createFeatureStore — devtools", () => {
     });
 
     store.start();
-    store.dispatch({ _tag: "Bump" } as never);
+    store.dispatch({ _tag: "Bump" });
     await settle();
 
     const landed = only(recorder, "Transition").find((event) => event.action._tag === "Land");
@@ -4379,7 +4361,7 @@ describe("createFeatureStore — devtools", () => {
     });
 
     store.start();
-    store.dispatch({ _tag: "Bump" } as never);
+    store.dispatch({ _tag: "Bump" });
     await settle();
 
     const landed = only(recorder, "Transition").find((event) => event.action._tag === "Land");
@@ -4407,7 +4389,7 @@ describe("createFeatureStore — devtools", () => {
     });
 
     store.start();
-    store.dispatch({ _tag: "Bump" } as never);
+    store.dispatch({ _tag: "Bump" });
     await settle();
 
     const outputs = only(recorder, "Output");
@@ -4433,7 +4415,7 @@ describe("createFeatureStore — devtools", () => {
 
     store.start();
     recorder.clear();
-    store.dispatch({ _tag: "Placed", at: 7 } as never);
+    store.dispatch({ _tag: "Placed", at: 7 });
     await settle();
 
     expect(emitted).toEqual([{ _tag: "Placed", at: 7 }]);
@@ -4460,7 +4442,7 @@ describe("createFeatureStore — devtools", () => {
     });
 
     store.start();
-    store.dispatch({ _tag: "Bump" } as never);
+    store.dispatch({ _tag: "Bump" });
     await settle();
 
     const raised = only(recorder, "Defect");
@@ -4486,7 +4468,7 @@ describe("createFeatureStore — devtools", () => {
     });
 
     store.start();
-    store.dispatch({ _tag: "Bump" } as never);
+    store.dispatch({ _tag: "Bump" });
     await settle();
 
     const raised = only(recorder, "Defect");
@@ -4513,7 +4495,7 @@ describe("createFeatureStore — devtools", () => {
     });
 
     store.start();
-    store.dispatch({ _tag: "Bump" } as never);
+    store.dispatch({ _tag: "Bump" });
     await settle();
 
     const raised = only(recorder, "Defect");
@@ -4550,7 +4532,7 @@ describe("createFeatureStore — devtools", () => {
     });
 
     store.start();
-    store.dispatch({ _tag: "Bump" } as never);
+    store.dispatch({ _tag: "Bump" });
     await settle();
 
     // Straight to the boundary, exactly as a bad prop would go.
@@ -4580,7 +4562,7 @@ describe("createFeatureStore — devtools", () => {
     });
 
     store.start();
-    store.dispatch({ _tag: "Bump" } as never);
+    store.dispatch({ _tag: "Bump" });
     await settle();
 
     expect(store.getSnapshot()).toEqual({ count: 1 });
@@ -4639,8 +4621,8 @@ describe("createFeatureStore — devtools", () => {
     });
 
     store.start();
-    store.dispatch({ _tag: "Bump" } as never);
-    store.dispatch({ _tag: "Bump" } as never);
+    store.dispatch({ _tag: "Bump" });
+    store.dispatch({ _tag: "Bump" });
     await settle();
 
     expect(store.getSnapshot()).toEqual({ count: 2 });
@@ -4745,7 +4727,7 @@ describe("createFeatureStore — devtools", () => {
     });
 
     store.start();
-    store.dispatch({ _tag: "Bump" } as never);
+    store.dispatch({ _tag: "Bump" });
     await settle();
 
     expect(recorder.events.length).toBeGreaterThan(3);
@@ -4826,7 +4808,7 @@ describe("createFeatureStore — devtools", () => {
     });
 
     store.start();
-    store.dispatch({ _tag: "Bump" } as never);
+    store.dispatch({ _tag: "Bump" });
     await settle();
 
     const errorFold = only(recorder, "Transition").find((event) => event.action._tag === "Error");
@@ -4854,7 +4836,7 @@ describe("createFeatureStore — devtools", () => {
     });
 
     const store = createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: { id: "a" },
       equivalence,
       runtime: testRuntime(),
@@ -4864,7 +4846,7 @@ describe("createFeatureStore — devtools", () => {
     });
 
     store.start();
-    store.dispatch({ _tag: "Bump" } as never);
+    store.dispatch({ _tag: "Bump" });
     await settle();
     store.stop();
 
@@ -4890,8 +4872,8 @@ describe("createFeatureStore — devtools", () => {
     });
 
     store.start();
-    store.dispatch({ _tag: "Bump" } as never);
-    store.dispatch({ _tag: "Bump" } as never);
+    store.dispatch({ _tag: "Bump" });
+    store.dispatch({ _tag: "Bump" });
     await settle();
 
     expect(recorder.events.length).toBeGreaterThan(1);
@@ -4913,7 +4895,7 @@ describe("Children", () => {
     expect(() =>
       define({
         props: Schema.Struct({}),
-        state: Schema.Struct({ node: Children }) as never,
+        state: Schema.Struct({ node: Children }),
         action: [Action("Bump", {})],
       }),
     ).toThrow(/node.*state.*props/s);
@@ -4928,7 +4910,7 @@ describe("Children", () => {
 
   const makeFeature = (props: Schema.Struct<any>) =>
     define({
-      props: props as never,
+      props: props,
       state: Schema.Struct({ count: Schema.Number }),
       action: [Action("Bump", {})],
     }).create({
@@ -4948,15 +4930,13 @@ describe("Children", () => {
     const feature = makeFeature(options.props);
 
     return createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: options.initial,
       equivalence: {
         props: Schema.toEquivalence(options.props),
         hooks: Equivalence.Record(Equivalence.strictEqual<unknown>()),
-      } as any,
-      runtime: ManagedRuntime.make(
-        devtoolsLayer(options.sink),
-      ) as unknown as ManagedRuntime.ManagedRuntime<any, any>,
+      },
+      runtime: ManagedRuntime.make(devtoolsLayer(options.sink)),
       layer: undefined,
       emit: () => {},
       defect: () => {},
@@ -5080,7 +5060,7 @@ describe("Children", () => {
     const seen: Array<unknown> = [];
 
     const feature = define({
-      props: Props as never,
+      props: Props,
       state: Schema.Struct({ count: Schema.Number }),
       action: [Action("Bump", {})],
     }).create({
@@ -5096,15 +5076,13 @@ describe("Children", () => {
     });
 
     const mounted = createFeatureStore({
-      feature: feature as any,
+      feature: feature,
       props: { id: "a", children: node() },
       equivalence: {
         props: Schema.toEquivalence(Props),
         hooks: Equivalence.Record(Equivalence.strictEqual<unknown>()),
-      } as any,
-      runtime: ManagedRuntime.make(
-        devtoolsLayer(recorder.sink),
-      ) as unknown as ManagedRuntime.ManagedRuntime<any, any>,
+      },
+      runtime: ManagedRuntime.make(devtoolsLayer(recorder.sink)),
       layer: undefined,
       emit: () => {},
       defect: () => {},

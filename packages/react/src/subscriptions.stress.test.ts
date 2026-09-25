@@ -34,7 +34,7 @@ const holding = presence(() => Effect.never);
 
 const presenceStore = (
   feature: ReturnType<typeof presence>,
-  runtime: ManagedRuntime.ManagedRuntime<any, any>,
+  runtime: ManagedRuntime.ManagedRuntime<never, unknown>,
 ) => {
   const store = createFeatureStore({
     feature,
@@ -252,9 +252,7 @@ describe("long sessions", () => {
       onEvent: (event) => void counts.set(event._tag, (counts.get(event._tag) ?? 0) + 1),
     };
     const count = (tag: DevtoolsEvent["_tag"]) => counts.get(tag) ?? 0;
-    const runtime = ManagedRuntime.make(
-      devtoolsLayer(sink),
-    ) as unknown as ManagedRuntime.ManagedRuntime<any, any>;
+    const runtime = ManagedRuntime.make(devtoolsLayer(sink));
 
     const refs: Array<WeakRef<object>> = [];
     const heap: Array<number> = [];

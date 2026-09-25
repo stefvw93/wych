@@ -75,7 +75,7 @@ describe("Task", () => {
   it("declares the two tags from the name, the command, and the field schema, and writes no state", () => {
     const search = Task("WallhavenSearch", { success: Schema.String, onError: Task.errorMessage });
 
-    expect(search.actions.map((a) => (a.make as any)({ value: "x", error: "x" })._tag)).toEqual([
+    expect(search.actions.map((a) => a.make({ value: "x", error: "x" })._tag)).toEqual([
       "WallhavenSearchResolved",
       "WallhavenSearchRejected",
     ]);

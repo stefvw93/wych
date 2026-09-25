@@ -1742,14 +1742,17 @@ export const define: <
 /**
  * The live half of `run`, and the seam the React binding is written against.
  */
-export interface FeatureStore<Props, State, Action, H extends AnyHooks> {
+export interface FeatureStore<Props, State, Action, H extends AnyHooks, Output = never> {
   /** The `useSyncExternalStore` pair. `getSnapshot` must be reference-stable
    *  between changes, or React re-renders forever. */
   readonly subscribe: (onStoreChange: () => void) => () => void;
   readonly getSnapshot: () => State;
 
-  /** The declared vocabulary, from `render`. Stable identity — it lands in props. */
-  readonly dispatch: Dispatch<Action>;
+  /**
+   * `render`'s dispatch: the feature's actions and its outputs, routed by tag.
+   * Stable identity — it lands in props.
+   */
+  readonly dispatch: Dispatch<Action | Output>;
 
   /**
    * The snapshot's ambient half, and, because it is the only thing that sees
@@ -1827,21 +1830,25 @@ const commandCause = (ctx: CommandContext): DevtoolsCause =>
     ? { _tag: "Command", action: ctx.tag }
     : { _tag: "Command", action: ctx.tag, key: ctx.key };
 
-export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(args: {
-  readonly feature: Feature<Props, State, Action, any, H, any>;
+export const createFeatureStore = <Props, State, Action, Output, H extends AnyHooks>(args: {
+  readonly feature: Feature<Props, State, Action, Output, H, any>;
   readonly props: Props;
   readonly equivalence: {
     readonly props: Equivalence.Equivalence<Props>;
     readonly hooks: Equivalence.Equivalence<H>;
   };
-  readonly runtime: ManagedRuntime.ManagedRuntime<any, any>;
+  /** Any root runtime: `R` is contravariant, so `never` accepts every one. */
+  readonly runtime: ManagedRuntime.ManagedRuntime<never, unknown>;
   readonly layer: Layer.Layer<any, any, any> | undefined;
   readonly emit: (output: { readonly _tag: string }) => void;
   readonly defect: (error: unknown) => void;
   readonly name?: string;
   readonly instance?: string;
-}): FeatureStore<Props, State, Action, H> => {
-  const { feature, equivalence, runtime, layer, emit, defect } = args;
+}): FeatureStore<Props, State, Action, H, Output> => {
+  const { feature, equivalence, layer, emit, defect } = args;
+  // The store reads the root context and forks on it; which services the
+  // root provides is `component`'s check, not the store's.
+  const runtime = args.runtime as ManagedRuntime.ManagedRuntime<any, any>;
   const {
     initialState,
     outputTags,
@@ -2364,7 +2371,7 @@ export const createFeatureStore = <Props, State, Action, H extends AnyHooks>(arg
     };
   };
 
-  const store: FeatureStore<Props, State, Action, H> = {
+  const store: FeatureStore<Props, State, Action, H, Output> = {
     subscribe: (onStoreChange) => {
       subscribers.add(onStoreChange);
       return () => void subscribers.delete(onStoreChange);

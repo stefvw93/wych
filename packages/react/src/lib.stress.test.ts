@@ -39,7 +39,7 @@ import {
   until,
 } from "./__fixtures__/stress";
 import { devtoolsLayer, type DevtoolsSink } from "./devtools";
-import { Action, Command, createFeatureStore, define } from "./lib";
+import { Action, Command, createFeatureStore, define, type FeatureStore } from "./lib";
 import { Task } from "./utils/task";
 
 class Touch extends Context.Service<Touch, { readonly touch: () => void }>()("StressTouch") {}
@@ -165,7 +165,7 @@ describe("high-frequency sources", () => {
     const runtime = silentRuntime();
     let peakPending = 0;
     // Assigned after the store exists; the handler closes over it.
-    let store: ReturnType<typeof createFeatureStore<{}, { count: number }, any, {}>>;
+    let store: FeatureStore<{}, { count: number }, any, {}>;
     store = createFeatureStore({
       feature,
       props: {},
@@ -201,9 +201,7 @@ describe("high-frequency sources", () => {
         throw new Error("sink down");
       },
     };
-    const withSink = ManagedRuntime.make(
-      devtoolsLayer(throwing),
-    ) as unknown as ManagedRuntime.ManagedRuntime<any, any>;
+    const withSink = ManagedRuntime.make(devtoolsLayer(throwing));
     const a = counterStore(withSink);
     const b = counterStore(silentRuntime());
     a.start();
@@ -436,7 +434,7 @@ describe("deep async churn", () => {
       render: () => null,
     });
     const { runtime, tagged } = recordingRuntime();
-    let store: ReturnType<typeof createFeatureStore<{}, { n: number }, any, {}>>;
+    let store: FeatureStore<{}, { n: number }, any, {}>;
     store = createFeatureStore({
       feature,
       props: {},
@@ -778,9 +776,7 @@ describe("long sessions", () => {
       error: () => {},
     };
     const sink = createConsoleDevtools({ console: output });
-    const runtime = ManagedRuntime.make(
-      devtoolsLayer(sink),
-    ) as unknown as ManagedRuntime.ManagedRuntime<any, any>;
+    const runtime = ManagedRuntime.make(devtoolsLayer(sink));
 
     // 600 mounts, each with two events, none stopped: the map passes 512 and
     // is cleared wholesale; the next event for a known mount then has no
