@@ -85,17 +85,15 @@ const Editor = define({
 const editor = Editor.create({
   initialState: (props) => ({ text: props.initialText, dirty: false }),
   reducer: {
-    TextChanged: ({ text }, { draft, props }) => {
+    TextChanged: ({ text }, { draft, props, tasks }) => {
       draft.text = text;
       draft.dirty = text !== props.initialText;
-      draft.save = Task.idle;
-      return draft;
+      return tasks.save.cancel();
     },
-    Reverted: (_payload, { draft, props }) => {
+    Reverted: (_payload, { draft, props, tasks }) => {
       draft.text = props.initialText;
       draft.dirty = false;
-      draft.save = Task.idle;
-      return draft;
+      return tasks.save.cancel();
     },
     SaveClicked: (_payload, { state, props, tasks }) =>
       tasks.save.start({ id: props.noteId, text: state.text }),

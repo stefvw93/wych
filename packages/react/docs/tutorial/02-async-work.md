@@ -323,17 +323,15 @@ two actions with it. The field holds one of four cases: `Idle`, `Pending`,
 
 ```ts continue
 const reducer = Editor.reducer({
-  TextChanged: ({ text }, { draft, props }) => {
+  TextChanged: ({ text }, { draft, props, tasks }) => {
     draft.text = text;
     draft.dirty = text !== props.initialText;
-    draft.save = Task.idle;
-    return draft;
+    return tasks.save.cancel();
   },
-  Reverted: (_payload, { draft, props }) => {
+  Reverted: (_payload, { draft, props, tasks }) => {
     draft.text = props.initialText;
     draft.dirty = false;
-    draft.save = Task.idle;
-    return draft;
+    return tasks.save.cancel();
   },
   SaveClicked: (_payload, { state, props, tasks }) =>
     tasks.save.start({ id: props.noteId, text: state.text }),
@@ -350,7 +348,8 @@ The snapshot carries one handle per key of the slot, under `tasks`.
 beside the command, the same two lines `SaveClicked` wrote by hand. Under
 `mode: "first"`, a start while the field is `Pending` writes nothing and
 issues `Command.none`. `tasks.save.cancel()` writes `Idle` and interrupts the
-save.
+save. `TextChanged` and `Reverted` return it too: an edit makes the save in
+flight stale, so it stops before its result can mark the new text as saved.
 
 When the save settles, the runtime writes `Resolved { value }` or
 `Rejected { error }` into `save` before any handler runs. So the reducer
