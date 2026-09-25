@@ -165,7 +165,7 @@ the same return.
 - [x] `into(key)` returns `{ ${Name}Resolved, ${Name}Rejected }`, in that key order; `Resolved` returns `{ ...state, [key]: Task.resolved(value) }`, `Rejected` returns `{ ...state, [key]: Task.rejected(error) }`, and folded through `feature.run` the field lands exactly as with hand-written handlers.
 - [x] An explicit handler written after `...op.into(key)` replaces the generated one for that tag; the other generated handler still stands.
 - [x] `op.resolvedInto(key, then)` is a `${Name}Resolved` handler: it writes `Task.resolved(value)` into `snapshot.draft[key]`, then returns `then(value, snapshot)` with the same snapshot, so what `then` writes lands beside the field and a returned draft is the one finished state. `op.rejectedInto` is the same for `Rejected`. A returned state other than the draft is the fold's draft `TypeError`; a lazy command beside the draft sees the finished state. An announced operation has neither.
-- [x] `actions` is `[${Name}Resolved { value: Success }, ${Name}Rejected { error: Failure }]`. The operation itself goes into `define`'s slot (`action: [Clicked, search]`), and so does `...op.actions` inside an array.
+- [x] `actions` is `[${Name}Resolved { value: Success }, ${Name}Rejected { error: Failure }]`. The operation itself goes into `define`'s slot (`actions: [Clicked, search]`), and so does `...op.actions` inside an array.
 - [x] A lower-case `name` is a compile error, on the same terms as an action tag.
 - [x] The effect's success dispatches `${Name}Resolved` with the value, and lands in whatever field the handler writes.
 - [x] A typed failure passes through `onError` and dispatches `${Name}Rejected`; a **defect** passes through `onError` too — nothing reaches the `Error` lifecycle handler.

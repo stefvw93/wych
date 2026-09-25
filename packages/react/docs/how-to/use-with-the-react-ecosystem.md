@@ -68,8 +68,8 @@ const save = Task("Save", {
 const noteEditor = define({
   props: Schema.Struct({ noteId: Schema.String }),
   state: Schema.Struct({ draft: Schema.String, save: save.schema }),
-  action: [actions, save],
-  output: Saved,
+  actions: [actions, save],
+  outputs: Saved,
   useUnsafeHooks: (props) => {
     const query = useQuery({
       queryKey: noteKey(props.noteId),

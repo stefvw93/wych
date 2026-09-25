@@ -24,8 +24,8 @@ const NoteSaved = Action.output("NoteSaved", { noteId: Schema.String, text: Sche
 const NoteEditor = define({
   props: Schema.Struct({ noteId: Schema.String, autosave: Schema.Boolean }),
   state: Schema.Struct({ text: Schema.String, dirty: Schema.Boolean }),
-  action: actions,
-  output: NoteSaved,
+  actions,
+  outputs: NoteSaved,
 });
 ```
 
@@ -35,13 +35,13 @@ const NoteEditor = define({
 define({
   props: Schema.Struct, // required
   state: Schema.Struct, // required
-  action: MemberSource<"internal">, // required
-  output?: MemberSource<"outbound">, // optional
+  actions: MemberSource<"internal">, // required
+  outputs?: MemberSource<"outbound">, // optional
   useUnsafeHooks?: (props, state) => H,
 }): FeatureDefinition
 ```
 
-`props` and `state` are `Schema.Struct`s. `action` and `output` each take a
+`props` and `state` are `Schema.Struct`s. `actions` and `outputs` each take a
 message, a record of messages (`Action({ ... })`), a
 [task](/docs/reference/tasks) operation, or an array of those, one array
 nested inside another at most. `define` infers `Props`, `State`, the messages
@@ -54,18 +54,18 @@ const autosave = Task("Autosave", { success: Schema.String });
 const OneMessage = define({
   props: Schema.Struct({}),
   state: Schema.Struct({}),
-  action: actions.Saved,
+  actions: actions.Saved,
 });
 
 const WithTask = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ text: Schema.String, autosave: autosave.schema }),
-  action: [actions, autosave],
-  output: [NoteSaved, Action.output("Discarded")],
+  actions: [actions, autosave],
+  outputs: [NoteSaved, Action.output("Discarded")],
 });
 ```
 
-The slot fixes the channel: `action` takes internal messages only, `output`
+The slot fixes the channel: `actions` takes internal messages only, `outputs`
 outbound ones. The check is a compile error and, for a source that got past
 the types, a throw at `define`.
 
@@ -73,10 +73,10 @@ the types, a throw at `define`.
 define({
   props: Schema.Struct({}),
   state: Schema.Struct({}),
-  // @ts-expect-error NoteSaved is outbound and cannot be declared in "action"
-  action: [actions, NoteSaved],
+  // @ts-expect-error NoteSaved is outbound and cannot be declared in "actions"
+  actions: [actions, NoteSaved],
 });
-// throws TypeError: define: "NoteSaved" is outbound and cannot be declared in "action"
+// throws TypeError: define: "NoteSaved" is outbound and cannot be declared in "actions"
 ```
 
 Two more rules are compile errors: an output tag equal to an action tag, and
@@ -89,18 +89,18 @@ const Collides = Action.output("Typed");
 define({
   props: Schema.Struct({}),
   state: Schema.Struct({}),
-  action: actions.Typed,
+  actions: actions.Typed,
   // @ts-expect-error output tag "Typed" collides with an action tag
-  output: Collides,
+  outputs: Collides,
 });
 // throws TypeError: define: tag "Typed" is declared twice
 
 const propCollision = define({
   props: Schema.Struct({ onNoteSaved: Schema.String }),
   state: Schema.Struct({}),
-  action: actions.Saved,
+  actions: actions.Saved,
   // @ts-expect-error prop "onNoteSaved" collides with the derived output prop
-  output: NoteSaved,
+  outputs: NoteSaved,
 });
 ```
 
@@ -114,7 +114,7 @@ devtools sink verbatim and an opaque value does not encode.
 define({
   props: Schema.Struct({}),
   state: Schema.Struct({ children: Children }),
-  action: actions.Saved,
+  actions: actions.Saved,
 });
 // throws TypeError: Opaque field "children" declared in the state schema
 ```
@@ -136,7 +136,7 @@ hooks hold and `useThing(id)`-shaped hooks work. Its result arrives as
 const WithHooks = define({
   props: Schema.Struct({ noteId: Schema.String }),
   state: Schema.Struct({ text: Schema.String }),
-  action: actions.Typed,
+  actions: actions.Typed,
   useUnsafeHooks: (props) => ({ storageKey: `note:${props.noteId}` }),
 });
 ```
@@ -589,7 +589,7 @@ const dying = Command.effect(() => Effect.die(new Error("kaboom")));
 const flaky = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ crashed: Schema.Boolean }),
-  action: Boomed,
+  actions: Boomed,
 }).create({
   initialState: () => ({ crashed: false }),
   reducer: {
@@ -638,7 +638,7 @@ const Panel = define({
     row: Children.as<(id: string) => React.ReactNode>(),
   }),
   state: Schema.Struct({ open: Schema.Boolean }),
-  action: Action("Toggled"),
+  actions: Action("Toggled"),
 });
 
 const panel = Panel.create({

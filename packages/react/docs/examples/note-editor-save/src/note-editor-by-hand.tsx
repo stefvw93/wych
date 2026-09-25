@@ -23,7 +23,7 @@ const ByHand = define({
     saving: Schema.Boolean,
     error: Schema.String,
   }),
-  action: actions,
+  actions,
 });
 
 const initialState = ByHand.initialState((props) => ({

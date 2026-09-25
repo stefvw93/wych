@@ -68,8 +68,8 @@ type Snap = { readonly state: S; readonly props: { readonly room: string }; read
 const Def = define({
   props: Props,
   state: State,
-  action: [Go, Same, Kill, Tick],
-  output: [Out],
+  actions: [Go, Same, Kill, Tick],
+  outputs: [Out],
 });
 
 const baseReducer = {

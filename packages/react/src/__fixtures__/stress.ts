@@ -189,7 +189,7 @@ export const Noop = Action("Noop", {});
 export const counter = define({
   props: CounterProps,
   state: CounterState,
-  action: [Bump, Same, Noop],
+  actions: [Bump, Same, Noop],
 }).create({
   initialState: () => ({ count: 0 }),
   reducer: {
@@ -230,7 +230,7 @@ export const restarter = (options: { readonly finalizerMs?: number } = {}) => {
   return define({
     props: RestartProps,
     state: RestartState,
-    action: [Go, Kill],
+    actions: [Go, Kill],
   }).create({
     initialState: () => ({ issued: 0, errors: 0 }),
     reducer: {
@@ -276,7 +276,7 @@ export const presence = (
   define({
     props: PresenceProps,
     state: PresenceState,
-    action: [Declare, Tick],
+    actions: [Declare, Tick],
   }).create({
     initialState: () => ({ keys: [], seen: 0, errors: 0 }),
     reducer: {
@@ -308,7 +308,7 @@ export const Hit = Action("Hit", { i: Schema.Number });
 export const burst = define({
   props: BurstProps,
   state: BurstState,
-  action: [Fire, Hit],
+  actions: [Fire, Hit],
 }).create({
   initialState: () => ({ hits: 0, errors: 0 }),
   reducer: {

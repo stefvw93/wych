@@ -33,7 +33,7 @@ const loadMetrics = Command.effect(Loaded, (dispatch) =>
 const Dashboard = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ status: Schema.String, attempts: Schema.Number, value: Schema.Number }),
-  action: [Loaded, Retry],
+  actions: [Loaded, Retry],
 });
 
 export const dashboard = Dashboard.create({

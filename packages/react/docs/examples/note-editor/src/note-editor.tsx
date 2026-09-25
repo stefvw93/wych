@@ -7,7 +7,7 @@ export const actions = Action({ TextChanged: { text: Schema.String }, Reverted: 
 const Editor = define({
   props: Schema.Struct({ noteId: Schema.String, initialText: Schema.String }),
   state: Schema.Struct({ text: Schema.String, dirty: Schema.Boolean }),
-  action: actions,
+  actions,
 });
 
 const initialState = Editor.initialState((props) => ({

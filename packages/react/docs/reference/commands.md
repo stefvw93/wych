@@ -33,7 +33,7 @@ const actions = Action({
 const Search = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ text: Schema.String, hits: Schema.Array(Schema.String) }),
-  action: actions,
+  actions,
 });
 ```
 
@@ -402,8 +402,8 @@ const outputs = Action.output({ Picked: { hit: Schema.String }, Dismissed: {} })
 const WithOutput = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ text: Schema.String, hits: Schema.Array(Schema.String) }),
-  action: actions,
-  output: outputs,
+  actions,
+  outputs,
 });
 
 const outputReducer = WithOutput.reducer({

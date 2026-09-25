@@ -21,7 +21,7 @@ const List = define({
     notes: loadNotes.schema,
     lastSaved: Schema.String,
   }),
-  action: [NoteSaved, loadNotes],
+  actions: [NoteSaved, loadNotes],
 });
 
 const listReducer = List.reducer({

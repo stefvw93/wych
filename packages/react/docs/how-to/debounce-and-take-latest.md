@@ -30,7 +30,7 @@ const Loaded = Action("Loaded", { hits: Hits });
 const searchFeature = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ query: Schema.String, hits: Hits }),
-  action: [Typed, Loaded],
+  actions: [Typed, Loaded],
 }).create({
   initialState: () => ({ query: "", hits: [] }),
   reducer: {
@@ -78,7 +78,7 @@ The next keystroke returns the same command again. Its `cancel` half interrupts 
 
 ## Take latest with a task
 
-`Task` declares the two result actions, the command, and `search.schema`, the schema of the state field that holds the result. The operation goes into the `action` slot beside the feature's own messages. Its default `mode` is `"latest"`, which books the work under `Task/${Name}` with `Command.restart`.
+`Task` declares the two result actions, the command, and `search.schema`, the schema of the state field that holds the result. The operation goes into the `actions` slot beside the feature's own messages. Its default `mode` is `"latest"`, which books the work under `Task/${Name}` with `Command.restart`.
 
 ```tsx continue
 const search = Task("Search", {
@@ -95,7 +95,7 @@ const Cleared = Action("Cleared");
 const taskSearch = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ query: Schema.String, results: search.schema }),
-  action: [Typed, Cleared, search],
+  actions: [Typed, Cleared, search],
 }).create({
   initialState: () => ({ query: "", results: Task.idle }),
   reducer: {
@@ -169,7 +169,7 @@ const searchEvery = Task("SearchEvery", {
 const everySearch = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ results: searchEvery.schema }),
-  action: [Typed, searchEvery],
+  actions: [Typed, searchEvery],
 }).create({
   initialState: () => ({ results: Task.idle }),
   reducer: {
@@ -234,7 +234,7 @@ const MoreClicked = Action("MoreClicked");
 const pagedSearch = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ query: Schema.String, page: Schema.Number, results: searchPage.schema }),
-  action: [Typed, MoreClicked, searchPage],
+  actions: [Typed, MoreClicked, searchPage],
 }).create({
   initialState: () => ({ query: "", page: 1, results: Task.idle }),
   reducer: {

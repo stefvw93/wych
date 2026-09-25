@@ -30,8 +30,8 @@ export const save = Task("Save", {
 export const noteEditor = define({
   props: Schema.Struct({ noteId: Schema.String }),
   state: Schema.Struct({ draft: Schema.String, save: save.schema }),
-  action: [actions, save],
-  output: Saved,
+  actions: [actions, save],
+  outputs: Saved,
   /**
    * Read path: `useQuery` runs in render position. Only primitives are
    * returned, because hooks are compared per key with `Object.is`; the result

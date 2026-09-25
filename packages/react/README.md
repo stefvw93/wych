@@ -46,7 +46,7 @@ const search = Task("Search", {
 const taskSearch = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ query: Schema.String, results: search.schema }),
-  action: [actions, search],
+  actions: [actions, search],
 }).create({
   initialState: () => ({ query: "", results: Task.idle }),
   reducer: {

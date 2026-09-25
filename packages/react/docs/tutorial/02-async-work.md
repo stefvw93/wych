@@ -84,7 +84,7 @@ const ByHand = define({
     saving: Schema.Boolean,
     error: Schema.String,
   }),
-  action: byHandActions,
+  actions: byHandActions,
 });
 
 const byHandInitialState = ByHand.initialState((props) => ({
@@ -303,7 +303,7 @@ const Editor = define({
     dirty: Schema.Boolean,
     save: saveNote.schema,
   }),
-  action: [actions, saveNote],
+  actions: [actions, saveNote],
 });
 
 const initialState = Editor.initialState((props) => ({
@@ -313,7 +313,7 @@ const initialState = Editor.initialState((props) => ({
 }));
 ```
 
-The operation goes into the `action` slot beside the record, and brings its
+The operation goes into the `actions` slot beside the record, and brings its
 two actions with it. The reducer now owes a handler for each.
 
 ```ts continue

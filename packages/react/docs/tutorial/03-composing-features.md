@@ -80,8 +80,8 @@ const Editor = define({
     dirty: Schema.Boolean,
     save: saveNote.schema,
   }),
-  action: [actions, saveNote],
-  output: outputs,
+  actions: [actions, saveNote],
+  outputs,
 });
 
 const editor = Editor.create({
@@ -168,7 +168,7 @@ const List = define({
     notes: loadNotes.schema,
     lastSaved: Schema.String,
   }),
-  action: [NoteSaved, loadNotes],
+  actions: [NoteSaved, loadNotes],
 });
 ```
 

@@ -7,7 +7,7 @@ const Bumped = Action("Bumped");
 const counter = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ count: Schema.Number }),
-  action: [Bumped],
+  actions: [Bumped],
 }).create({
   initialState: () => ({ count: 0 }),
   reducer: { Bumped: (_payload, { state }) => ({ count: state.count + 1 }) },

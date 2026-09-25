@@ -34,7 +34,7 @@ const Bump = Action("Bump", {});
 const Counter = define({
   props: Schema.Struct({ id: Schema.Number }),
   state: Schema.Struct({ count: Schema.Number }),
-  action: [Bump],
+  actions: [Bump],
 });
 
 const counter = Counter.create({
@@ -57,7 +57,7 @@ const Tick = Action("Tick", {});
 const Presence = define({
   props: Schema.Struct({ room: Schema.String, id: Schema.Number }),
   state: Schema.Struct({ ticks: Schema.Number }),
-  action: [Tick],
+  actions: [Tick],
 });
 
 /** One key per room. `emit` makes it tick every few milliseconds. */

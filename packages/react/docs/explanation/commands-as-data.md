@@ -37,7 +37,7 @@ const Uploader = define({
     percent: Schema.Number,
     status: Schema.String,
   }),
-  action: actions,
+  actions,
 });
 ```
 

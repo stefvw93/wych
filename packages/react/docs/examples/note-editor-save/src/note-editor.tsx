@@ -26,7 +26,7 @@ const Editor = define({
     dirty: Schema.Boolean,
     save: saveNote.schema,
   }),
-  action: [actions, saveNote],
+  actions: [actions, saveNote],
 });
 
 const initialState = Editor.initialState((props) => ({

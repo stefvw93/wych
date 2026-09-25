@@ -303,8 +303,8 @@ export interface TaskOperationBase<
   Ch extends "internal" | "outbound" = "internal",
 > extends MemberCarrier<TaskActions<Name, Success, Failure, Ch>> {
   /**
-   * The two actions. The operation itself goes into `define`'s `action` slot
-   * beside the feature's own (`action: [actions, search]`), or into `output`
+   * The two actions. The operation itself goes into `define`'s `actions` slot
+   * beside the feature's own (`actions: [actions, search]`), or into `outputs`
    * for `Task.output`; this is the same pair, for reading.
    */
   readonly actions: TaskActions<Name, Success, Failure, Ch>;

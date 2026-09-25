@@ -23,7 +23,7 @@ booleans cannot spell four cases.
 the command, the failure mapping (`Task.errorMessage` by default) and the
 state field's schema, `saveNote.schema`. The field is a `TaskValue`, so it is
 always exactly one of `Idle`, `Pending`, `Resolved`, or `Rejected`. The
-operation goes into the `action` slot beside the feature's own record. The
+operation goes into the `actions` slot beside the feature's own record. The
 double-click guard reads the field:
 
 ```tsx fragment

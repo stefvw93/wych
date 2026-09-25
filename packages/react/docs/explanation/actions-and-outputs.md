@@ -33,15 +33,15 @@ const outputs = Action.output({
 const Dialog = define({
   props: Schema.Struct({ title: Schema.String, confirmWord: Schema.String }),
   state: Schema.Struct({ open: Schema.Boolean, typed: Schema.String }),
-  action: actions,
-  output: outputs,
+  actions,
+  outputs,
 });
 ```
 
 `Action` brands a message internal and `Action.output` brands it outbound.
 The brand is a runtime property and a type, so the two channels are not
 assignable to each other. The `define` slot is where that is checked:
-`action` takes internal messages and `output` takes outbound ones, so a
+`actions` takes internal messages and `outputs` takes outbound ones, so a
 message in the wrong slot fails to compile, on its own or inside an array.
 `define` repeats the check at runtime, for a value that got past the types
 through a cast.
@@ -51,9 +51,9 @@ define({
   props: Schema.Struct({}),
   state: Schema.Struct({}),
   // @ts-expect-error an outbound message cannot be declared as an action
-  action: [actions.Opened, outputs.Confirmed],
+  actions: [actions.Opened, outputs.Confirmed],
 });
-// throws TypeError: define: "Confirmed" is outbound and cannot be declared in "action"
+// throws TypeError: define: "Confirmed" is outbound and cannot be declared in "actions"
 ```
 
 ## Why an output never re-enters the reducer

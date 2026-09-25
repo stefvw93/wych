@@ -26,8 +26,8 @@ const Editor = define({
     dirty: Schema.Boolean,
     save: saveNote.schema,
   }),
-  action: [actions, saveNote],
-  output: outputs,
+  actions: [actions, saveNote],
+  outputs,
 });
 
 export const editor = Editor.create({

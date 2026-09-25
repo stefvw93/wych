@@ -32,7 +32,7 @@ const actions = Action({
 const Dashboard = define({
   props: Schema.Struct({ intervalMs: Schema.Number }),
   state: Schema.Struct({ latest: Schema.Number, paused: Schema.Boolean }),
-  action: actions,
+  actions,
 });
 
 const poll = (intervalMs: number) =>

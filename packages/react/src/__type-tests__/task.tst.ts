@@ -260,7 +260,7 @@ test("an announced operation is the same shape — only the channel differs", ()
 test("into(key) spreads into a reducer, keeps it exhaustive, and asks for no service", () => {
   const search = Task("Search", { success: Schema.String, onError: Task.errorMessage });
   const State = Schema.Struct({ colorValue: Schema.String, search: Task.schema(Schema.String) });
-  const F = define({ props: Props, state: State, action: [Clicked, ...search.actions] });
+  const F = define({ props: Props, state: State, actions: [Clicked, ...search.actions] });
 
   const reducer = F.reducer({
     Clicked: (_a, { state }) => Task.start(state, "search", search.run(Effect.succeed("ok"))),
@@ -284,7 +284,7 @@ test("into rejects a key that is not a TaskValue field of the operation's own ty
     count: Task.schema(Schema.Number),
     search: Task.schema(Schema.String),
   });
-  const F = define({ props: Props, state: State, action: [Clicked, ...search.actions] });
+  const F = define({ props: Props, state: State, actions: [Clicked, ...search.actions] });
   const Clicked_ = (_a: {}, { state }: { readonly state: typeof State.Type }) => state;
 
   // Not a TaskValue field.
@@ -300,7 +300,7 @@ test("into rejects a key that is not a TaskValue field of the operation's own ty
 test("into addresses an optional field, as Task.start does", () => {
   const search = Task("Search", { success: Schema.String, onError: Task.errorMessage });
   const State = Schema.Struct({ search: Schema.optional(Task.schema(Schema.String)) });
-  const F = define({ props: Props, state: State, action: [Clicked, ...search.actions] });
+  const F = define({ props: Props, state: State, actions: [Clicked, ...search.actions] });
 
   expect(F.reducer).type.toBeCallableWith({
     Clicked: (_a: {}, { state }: { readonly state: typeof State.Type }) => state,
@@ -311,7 +311,7 @@ test("into addresses an optional field, as Task.start does", () => {
 test("an explicit handler after the spread wins, typed by the action's payload", () => {
   const search = Task("Search", { success: Schema.String, onError: Task.errorMessage });
   const State = Schema.Struct({ first: Schema.String, search: Task.schema(Schema.String) });
-  const F = define({ props: Props, state: State, action: [Clicked, ...search.actions] });
+  const F = define({ props: Props, state: State, actions: [Clicked, ...search.actions] });
 
   F.reducer({
     Clicked: (_a, { state }) => state,
@@ -352,7 +352,7 @@ const settle = (() => {
   const F = define({
     props: Schema.Struct({ id: Schema.String }),
     state: State,
-    action: [Clicked, Picked, search],
+    actions: [Clicked, Picked, search],
   });
   const init = () => ({ selected: "", results: Task.idle, n: 0 });
   return { search, State, F, init };

@@ -35,8 +35,8 @@ const OrderPlaced = Action.output("OrderPlaced", { orderId: Schema.String });
 const Cart = define({
   props: Schema.Struct({ customerId: Schema.String }),
   state: Schema.Struct({ items: Schema.Array(Schema.String) }),
-  action: actions,
-  output: OrderPlaced,
+  actions,
+  outputs: OrderPlaced,
 });
 
 export const cart = Cart.create({

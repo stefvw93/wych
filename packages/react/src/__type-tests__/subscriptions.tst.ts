@@ -33,8 +33,8 @@ declare const presenceLayer: Layer.Layer<PresenceApi>;
 const Contextual = define({
   props: Schema.Struct({ room: Schema.String }),
   state: Schema.Struct({ count: Schema.Number }),
-  action: [Action("Ping", {}), Action("Pong", { at: Schema.Number })],
-  output: [Action.output("Left", { id: Schema.String })],
+  actions: [Action("Ping", {}), Action("Pong", { at: Schema.Number })],
+  outputs: [Action.output("Left", { id: Schema.String })],
 });
 
 // HINT: `Subscription<A, R>` is covariant in `A` on the same terms as
@@ -213,7 +213,7 @@ test("the hook's parameter is `Snapshot<Props, State, H>`", () => {
   const WithHooks = define({
     props: Schema.Struct({ room: Schema.String, children: Children }),
     state: Schema.Struct({ count: Schema.Number }),
-    action: [Action("Ping", {})],
+    actions: [Action("Ping", {})],
     useUnsafeHooks: () => ({ online: true as boolean }),
   });
 

@@ -106,7 +106,7 @@ describe("high-frequency sources", () => {
         last: Schema.Record(Schema.String, Schema.Number),
         total: Schema.Number,
       }),
-      action: [Seen, Start],
+      actions: [Seen, Start],
     }).create({
       initialState: () => ({ last: {}, total: 0 }),
       reducer: {

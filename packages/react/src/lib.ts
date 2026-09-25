@@ -162,10 +162,10 @@ export type MemberLeaf<Ch extends Channel> =
   | { readonly [tag: string]: AnyMessage<Ch> };
 
 /**
- * What `define`'s `action` and `output` slots take: a message, a record of
+ * What `define`'s `actions` and `outputs` slots take: a message, a record of
  * messages (`Action({ … })`), a `Task` operation, or an array of those, one
  * array deep inside another at most. `Ch` is the slot's channel, so an
- * outbound message in the `action` slot is a compile error.
+ * outbound message in the `actions` slot is a compile error.
  *
  * The depth is bounded because `MemberOf` recurses over it: over a recursive
  * constraint it would never bottom out.
@@ -426,7 +426,7 @@ const flattenMembers = (
 const tagsIn = (
   source: unknown,
   expected: Channel,
-  slot: "action" | "output",
+  slot: "actions" | "outputs",
   seen: Set<string>,
 ): Array<string> =>
   flattenMembers(source).map((member) => {
@@ -1497,14 +1497,14 @@ export interface FeatureDefinition<
  *
  * Every piece arrives from a *value*, so there are no explicit type arguments
  * at all — `Props`, `State`, the vocabularies and the hooks are inferred from
- * one object literal. `action` and `output` each take a message, a record of
+ * one object literal. `actions` and `outputs` each take a message, a record of
  * messages, a `Task`, or an array of those.
  *
  *     const Cart = define({
  *       props: Props,
  *       state: State,
- *       action: [actions, checkout],
- *       output: OrderPlaced,
+ *       actions: [actions, checkout],
+ *       outputs: OrderPlaced,
  *       useUnsafeHooks: …,
  *     })
  *
@@ -1519,8 +1519,8 @@ export const define: <
 >(spec: {
   readonly props: PropsSchema;
   readonly state: StateSchema;
-  readonly action: AS;
-  readonly output?: OS &
+  readonly actions: AS;
+  readonly outputs?: OS &
     Disjoint<MembersOf<AS>, MembersOf<OS>> &
     NoPropCollision<PropsSchema, MembersOf<OS>>;
 
@@ -1534,8 +1534,8 @@ export const define: <
 > = ((spec: {
   readonly props: AnyPropsSchema;
   readonly state: AnyStateSchema;
-  readonly action: unknown;
-  readonly output?: unknown;
+  readonly actions: unknown;
+  readonly outputs?: unknown;
   readonly useUnsafeHooks?: HookSpec<any, any, any>;
 }): FeatureDefinition<any, any, any, any, any> => {
   // Opaque declarations (`Children`) are redacted only in `PropsChanged`
@@ -1553,9 +1553,9 @@ export const define: <
   // past them through a cast, where a wrong channel would route an action
   // out through a prop, or an output into the reducer.
   const seen = new Set<string>();
-  tagsIn(spec.action, "internal", "action", seen);
+  tagsIn(spec.actions, "internal", "actions", seen);
   const outputTags =
-    spec.output === undefined ? [] : tagsIn(spec.output, "outbound", "output", seen);
+    spec.outputs === undefined ? [] : tagsIn(spec.outputs, "outbound", "outputs", seen);
 
   return {
     initialState: (initialState) => (props) => initialState(props),

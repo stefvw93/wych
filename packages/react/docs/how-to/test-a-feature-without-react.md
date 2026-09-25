@@ -53,8 +53,8 @@ const cart = define({
     items: Schema.Array(Item),
     charge: charge.schema,
   }),
-  action: [actions, charge],
-  output: Ordered,
+  actions: [actions, charge],
+  outputs: Ordered,
 }).create({
   initialState: () => ({ items: [], charge: Task.idle }),
   reducer: {
@@ -184,7 +184,7 @@ const Scanned = Action("Scanned");
 const scanner = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ status: Schema.String }),
-  action: [Scanned],
+  actions: [Scanned],
 }).create({
   initialState: () => ({ status: "idle" }),
   reducer: {

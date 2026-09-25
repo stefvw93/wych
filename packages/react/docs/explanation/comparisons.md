@@ -40,7 +40,7 @@ const search = Task("Search", {
 const Search = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ query: Schema.String, results: search.schema }),
-  action: [Typed, search],
+  actions: [Typed, search],
 });
 
 const searchFeature = Search.create({

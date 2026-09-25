@@ -8,7 +8,7 @@ order: 3
 
 A message is a `Schema.TaggedStruct` branded with a channel. `Action` builds
 one on the internal channel, and `Action.output` builds one on the outbound
-channel. `define`'s `action` and `output` slots collect them.
+channel. `define`'s `actions` and `outputs` slots collect them.
 
 Every snippet on this page builds on one feature: a poll widget that counts
 votes and announces the result.
@@ -30,8 +30,8 @@ const Abandoned = Action.output("Abandoned", { reason: Schema.String });
 const Poll = define({
   props: Schema.Struct({ question: Schema.String }),
   state: Schema.Struct({ votes: Schema.Number }),
-  action: actions,
-  output: [Decided, Abandoned],
+  actions,
+  outputs: [Decided, Abandoned],
 });
 ```
 
@@ -184,10 +184,10 @@ type MemberSource<Ch extends Channel> =
   | MemberLeaf<Ch>
   | ReadonlyArray<MemberLeaf<Ch> | ReadonlyArray<MemberLeaf<Ch>>>;
 
-define({ action: MemberSource<"internal">, output?: MemberSource<"outbound"> })
+define({ actions: MemberSource<"internal">, outputs?: MemberSource<"outbound"> })
 ```
 
-`action` and `output` each take a message, a record of messages, a
+`actions` and `outputs` each take a message, a record of messages, a
 [task](/docs/reference/tasks) operation, or an array of those, one array nested
 inside another at most. `define` flattens the source, so a tag from any depth
 is a handler key of the reducer.
@@ -198,14 +198,14 @@ const tally = Task("Tally", { success: Schema.Number });
 const Nested = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ votes: Schema.Number, total: tally.schema }),
-  action: [actions, [Reopened, tally]],
-  output: Decided,
+  actions: [actions, [Reopened, tally]],
+  outputs: Decided,
 });
 ```
 
-The slot is the channel check. `action` takes internal members only and
-`output` outbound ones, so an outbound message, a `Task.output` operation or a
-mixed array in `action` is a compile error, and the reverse in `output`.
+The slot is the channel check. `actions` takes internal members only and
+`outputs` outbound ones, so an outbound message, a `Task.output` operation or a
+mixed array in `actions` is a compile error, and the reverse in `outputs`.
 `define` repeats the check at runtime and throws, for a source that got past
 the types through a cast.
 
@@ -213,19 +213,19 @@ the types through a cast.
 define({
   props: Schema.Struct({}),
   state: Schema.Struct({}),
-  // @ts-expect-error Decided is outbound and cannot be declared in "action"
-  action: [actions, Decided],
+  // @ts-expect-error Decided is outbound and cannot be declared in "actions"
+  actions: [actions, Decided],
 });
-// throws TypeError: define: "Decided" is outbound and cannot be declared in "action"
+// throws TypeError: define: "Decided" is outbound and cannot be declared in "actions"
 
 define({
   props: Schema.Struct({}),
   state: Schema.Struct({}),
-  action: actions,
-  // @ts-expect-error Reopened is internal and cannot be declared in "output"
-  output: Reopened,
+  actions,
+  // @ts-expect-error Reopened is internal and cannot be declared in "outputs"
+  outputs: Reopened,
 });
-// throws TypeError: define: "Reopened" is internal and cannot be declared in "output"
+// throws TypeError: define: "Reopened" is internal and cannot be declared in "outputs"
 ```
 
 Two members with one tag unify at the type level into one union payload, so
@@ -236,7 +236,7 @@ both slots throws.
 define({
   props: Schema.Struct({}),
   state: Schema.Struct({}),
-  action: [actions, Action("Voted")],
+  actions: [actions, Action("Voted")],
 });
 // throws TypeError: define: tag "Voted" is declared twice
 ```
@@ -330,7 +330,7 @@ const announced: PollMessage = { _tag: "Decided", winner: "tea" };
 const outputTag: PollTag = "Decided";
 ```
 
-A feature with no `output` has `never` on the outbound side, so `Emit` is the
+A feature with no `outputs` has `never` on the outbound side, so `Emit` is the
 actions alone and `OutputProps` is `{}`.
 
 ```ts continue

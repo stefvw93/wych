@@ -29,7 +29,7 @@ const Changed = Action("Changed", { userId: Schema.String });
 const Presence = define({
   props: Schema.Struct({ roomId: Schema.String }),
   state: Schema.Struct({ online: Schema.Array(Schema.String) }),
-  action: Changed,
+  actions: Changed,
 });
 ```
 
@@ -269,7 +269,7 @@ it; the key stays declared as died.
 const Room = define({
   props: Schema.Struct({ roomId: Schema.String }),
   state: Schema.Struct({ online: Schema.Array(Schema.String), failed: Schema.Boolean }),
-  action: Changed,
+  actions: Changed,
 });
 
 const flaky = Room.create({

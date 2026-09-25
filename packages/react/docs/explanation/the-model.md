@@ -108,8 +108,8 @@ const Login = define({
     password: Schema.String,
     session: login.schema,
   }),
-  action: [actions, login],
-  output: SignedIn,
+  actions: [actions, login],
+  outputs: SignedIn,
 });
 ```
 
@@ -290,7 +290,7 @@ const EmailTyped = Action("EmailTyped", { email: Schema.String });
 const Login = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ email: Schema.String, offline: Schema.Boolean }),
-  action: [EmailTyped],
+  actions: [EmailTyped],
   useUnsafeHooks: () => ({ online: useOnlineStatus() }),
 });
 

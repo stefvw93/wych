@@ -33,7 +33,7 @@ const Changed = Action("Changed", { userId: Schema.String, online: Schema.Boolea
 const Presence = define({
   props: Schema.Struct({ roomId: Schema.String }),
   state: Schema.Struct({ online: Schema.Array(Schema.String) }),
-  action: [Changed],
+  actions: [Changed],
 });
 ```
 

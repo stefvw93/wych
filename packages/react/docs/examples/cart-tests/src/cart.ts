@@ -32,8 +32,8 @@ export const cart = define({
     items: Schema.Array(Item),
     charge: charge.schema,
   }),
-  action: [actions, charge],
-  output: Ordered,
+  actions: [actions, charge],
+  outputs: Ordered,
 }).create({
   initialState: () => ({ items: [], charge: Task.idle }),
   reducer: {

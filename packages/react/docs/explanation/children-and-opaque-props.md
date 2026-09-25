@@ -31,7 +31,7 @@ const Table = define({
     empty: Schema.optionalKey(Children),
   }),
   state: Schema.Struct({ sortBy: Schema.String, selected: Schema.String }),
-  action: actions,
+  actions,
 });
 ```
 
@@ -138,7 +138,7 @@ devtools output is unreadable.
 define({
   props: Schema.Struct({ rows: Schema.Array(Row) }),
   state: Schema.Struct({ slot: Children }),
-  action: actions.Sorted,
+  actions: actions.Sorted,
 });
 // throws TypeError: Opaque field "slot" declared in the state schema
 ```

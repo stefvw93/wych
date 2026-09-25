@@ -36,7 +36,7 @@ const Arrived = Action("Arrived", { members: Schema.Array(Schema.String) });
 const Room = define({
   props: Schema.Struct({ roomId: Schema.String }),
   state: Schema.Struct({ members: Schema.Array(Schema.String), failed: Schema.String }),
-  action: Arrived,
+  actions: Arrived,
   useUnsafeHooks: (props) => ({ channel: `room:${props.roomId}` }),
 });
 ```

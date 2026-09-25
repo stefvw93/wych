@@ -47,8 +47,8 @@ const Reached = Action.output("Reached", { at: Schema.Number });
 const Counter = define({
   props: Schema.Struct({ step: Schema.Number }),
   state: Schema.Struct({ count: Schema.Number }),
-  action: Bumped,
-  output: Reached,
+  actions: Bumped,
+  outputs: Reached,
 });
 
 export const counter = Counter.create({

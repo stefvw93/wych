@@ -30,7 +30,7 @@ const { component } = createRuntime(Layer.empty);
 const Tally = define({
   props: Schema.Struct({ step: Schema.Number }),
   state: Schema.Struct({ count: Schema.Number }),
-  action: [Action("Bumped", {})],
+  actions: [Action("Bumped", {})],
 });
 
 const reducer = {

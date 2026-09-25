@@ -75,8 +75,8 @@ export type State = typeof State.Type;
 const DocsSearch = define({
   props: Schema.Struct({ open: Schema.Boolean }),
   state: State,
-  action: [Typed, Moved, Submitted, Reset, search],
-  output: Navigated,
+  actions: [Typed, Moved, Submitted, Reset, search],
+  outputs: Navigated,
 });
 
 export const initial: State = { query: "", results: Task.idle, selected: 0 };

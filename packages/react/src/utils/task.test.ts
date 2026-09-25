@@ -32,7 +32,7 @@ const folded = (options?: {
 
   const State = Schema.Struct({ colorValue: Schema.String, search: Task.schema(Schema.String) });
   const Vocab = [Clicked, Cancelled, ...search.actions];
-  const F = define({ props: Props, state: State, action: Vocab });
+  const F = define({ props: Props, state: State, actions: Vocab });
 
   return {
     search,
@@ -123,7 +123,7 @@ describe("Task", () => {
     const F = define({
       props: Props,
       state: State,
-      action: [Clicked, ...search.actions],
+      actions: [Clicked, ...search.actions],
     });
     const feature = F.create({
       initialState: F.initialState(() => ({ colorValue: "#000", search: Task.idle })),
@@ -235,7 +235,7 @@ describe("Task", () => {
     const F = define({
       props: Props,
       state: Schema.Struct({ quiet: quiet.schema }),
-      action: [Clicked, ...quiet.actions],
+      actions: [Clicked, ...quiet.actions],
     });
     const feature = F.create({
       initialState: () => ({ quiet: Task.idle }),
@@ -347,8 +347,8 @@ describe("resolvedInto / rejectedInto", () => {
     const F = define({
       props: Props,
       state: Schema.Struct({ dirty: Schema.Boolean, save: save.schema, seen: Schema.String }),
-      action: [Clicked, save],
-      output: Saved,
+      actions: [Clicked, save],
+      outputs: Saved,
     });
     // Built outside the literal and spread as `object`: the fixture varies
     // which entries exist, which the reducer's own types cannot express.
@@ -430,7 +430,7 @@ describe("Task with `run`", () => {
 
   const State = Schema.Struct({ search: Task.schema(Schema.String) });
   const Vocab = [Clicked, ...search.actions];
-  const F = define({ props: Props, state: State, action: Vocab });
+  const F = define({ props: Props, state: State, actions: Vocab });
 
   const feature = F.create({
     initialState: F.initialState(() => ({ search: Task.idle })),
@@ -460,7 +460,7 @@ describe("Task.start on a draft", () => {
     const F = define({
       props: Props,
       state: State,
-      action: [Clicked, ...search.actions],
+      actions: [Clicked, ...search.actions],
     });
     let handed: unknown;
     let returned: unknown;
@@ -504,7 +504,7 @@ describe("Task.output", () => {
   const State = Schema.Struct({ colorValue: Schema.String });
   const Vocab = [Clicked];
   const Outputs = [...search.actions];
-  const F = define({ props: Props, state: State, action: Vocab, output: Outputs });
+  const F = define({ props: Props, state: State, actions: Vocab, outputs: Outputs });
 
   const feature = F.create({
     initialState: F.initialState(() => ({ colorValue: "#000" })),

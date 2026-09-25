@@ -42,7 +42,7 @@ const actions = Action({ Opened: { folder: Schema.String }, Cancelled: {} });
 const Mailbox = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ folder: Schema.String, subjects: loadMail.schema, count: Schema.Number }),
-  action: [actions, loadMail],
+  actions: [actions, loadMail],
 });
 
 export const mailbox = Mailbox.create({
@@ -179,8 +179,8 @@ console.log(Object.keys(operation).sort());
 ### `actions`
 
 Two messages, tagged `${Name}Resolved` with `{ value }` and `${Name}Rejected`
-with `{ error }`. The operation itself goes into `define`'s `action` slot
-(`action: [actions, loadMail]` above) and contributes both tags; `actions`
+with `{ error }`. The operation itself goes into `define`'s `actions` slot
+(`actions: [actions, loadMail]` above) and contributes both tags; `actions`
 is the same pair, for reading.
 
 ```ts continue
@@ -424,8 +424,8 @@ const announceUpload = Task.output("Announce", { success: Schema.String });
 const Announcer = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ note: Schema.String }),
-  action: actions.Opened,
-  output: announceUpload,
+  actions: actions.Opened,
+  outputs: announceUpload,
 });
 
 console.log(Object.keys(announceUpload).sort());
@@ -433,7 +433,7 @@ console.log(Object.keys(announceUpload).sort());
 ```
 
 The same operation with both actions on the outbound channel, so it goes into
-the `output` slot. They leave through `onAnnounceResolved` and
+the `outputs` slot. They leave through `onAnnounceResolved` and
 `onAnnounceRejected` and never reach the reducer, so the operation has no
 `into`, `resolvedInto` or `rejectedInto`.
 

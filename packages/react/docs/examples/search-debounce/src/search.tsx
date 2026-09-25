@@ -9,7 +9,7 @@ const Loaded = Action("Loaded", { hits: Hits });
 export const searchFeature = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ query: Schema.String, hits: Hits }),
-  action: [Typed, Loaded],
+  actions: [Typed, Loaded],
 }).create({
   initialState: () => ({ query: "", hits: [] }),
   reducer: {
@@ -65,7 +65,7 @@ const Cleared = Action("Cleared");
 export const taskSearch = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ query: Schema.String, results: search.schema }),
-  action: [Typed, Cleared, search],
+  actions: [Typed, Cleared, search],
 }).create({
   initialState: () => ({ query: "", results: Task.idle }),
   reducer: {
@@ -117,7 +117,7 @@ const searchEvery = Task("SearchEvery", {
 export const everySearch = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ results: searchEvery.schema }),
-  action: [Typed, searchEvery],
+  actions: [Typed, searchEvery],
 }).create({
   initialState: () => ({ results: Task.idle }),
   reducer: {
@@ -149,7 +149,7 @@ export const MoreClicked = Action("MoreClicked");
 export const pagedSearch = define({
   props: Schema.Struct({}),
   state: Schema.Struct({ query: Schema.String, page: Schema.Number, results: searchPage.schema }),
-  action: [Typed, MoreClicked, searchPage],
+  actions: [Typed, MoreClicked, searchPage],
 }).create({
   initialState: () => ({ query: "", page: 1, results: Task.idle }),
   reducer: {
