@@ -1,0 +1,28 @@
+{
+  // Strict app settings, the kind a Vite + React project ships with.
+  // `@wych/react` resolves to the library source, so a type change is measured
+  // without a rebuild; `WYCH_TYPES=dist` in the bench switches to the .d.ts.
+  "compilerOptions": {
+    "target": "es2023",
+    "module": "esnext",
+    "lib": ["ESNext", "DOM"],
+    "types": [],
+    "skipLibCheck": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true,
+    "jsx": "react-jsx",
+    "paths": {
+      "@wych/react": ["../../../src/index.ts"]
+    }
+  },
+  "include": ["."]
+}
