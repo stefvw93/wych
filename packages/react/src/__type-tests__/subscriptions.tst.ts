@@ -253,11 +253,9 @@ test("`run`'s result and `Feature.subscriptions` are typed", () => {
   >();
 });
 
-// HINT: today an unknown handler key compiles (probed: `reducer: { Ping, subscriptions: () => ({}) }`
-// passes tstyche), because `U` is inferred from the literal and excess-property
-// checking never sees it. `Exhaustive<U, State>` is the place to add a per-key
-// guard: a key that is neither an action tag nor a `LifecycleTag` maps to an
-// error string, the same trick `state has no property …` already plays.
+// `U` is inferred from the literal, so excess-property checking never sees an
+// unknown handler key; `Exhaustive` maps a key that is neither an action tag
+// nor a `LifecycleTag` to an error string.
 test("`subscriptions` is not a reducer key", () => {
   Contextual.create({
     initialState: () => ({ count: 0 }),

@@ -98,18 +98,18 @@ split it. A fragment written as its own component needs `state` and `dispatch`
 typed to the feature, and the only ways to get them today are by hand through
 props, or by promoting the fragment to a feature of its own with outputs —
 the right tool for a child _feature_, the wrong one for a paragraph of the
-parent's view. `WallhavenInputs` in the frontend is 149 lines for two selects,
-an empty state and an empty action vocabulary; the paginator and result grids
-in `Seed`'s render stay inline for the same reason.
+parent's view. A `FilterInputs` feature written that way is 149 lines for two
+selects, an empty state and an empty action vocabulary; the paginator and
+result grids in `Todos`'s render stay inline for the same reason.
 
 `component(bp)` therefore hands back an `FC` carrying one hook:
 
 ```ts
-export const Seed = component(seed, { name: "Seed" });
+export const Todos = component(todos, { name: "Todos" });
 
-// a plain React component, anywhere under <Seed>
+// a plain React component, anywhere under <Todos>
 const Paginator = () => {
-  const { state, dispatch } = Seed.useFeature();
+  const { state, dispatch } = Todos.useFeature();
   return <PaginationNext onClick={() => dispatch(NextPage.make({}))} />;
 };
 ```
@@ -172,7 +172,7 @@ Design points, each with its reason:
   explicit model argument. A child feature is a `Feature` of its own — built with `create`, mounted
   with `component` — and talks through validated props and `on<Tag>`.
   Nothing prevents a child feature rendered under
-  `<Seed>` from calling `Seed.useFeature()`; it is a smell, because that
+  `<Todos>` from calling `Todos.useFeature()`; it is a smell, because that
   feature's inputs stop being visible in its props schema. Documented, not
   enforced — the enforcement would cost a runtime check on every hook call to
   catch a mistake the type of the feature's own `render` already discourages.
@@ -325,6 +325,19 @@ lookup, about 7 ns.
 - Returned another state, wrote into the draft: a `TypeError`, on the same
   path as any handler that throws. Two next states and no rule that picks
   one.
+- In development, a next state that does not match the state schema, at any
+  depth: a `TypeError` listing every issue with its path, on the same path.
+  Development is `process.env.NODE_ENV !== "production"`, read when `define`
+  runs; without a `process` global it reads as production. The check decodes
+  the new state with `Schema.toType` of the state schema's fields plus each
+  task key's `Task.schema`, `onExcessProperty: "error"`, `errors: "all"`: an
+  extra key in a spread, a nested spread or a draft a cast wrote into, a
+  wrong value, and a task field of the wrong shape all fail. The types do
+  not check a returned object's keys, and `Schema.is` ignores excess keys,
+  hence the decode. `initialState` is checked the same way where it is
+  built, so a handler that returns `state` itself is skipped soundly: in
+  development every state the store holds has passed the check. Production
+  checks nothing.
 - The handler threw: the draft is closed and unbooked, then the error
   propagates. Nothing decides a next state.
 - A `LazyCommand` in the tuple runs at `Next.command`, after the fold
@@ -461,6 +474,9 @@ landed with every box checked again.
 - [x] A handler that spreads `state` beside a drafting handler behaves as before; its result is not frozen.
 - [x] A handler that writes into `draft` and returns another state throws a `TypeError` naming `snapshot.draft`; under the store it is a defect from that action and state is kept, under `run` the Effect dies with it as for any throwing handler.
 - [x] A handler that reads `draft` and returns another state keeps the returned state; the proxy is revoked once the fold ends.
+- [x] In development, a handler whose next state does not match the state schema throws a `TypeError` listing each issue with its path: an extra top-level key in a spread, an extra key in a nested spread (`items[0].bogus`), a wrong value a cast wrote into the draft, and a task field of the wrong shape. A spread over declared keys (task keys included), `state` itself and a written draft pass; `state` returned as is is not read again. Under the store it is a defect from that action and state is kept, under `run` the Effect dies with it.
+- [x] In development, an `initialState` that does not match the state schema throws a `TypeError` listing the issues where the initial state is built: `run` rejects, `createFeatureStore` throws.
+- [x] With `NODE_ENV` set to `"production"` when `define` runs, neither the next state nor the initial state is checked.
 - [x] A handler that throws with a draft open still closes it: the proxy is revoked and the handler's own error propagates.
 - [x] `Task.start(draft, key, command)` writes `Pending` into the draft and returns the draft, so its result is the finished state; given a plain state it spreads as before.
 - [x] The snapshot's own keys are `state`, `props`, `hooks`; `draft` is reachable and lives on the prototype; the drafter is not reachable.
@@ -529,11 +545,11 @@ landed with every box checked again.
 - [x] When `$RefreshReg$` is a function on the global during `component()`, the mount is registered under the `name`, so a bundler that exposes the hook swaps it on refresh and the `render` edit lands even where the Babel plugin registered nothing. Absent the hook, nothing is called.
 - [x] A node the parent passes as `children` and the feature renders inside its tree may call `useFeature()` — the provider is positional, so this is React's compound-component shape (`<Select><SelectItem/></Select>`) and works by construction. Not a target, not prevented.
 - [x] `validateProps`, `sync`, `start`/`stop`, StrictMode behaviour and every devtools emission are untouched. The provider is one element around `render`'s output.
-- [x] `FeatureComponent` is exported, so a fragment can type a prop as `typeof Seed` or the snapshot as `ReturnType<typeof Seed.useFeature>` without reconstructing the generics.
+- [x] `FeatureComponent` is exported, so a fragment can type a prop as `typeof Todos` or the snapshot as `ReturnType<typeof Todos.useFeature>` without reconstructing the generics.
 
 ### Type-level (TSTyche)
 
-- [x] `Disjoint`, `NoPropCollision`, `Exhaustive`/`Excess`, `ServiceOf`/`ServicesOf` reject what they document and accept what they document.
+- [x] `Disjoint`, `NoPropCollision`, `Exhaustive`, `ServiceOf`/`ServicesOf` reject what they document and accept what they document. `Exhaustive` rejects a key that is neither an action tag nor a lifecycle tag; it does not read handler return types, so an extra key in a returned (non-draft) state compiles.
 - [x] `MemberOf` over `[Started, [Action({ Failed }), load]]` is the union of the four message values, `TagsOf` their tags; each slot rejects a member of the other channel, alone, in an array, or as a `Task`. `MemberSource`'s depth is bounded because `MemberOf` recurses over it, and over a recursive constraint it never bottoms out (`Type instantiation is excessively deep`).
 - [x] A transforming props schema is accepted: `define` normalizes it to its `Type` side with `Schema.toType`, so a codec field surfaces to `initialState`, the reducer and `render` as its decoded `Type`, the parent passes decoded values, and the wire shape is rejected by `validateProps` rather than decoded.
 - [x] A props schema declaring `children: Children` surfaces the field to `initialState`, the reducer and `render` as `ReactNode`, optional under `Schema.optionalKey` and as the given function type under `Children.as<T>()`.
@@ -549,11 +565,11 @@ landed with every box checked again.
 - [x] A lazy command's parameter is typed as the feature's `State`, and its `dispatch` keeps the contextual `A`: an undeclared tag is a compile error one function deeper, on the same terms as the leaf.
 - [x] `ServicesOf` reads `R` through a lazy command, so a service the thunk's command needs is still a compile error at `component`.
 - [x] A lazy command whose tuple state is narrower than `State` (an optional field written as required) still satisfies the handler's return type. In a raw tuple its parameter is contextually typed as `State`; through `Task.start`, which infers from its first argument, it is the narrower state actually written.
-- [x] `Seed.useFeature()` is typed `RenderSnapshot<Props, State, Action | Output, H>`: `state` is the state schema's `Type`, `props` the props schema's `Type` side (decoded, `children` as declared), `hooks` is `H`, and `dispatch` accepts every declared action and output and rejects an undeclared tag and a declared tag with the wrong payload.
+- [x] `Todos.useFeature()` is typed `RenderSnapshot<Props, State, Action | Output, H>`: `state` is the state schema's `Type`, `props` the props schema's `Type` side (decoded, `children` as declared), `hooks` is `H`, and `dispatch` accepts every declared action and output and rejects an undeclared tag and a declared tag with the wrong payload.
 - [x] `useFeature` is present on **both** `component` overloads — with and without `layer` — and on a feature with no outputs (`Output` = `never`) `dispatch` accepts the actions alone.
-- [x] `Seed` remains assignable to `FC<…>` where an `FC` is expected: the added member does not change what JSX accepts.
+- [x] `Todos` remains assignable to `FC<…>` where an `FC` is expected: the added member does not change what JSX accepts.
 - [x] `snapshot.draft` is `Draft<State>`: arrays and plain objects lose `readonly` recursively, an Effect data type keeps its type, `state` and `props` beside it stay read-only, and a wrong shape written into the draft is the error a wrong shape in a spread is. A draft satisfies `Next` bare and in a tuple.
-- [x] `Task.start` and `Next.lazy` accept a draft; `Task.start`'s key is still constrained to the task fields; the lazy thunk's parameter is the draft's type. `Exhaustive` reports no excess for a drafting handler.
+- [x] `Task.start` and `Next.lazy` accept a draft; `Task.start`'s key is still constrained to the task fields; the lazy thunk's parameter is the draft's type.
 - [x] A command returned beside a draft still carries `R` to `component`.
 - [x] `render` and `subscriptions` snapshots have no `draft`.
 - [x] `ReducerSnapshot`'s `tasks` is `TaskHandles<TS, State>`, `{}` without a slot; the `tasks` slot's types (merged `State`, `initialState` without the task keys, optional settle keys, `start`'s input and `R`, the clash guards) are pinned in `task.tst.ts`.
@@ -618,7 +634,7 @@ today. Four tests, each pinning one criterion the node suite cannot:
   shows the post-fold state on the same paint as the root's.
 - A fragment dispatches a declared **output**; it reaches the parent's
   `on<Tag>` prop with `_tag` stripped, and the reducer never sees it.
-- A fragment rendered outside any `<Seed>` throws, and the message reaching a
+- A fragment rendered outside any `<Todos>` throws, and the message reaching a
   boundary names the component.
 - Two mounts of one component each carry a fragment; each fragment reads its
   own mount's state and a dispatch in one leaves the other untouched.
@@ -757,7 +773,9 @@ real browser. The runnable version is `docs/examples/search-debounce`.
 ## Performance and resilience
 
 Two on-demand Vitest projects, outside `vpr -r test`. The `bench` project
-(`src/**/*.bench.test.ts`) runs tinybench through Vitest bench mode; the `stress`
+(`src/**/*.bench.test.ts`) runs tinybench through Vitest bench mode, with
+`NODE_ENV=production` so it measures the path without the development state
+check; the `stress`
 and `stress-browser` projects (`src/**/*.stress.test.ts`,
 `src/**/*.stress.browser.test.tsx`) hold the load, chaos, leak and property
 tests. Fixtures are in `src/__fixtures__/`: `probe.ts` (the internals

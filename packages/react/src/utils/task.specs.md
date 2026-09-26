@@ -247,7 +247,7 @@ and read as unbound.
 
 **The fiber group is `Task/${Name}`**, namespaced against the flat per-mount
 namespace `lib.specs.md` describes: an unkeyed command books under its issuing
-action's tag, so a feature with an action tagged `WallhavenSearch` and an
+action's tag, so a feature with an action tagged `LoadTodos` and an
 operation of the same name would otherwise interrupt each other. `cancel` is
 `Command.cancel("Task/Name")` — a bare command, so a handler can invalidate work
 another action started. `op.cancel` writes nothing; a cancelled operation left
@@ -317,7 +317,7 @@ clears the field in the same return. The slot's `cancel()` is that return.
 - [x] `"first"` is a mode beside `"latest"` and `"every"`; any other string is not.
 - [x] `op.Resolved.make(…)` / `op.Rejected.make(…)` return the two action types, and `op.Resolved` is `op.actions[0]`.
 - [x] `define({ tasks })`: `State` is the schema's fields plus one `TaskValue` per key; `initialState` compiles without the task keys; a hand-built state for `reduce` includes them.
-- [x] The settle keys are optional; a written one gets its payload (`value` / `error`) and `draft.<key>` typed, keeps the contextual command type, and an excess state key is still reported. A declared action is still required.
+- [x] The settle keys are optional; a written one gets its payload (`value` / `error`) and `draft.<key>` typed, keeps the contextual command type; an extra key in its returned state is not reported (see `Exhaustive`). A declared action is still required.
 - [x] `tasks.<key>.start` takes the operation's input (a wrong input does not compile), in both `create({ reducer })` and `Definition.reducer`; its `R` reaches `ServicesOf`, and `run` without the service layer does not compile.
 - [x] An unbound operation's `start` takes an effect of the success type; `ServicesOf` is `never` for a pure effect and names the service of one that needs it.
 - [x] Lifecycle handlers get the handles; a feature without `tasks` has `snapshot.tasks: {}` and its state type unchanged.
@@ -334,7 +334,7 @@ clears the field in the same return. The slot's `cancel()` is that return.
 - [x] `into("notAField")`, `into` of a non-`TaskValue` field, and `into` of a `TaskValue` field whose success type differs from the operation's do not compile at the spread site; the matching key does.
 - [x] `into` addresses a field declared `Schema.optional(Task.schema(…))`.
 - [x] An explicit handler after the spread is typed by the action's payload (`value` is the success `Type`).
-- [x] Written as a reducer entry, `resolvedInto`'s `then` gets the feature's `ReducerSnapshot` (props, draft) and the value by context, a command in it keeps the contextual `A`, its `R` reaches `ServicesOf`, a side written without one leaks no `any`, a key that is not the operation's `TaskValue` field is rejected, and an excess state key is still reported.
+- [x] Written as a reducer entry, `resolvedInto`'s `then` gets the feature's `ReducerSnapshot` (props, draft) and the value by context, a command in it keeps the contextual `A`, its `R` reaches `ServicesOf`, a side written without one leaks no `any`, a key that is not the operation's `TaskValue` field is rejected; an extra key in the returned state is not reported.
 - [x] `Task.start` with a thunk types the thunk's parameter as the passed state, and `Next.command` of the result is `Command<TaskAction<…>> | undefined`.
 
 ## Technical Requirements
@@ -352,7 +352,7 @@ clears the field in the same return. The slot's `cancel()` is that return.
 - Internally the command is built as `Command.effect<any, unknown>`; the operation's declared `run` type restores `R` — from the bound effect's declaration, or from the effect passed to an unbound `run`.
 - `Task.errorMessage` is `Cause.squash` then `error instanceof Error ? error.message : String(error)`.
 - The guards and partial reads take `TaskValue<A, unknown>` / `TaskValue<unknown, E>`, which every concrete field is assignable to under readonly covariance.
-- `into`'s handlers are `<S extends { readonly [K in Key]?: TaskValue<Success, Failure> }>(payload, { state: S }) => S`. Assignability to a `Reducer` slot instantiates `S` from `Snapshot<Props, State, H>`, so `S = State`; `Exhaustive`'s `infer N` and `ServicesOf`'s `ReturnType` read the base signature, i.e. the constraint, which has no key beyond `Key` and is no command tuple, so both stay `never`. A wrong key surfaces as `Exhaustive`'s `state has no property …` message. `TaskOperation` is a conditional alias: `TaskOperationBase & TaskInto` on the internal channel, `TaskOperationBase` alone on the outbound one, so `into` is structurally absent rather than typed `never`.
+- `into`'s handlers are `<S extends { readonly [K in Key]?: TaskValue<Success, Failure> }>(payload, { state: S }) => S`. Assignability to a `Reducer` slot instantiates `S` from `Snapshot<Props, State, H>`, so `S = State`; `ServicesOf`'s `ReturnType` reads the base signature, i.e. the constraint, which is no command tuple, so it stays `never`. A wrong key surfaces as the handler not being assignable to its slot. `TaskOperation` is a conditional alias: `TaskOperationBase & TaskInto` on the internal channel, `TaskOperationBase` alone on the outbound one, so `into` is structurally absent rather than typed `never`.
 
 ## Expected Behavior & Edge Cases
 
@@ -430,8 +430,8 @@ vocabulary, `Success`/`Failure` are Effect's) and a schema question for the
 One test: `lib.browser.test.tsx` mounts a feature with a slot task and checks
 that a start and a cancel from real clicks paint, and that the settle paints.
 Everything else is observable through `Feature.run` headlessly, and
-`task.test.ts` drives it that way. The consumer this was written against (`apps/frontend/src/features/seed`)
-lived in a repo this package has since left. The in-repo consumers are the
+`task.test.ts` drives it that way. The consumer this was written against lived
+in a repo this package has since left. The in-repo consumers are the
 docs — `reference/tasks.md` and the how-to pages that use `Task`, executed by
 `docs:check --run` — and the examples under `docs/examples/*` built from them.
 The partial reads (`value`, `error`, `getOrElse`) and the other guards are

@@ -248,14 +248,18 @@ One handler per declared action tag, required and exhaustive. A handler is
 `(payload, snapshot) => Next`. `payload` is the action with `_tag` stripped; the
 handler key already names the tag.
 
-A handler that returns a key the state schema does not declare is a compile
-error.
+A handler that writes a key the state schema does not declare is a compile
+error: the draft has the state's keys and no others. A handler that returns a
+new object, such as a spread, is not checked by the types. In development the
+fold decodes every new next state against the whole state schema, at every
+depth, under the [finishing rules](#finishing-rules); see
+[State validation](/docs/reference/runtime#state-validation).
 
 ```ts continue
 const excess = NoteEditor.reducer({
   Typed: ({ text }, { draft }) => {
     draft.text = text;
-    // @ts-expect-error state has no property "wordCount"
+    // @ts-expect-error Property 'wordCount' does not exist on the draft
     draft.wordCount = text.length;
     return draft;
   },
@@ -411,6 +415,11 @@ no copy.
   wins. Reading the draft costs nothing.
 - Returned another state, wrote into the draft: a `TypeError`. Two next states
   and no rule that picks one.
+- In development, the next state does not match the state schema, at any
+  depth: a `TypeError` listing every issue with its path. Returning `state`
+  itself runs no check. `initialState` is checked the same way when the
+  initial state is built. See
+  [State validation](/docs/reference/runtime#state-validation).
 
 ```ts continue
 const mixedReducer = NoteEditor.reducer({

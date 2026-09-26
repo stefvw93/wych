@@ -557,7 +557,7 @@ export interface TaskConstructors extends TaskConstructor<"internal"> {
    * The schema of a state field holding a `TaskValue`, under whatever name the
    * feature wants to read it back by:
    *
-   *     const State = Schema.Struct({ search: Task.schema(WallhavenSearchPayload) })
+   *     const State = Schema.Struct({ search: Task.schema(TodoPage) })
    *
    * The failure defaults to `Schema.String`, to pair with the default `onError`.
    * Nothing connects this to an operation but the handlers you write, which is
@@ -579,7 +579,7 @@ export interface TaskConstructors extends TaskConstructor<"internal"> {
    * `Pending` and the command, as the one return the handler owes:
    *
    *     ClickedSearch: (_action, { state }) =>
-   *       Task.start(state, "search", wallhavenSearch.run(state.searchParams))
+   *       Task.start(state, "search", loadTodos.run(state.filter))
    *
    * The same two lines the long form writes, in an order that cannot come apart
    * — `run` without a field write is the failure this exists to make
@@ -669,7 +669,7 @@ const make = <Ch extends "internal" | "outbound">(ch: Ch) =>
 
     // Namespaced, because the name is generated: an unkeyed command books under
     // its issuing action's tag in the same flat namespace, and a feature with
-    // an action tagged `WallhavenSearch` must not have its work interrupted by
+    // an action tagged `LoadTodos` must not have its work interrupted by
     // this operation's `cancel` — nor the reverse.
     const group = `Task/${name}`;
 
@@ -768,6 +768,7 @@ const make = <Ch extends "internal" | "outbound">(ch: Ch) =>
         pending: pendingValue,
         resolved: helpers.resolved,
         rejected: helpers.rejected,
+        schema,
       },
     );
     return ch === "internal"
@@ -821,19 +822,19 @@ const helpers: Omit<TaskConstructors, "output"> = {
  * `tasks` slot, which adds the field, starts it `Idle` and writes each
  * settle into it:
  *
- *     const wallhavenSearch = Task("WallhavenSearch", {
- *       success: WallhavenSearchPayload,
- *       run: (params: typeof WallhavenSearchParams.Type) =>
- *         Effect.flatMap(WallhavenService, (service) => service.search(params)),
+ *     const loadTodos = Task("LoadTodos", {
+ *       success: TodoPage,
+ *       run: (filter: typeof TodoFilter.Type) =>
+ *         Effect.flatMap(TodoApi, (api) => api.search(filter)),
  *     })
  *
- *     const Seed = define({ props, state: State, tasks: { search: wallhavenSearch }, actions })
+ *     const Todos = define({ props, state: State, tasks: { search: loadTodos }, actions })
  *
- *     const reducer = Seed.reducer({
- *       ClickedSearch: (_action, { state, tasks }) => tasks.search.start(state.searchParams),
+ *     const reducer = Todos.reducer({
+ *       ClickedSearch: (_action, { state, tasks }) => tasks.search.start(state.filter),
  *     })
  *
- * A settle handler (`WallhavenSearchResolved`) is optional, and runs after
+ * A settle handler (`LoadTodosResolved`) is optional, and runs after
  * the field is written, to derive more from the result.
  *
  *     // render

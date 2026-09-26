@@ -21,7 +21,7 @@ import {
   SchemaParser,
   Stream,
 } from "effect";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import {
   createRecorder,
   devtoolsLayer,
@@ -1157,6 +1157,170 @@ describe("snapshot.draft", () => {
     expect(store.getSnapshot()).toEqual({ todos: [], renamed: 0 });
     store.stop();
     await runtime.dispose();
+  });
+
+  describe("in development, a next state is checked against the state schema", () => {
+    const Extra = Action("Extra", {});
+    const Nested = Action("Nested", {});
+    const Wrong = Action("Wrong", {});
+    const Unsettled = Action("Unsettled", {});
+    const Nothing = Action("Nothing", {});
+    const Spread = Action("Spread", {});
+    const Same = Action("Same", {});
+    const Drafted = Action("Drafted", {});
+    const load = Task("Load", { success: Schema.String });
+    const Item = Schema.Struct({ id: Schema.Number, title: Schema.String });
+    const make = () =>
+      define({
+        props: Schema.Struct({}),
+        state: Schema.Struct({ n: Schema.Number, items: Schema.Array(Item) }),
+        tasks: { load },
+        actions: [Extra, Nested, Wrong, Unsettled, Nothing, Spread, Same, Drafted],
+      }).create({
+        initialState: () => ({ n: 0, items: [{ id: 1, title: "a" }] }),
+        reducer: {
+          // The types let each of these through; the fold does not.
+          Extra: (_payload, { state }) => [{ ...state, bogus: 1, other: 2 }, Command.none],
+          Nested: (_payload, { state }) => ({
+            ...state,
+            items: state.items.map((item) => ({ ...item, bogus: 1 })),
+          }),
+          Wrong: (_payload, { draft }) => {
+            (draft as Record<string, unknown>).n = "one";
+            return draft;
+          },
+          Unsettled: (_payload, { state }) => ({ ...state, load: { _tag: "Resolved" } as never }),
+          Nothing: () => undefined as never,
+          // Every declared key, the slot's included, is a key the state may hold.
+          Spread: (_payload, { state }) => ({ ...state, n: 1, load: Task.idle }),
+          Same: (_payload, { state }) => state,
+          Drafted: (_payload, { draft }) => {
+            draft.items[0].title = "b";
+            return draft;
+          },
+        },
+        render: () => null,
+      });
+    const state = { n: 0, items: [{ id: 1, title: "a" }], load: Task.idle };
+    const start = { state, props: {}, hooks: {} };
+
+    const prefix = "handler returned a state that does not match the state schema:";
+
+    it("a mismatch at any depth throws, values and task fields included", () => {
+      const feature = make();
+      expect(() => feature.reduce(Extra.make(), start)).toThrow(
+        [
+          prefix,
+          "Expected no excess property",
+          '  at ["bogus"]',
+          "Expected no excess property",
+          '  at ["other"]',
+        ].join("\n"),
+      );
+      expect(() => feature.reduce(Nested.make(), start)).toThrow(
+        `${prefix}\nExpected no excess property\n  at ["items"][0]["bogus"]`,
+      );
+      expect(() => feature.reduce(Wrong.make(), start)).toThrow(
+        `${prefix}\nExpected number\n  at ["n"]`,
+      );
+      expect(() => feature.reduce(Unsettled.make(), start)).toThrow(
+        `${prefix}\nMissing key\n  at ["load"]["value"]`,
+      );
+      expect(() => feature.reduce(Nothing.make(), start)).toThrow(`${prefix}\nExpected object`);
+    });
+
+    it("a matching state passes, and `state` itself is not read again", () => {
+      const feature = make();
+      expect(Next.state(feature.reduce(Spread.make(), start))).toEqual({ ...state, n: 1 });
+      expect(Next.state(feature.reduce(Same.make(), start))).toBe(state);
+      expect(Next.state(feature.reduce(Drafted.make(), start))).toEqual({
+        ...state,
+        items: [{ id: 1, title: "b" }],
+      });
+      // Returned as is, a state the schema would reject is not checked.
+      const unchecked = { ...state, bogus: 1 };
+      expect(
+        Next.state(feature.reduce(Same.make(), { state: unchecked, props: {}, hooks: {} })),
+      ).toBe(unchecked);
+    });
+
+    it("is a defect from that action under the store, and a rejection under `run`", async () => {
+      const feature = make();
+      await expect(
+        Effect.runPromise(
+          feature.run([Nested.make()], { props: {}, hooks: {}, layer: Layer.empty }),
+        ),
+      ).rejects.toThrow(prefix);
+
+      const runtime = ManagedRuntime.make(Layer.empty);
+      const defects: unknown[] = [];
+      const store = createFeatureStore({
+        feature,
+        props: {},
+        equivalence: { props: Equivalence.strictEqual(), hooks: Equivalence.strictEqual() },
+        runtime,
+        layer: undefined,
+        emit: () => {},
+        defect: (error) => void defects.push(error),
+      });
+      store.start();
+      store.dispatch(Nested.make());
+      expect(defects.map((error) => (error as Error).message)).toEqual([
+        `${prefix}\nExpected no excess property\n  at ["items"][0]["bogus"]`,
+      ]);
+      expect(store.getSnapshot()).toEqual(state);
+      store.stop();
+      await runtime.dispose();
+    });
+
+    it("an initial state that does not match fails where it is built", async () => {
+      const Noop = Action("Noop", {});
+      const feature = define({
+        props: Schema.Struct({}),
+        state: Schema.Struct({ n: Schema.Number }),
+        actions: [Noop],
+      }).create({
+        // The types do not check a returned object's keys here either.
+        initialState: () => ({ n: 0, bogus: 1 }),
+        reducer: { Noop: (_payload, { state }) => state },
+        render: () => null,
+      });
+      const message =
+        'initialState returned a state that does not match the state schema:\nExpected no excess property\n  at ["bogus"]';
+
+      await expect(
+        Effect.runPromise(feature.run([], { props: {}, hooks: {}, layer: Layer.empty })),
+      ).rejects.toThrow(message);
+
+      const runtime = ManagedRuntime.make(Layer.empty);
+      expect(() =>
+        createFeatureStore({
+          feature,
+          props: {},
+          equivalence: { props: Equivalence.strictEqual(), hooks: Equivalence.strictEqual() },
+          runtime,
+          layer: undefined,
+          emit: () => {},
+          defect: () => {},
+        }),
+      ).toThrow(message);
+      await runtime.dispose();
+    });
+
+    it("in production, read when `define` runs, nothing is checked", async () => {
+      vi.stubEnv("NODE_ENV", "production");
+      let feature: ReturnType<typeof make>;
+      try {
+        feature = make();
+      } finally {
+        vi.unstubAllEnvs();
+      }
+      expect(Next.state(feature.reduce(Nested.make(), start))).toEqual({
+        ...state,
+        items: [{ id: 1, title: "a", bogus: 1 }],
+      });
+      expect(Next.state(feature.reduce(Wrong.make(), start))).toEqual({ ...state, n: "one" });
+    });
   });
 
   it("a read-only draft not returned is discarded and the proxy revoked", () => {

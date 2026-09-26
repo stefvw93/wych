@@ -70,11 +70,11 @@ const clicks = (n: number) => Array.from({ length: n }, () => Clicked.make({}));
 
 describe("Task", () => {
   it("declares the two tags from the name, the command, and the field schema", () => {
-    const search = Task("WallhavenSearch", { success: Schema.String, onError: Task.errorMessage });
+    const search = Task("LoadTodos", { success: Schema.String, onError: Task.errorMessage });
 
     expect(search.actions.map((a) => a.make({ value: "x", error: "x" })._tag)).toEqual([
-      "WallhavenSearchResolved",
-      "WallhavenSearchRejected",
+      "LoadTodosResolved",
+      "LoadTodosRejected",
     ]);
 
     expect(Object.keys(search).sort()).toEqual([

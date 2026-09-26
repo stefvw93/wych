@@ -445,7 +445,7 @@ test("`R` from a follow-up's command reaches `ServicesOf`, and none leaks otherw
   expect<ServicesOf<typeof quiet>>().type.toBe<never>();
 });
 
-test("the key is checked, and an excess state key is still reported", () => {
+test("the key is checked, and the returned state is not", () => {
   const { search, F } = settle;
   // `selected` is a string field, so the snapshot `resolvedInto` asks for is
   // one no reducer can hand it. The control with `results` is what makes the
@@ -466,7 +466,7 @@ test("the key is checked, and an excess state key is still reported", () => {
     Clicked: (_a, s) => s.state,
     Picked: (_a, s) => s.state,
     ...search.into("results"),
-    // @ts-expect-error state has no property bogus
+    // An extra key in the returned state is not a type error; see `Exhaustive`.
     SearchResolved: search.resolvedInto("results", (_v, s) => ({ ...s.state, bogus: 1 })),
   });
 });
@@ -537,7 +537,7 @@ test("each key adds its field to `State`, and `initialState` leaves the fields o
   expect(Editor.initialState).type.toBeCallableWith(() => ({ text: "", dirty: false }));
 });
 
-test("the settle keys are optional, and a written one is typed and still checked", () => {
+test("the settle keys are optional, and a written one is typed", () => {
   const { Editor, Saved } = slot;
   Editor.create({
     initialState: () => ({ text: "", dirty: false }),
@@ -564,7 +564,7 @@ test("the settle keys are optional, and a written one is typed and still checked
     SaveClicked: (_p, { state }) => state,
     Cancelled: (_p, { state }) => state,
     Typed: (_p, { state }) => state,
-    // @ts-expect-error state has no property bogus
+    // An extra key in the returned state is not a type error; see `Exhaustive`.
     LooseRejected: ({ error }, { state }) => ({ ...state, bogus: error }),
   });
 

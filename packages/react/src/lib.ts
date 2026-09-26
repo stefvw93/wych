@@ -145,7 +145,7 @@ type Branded<Ch extends Channel> = { readonly [channel]: Ch };
  * @internal A value that declares messages without being one: a `Task`
  * operation carries its two actions this way, so it goes into a slot as is.
  */
-export interface MemberCarrier<M extends ReadonlyArray<Branded<Channel>>> {
+export interface MemberCarrier<out M extends ReadonlyArray<Branded<Channel>>> {
   readonly [members]: M;
 }
 
@@ -167,7 +167,14 @@ const taskBinding: unique symbol = Symbol("@wych/task");
  * Declared here and filled by `Task`, so this module reads an operation
  * without importing the module that makes one.
  */
-export interface TaskBinding<Field, Success, A, Input, R, Ch extends Channel> {
+export interface TaskBinding<
+  out Field,
+  in Success,
+  out A,
+  in Input,
+  out R,
+  out Ch extends Channel,
+> {
   readonly channel: Ch;
   readonly resolvedTag: string;
   readonly rejectedTag: string;
@@ -177,10 +184,12 @@ export interface TaskBinding<Field, Success, A, Input, R, Ch extends Channel> {
   readonly pending: Field;
   readonly resolved: (value: Success) => Field;
   readonly rejected: (error: unknown) => Field;
+  /** The field's schema, `Task.schema(success, failure)`. */
+  readonly schema: Schema.Top;
 }
 
 /** @internal A value carrying a {@link TaskBinding}: every `Task` operation. */
-export interface TaskCarrier<B> {
+export interface TaskCarrier<out B> {
   readonly [taskBinding]: B;
 }
 
@@ -261,7 +270,7 @@ export type TaskHandles<TS, State> = {
 };
 
 /** A task key may not name a field the state schema already declares. */
-export type NoTaskCollision<StateSchema extends AnyStateSchema, TS> = [
+export type NoTaskCollision<StateSchema extends StructSchemaLike, TS> = [
   Extract<keyof TS, keyof StateOf<StateSchema>>,
 ] extends [never]
   ? unknown
@@ -399,7 +408,19 @@ export type Emit<A extends Tagged, O extends Tagged> = A | O;
 
 export type AnyStateSchema = Schema.Struct<any>;
 
-export type StateOf<S extends AnyStateSchema> = S["Type"];
+/**
+ * What `define` reads off a `props` or `state` schema: its fields and its
+ * `Type`. The type parameters are constrained by this, not by
+ * `Schema.Struct`, because relating a schema to `Schema.Struct<…>` makes the
+ * checker measure the variance of Effect's `Struct` and `View`, the largest
+ * single cost in checking a feature, paid again after every edit.
+ */
+export type StructSchemaLike = {
+  readonly Type: object;
+  readonly fields: Schema.Struct.Fields;
+};
+
+export type StateOf<S extends StructSchemaLike> = S["Type"];
 
 // ---------------------------------------------------------------------------
 // Props
@@ -407,7 +428,7 @@ export type StateOf<S extends AnyStateSchema> = S["Type"];
 
 export type AnyPropsSchema = Schema.Struct<Schema.Struct.Fields>;
 
-export type PropsOf<P extends AnyPropsSchema> = P["Type"];
+export type PropsOf<P extends StructSchemaLike> = P["Type"];
 
 /**
  * Marks a prop the devtools must not print. The annotation's value is the
@@ -497,7 +518,7 @@ export type OutputProps<Output extends { readonly _tag: string }> = {
   ) => void;
 };
 
-export type NoPropCollision<PropsSchema extends AnyPropsSchema, O extends Tagged> = [
+export type NoPropCollision<PropsSchema extends StructSchemaLike, O extends Tagged> = [
   Extract<keyof PropsOf<PropsSchema>, `on${O["_tag"]}`>,
 ] extends [never]
   ? unknown
@@ -563,6 +584,67 @@ const tagsIn = (
     seen.add(tag);
     return tag;
   });
+
+declare const process: { readonly env: { readonly NODE_ENV?: string } };
+
+/**
+ * `process.env.NODE_ENV !== "production"`, written bare so a bundler replaces
+ * it. Without a bundler and without a `process` global it reads as production.
+ */
+const isDevelopment = (): boolean => {
+  try {
+    return process.env.NODE_ENV !== "production";
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * `decodeUnknownSync` with `onExcessProperty: "error"` and every issue. The
+ * parser's own throw says only "Schema validation failed", with the issue in
+ * `cause`: useless at an error boundary, so every problem, with its path,
+ * goes into the message after `prefix`.
+ */
+const strictValidator = (schema: Schema.Decoder<unknown>) => {
+  const decode = SchemaParser.decodeUnknownSync(schema, {
+    onExcessProperty: "error",
+    errors: "all",
+  });
+  return (input: unknown, prefix: string): void => {
+    try {
+      decode(input);
+    } catch (error) {
+      if (error instanceof Error && SchemaIssue.isIssue(error.cause)) {
+        throw new TypeError(`${prefix}:\n${formatIssue(error.cause)}`, {
+          cause: error.cause,
+        });
+      }
+      throw error;
+    }
+  };
+};
+
+type StateValidator = (state: unknown, origin: "handler" | "initialState") => void;
+
+/**
+ * In development, a next state is checked against the state schema's `Type`
+ * side, the slot's task fields included: values and keys at every depth. The
+ * types check neither a returned object's keys nor what a cast wrote.
+ * `undefined` in production, where nothing is checked.
+ */
+const stateValidator = (
+  state: AnyStateSchema,
+  slots: ReadonlyArray<SlotTask>,
+): StateValidator | undefined => {
+  if (!isDevelopment()) return undefined;
+  const fields = {
+    ...state.fields,
+    ...Object.fromEntries(slots.map(({ key, binding }) => [key, binding.schema])),
+  };
+  const validate = strictValidator(Schema.toType(Schema.Struct(fields)));
+  return (next, origin) =>
+    validate(next, `${origin} returned a state that does not match the state schema`);
+};
 
 /**
  * The `tasks` slot, checked: every value is an internal `Task` operation,
@@ -641,7 +723,7 @@ export type PayloadArgs<M extends Schema.Top> =
  * signature off `dispatch` passed as a callback (`Stream.runForEach(s, dispatch)`)
  * reads that one.
  */
-export interface Dispatcher<A> {
+export interface Dispatcher<in A> {
   <M extends MessageOf<A>>(message: M, ...payload: PayloadArgs<M>): Effect.Effect<void>;
   (action: A): Effect.Effect<void>;
 }
@@ -1295,6 +1377,7 @@ class FoldSnapshot<Props, State, H extends AnyHooks> implements ReducerSnapshot<
   #tasks: TaskHandles<TaskSlots, State> | undefined;
   readonly #drafter: DrafterService;
   readonly #slots: ReadonlyArray<SlotTask>;
+  readonly #validate: StateValidator | undefined;
 
   // Own keys stay `state`, `props`, `hooks`: the snapshot is the one object
   // this module claims is entirely encodable, and `Object.keys` is how a
@@ -1306,9 +1389,11 @@ class FoldSnapshot<Props, State, H extends AnyHooks> implements ReducerSnapshot<
     readonly hooks: H,
     drafter: DrafterService,
     slots: ReadonlyArray<SlotTask>,
+    validate: StateValidator | undefined,
   ) {
     this.#drafter = drafter;
     this.#slots = slots;
+    this.#validate = validate;
   }
 
   get draft(): Draft<State> {
@@ -1349,10 +1434,15 @@ class FoldSnapshot<Props, State, H extends AnyHooks> implements ReducerSnapshot<
    * Close the draft, if one was opened, and put the finished state where
    * the handler returned the draft. A handler that wrote into the draft and
    * returned something else is a defect: two next states, and no rule that
-   * picks one.
+   * picks one. In development, so is a next state that does not match the
+   * state schema, at any depth: the types do not check a returned object's
+   * keys, and a cast reaches the draft.
    */
   finish(next: Next<State, any, any>): Next<State, any, any> {
-    if (this.#handle === undefined) return next;
+    if (this.#handle === undefined) {
+      this.#declared(Array.isArray(next) ? next[0] : next);
+      return next;
+    }
     // Take the tuple apart before the close: `Array.isArray` on a revoked
     // proxy throws, and a bare draft is a proxy.
     const tuple = Array.isArray(next);
@@ -1362,9 +1452,21 @@ class FoldSnapshot<Props, State, H extends AnyHooks> implements ReducerSnapshot<
       if (finished !== this.state) {
         throw new TypeError("handler wrote into snapshot.draft and returned a different state");
       }
+      this.#declared(returned);
       return next;
     }
+    this.#declared(finished);
     return tuple ? [finished, next[1]] : finished;
+  }
+
+  /**
+   * In development, throw when the next state does not match the state
+   * schema. `state` itself passed on the way in, `initialState` included, so
+   * only a new object is read: a spread, or a finished draft.
+   */
+  #declared(returned: unknown): void {
+    if (this.#validate !== undefined && returned !== this.state)
+      this.#validate(returned, "handler");
   }
 
   /** Close an open draft after a handler threw: unbook and revoke, decide nothing. */
@@ -1378,7 +1480,7 @@ class FoldSnapshot<Props, State, H extends AnyHooks> implements ReducerSnapshot<
  * `Dispatcher`: `dispatch(Typed, { query })`, `dispatch(Cleared)`, or a built
  * message.
  */
-export interface Dispatch<Action> {
+export interface Dispatch<in Action> {
   <M extends MessageOf<Action>>(message: M, ...payload: PayloadArgs<M>): void;
   (action: Action): void;
 }
@@ -1482,25 +1584,22 @@ export interface LifecycleHandlers<Props, State, Action, H extends AnyHooks, R =
 // Features
 // ---------------------------------------------------------------------------
 
-export type StatePart<N> = N extends readonly [infer S, unknown] ? S : N;
-
-export type Excess<N, State> = N extends unknown ? Exclude<keyof StatePart<N>, keyof State> : never;
-
 /**
- * Two guards `Reducer`'s constraint cannot express, both surfaced as an error
- * string on the offending key: a handler whose returned state has a property
- * `State` does not, and a key that is neither an action tag nor a lifecycle
- * tag — excess-property checking never sees `U`, since it is inferred from the
- * literal, so `subscriptions: () => …` under `reducer` would otherwise
- * compile as an ignored handler.
+ * The guard `Reducer`'s constraint cannot express, surfaced as an error
+ * string on the offending key: a key that is neither an action tag nor a
+ * lifecycle tag. Excess-property checking never sees `U`, since it is
+ * inferred from the literal, so `subscriptions: () => …` under `reducer`
+ * would otherwise compile as an ignored handler.
+ *
+ * A returned state with a key `State` does not declare is not checked here.
+ * Reading each handler's return type from this type makes the checker infer
+ * it again for every expression in the handler, quadratic in the number of
+ * handlers on every edit, while a draft return cannot carry an unknown key
+ * in the first place.
  */
-export type Exhaustive<U, State, Allowed extends string = string> = {
+export type Exhaustive<U, Allowed extends string = string> = {
   readonly [K in keyof U]: K extends Allowed
-    ? U[K] extends (...args: never) => infer N
-      ? [Excess<N, State>] extends [never]
-        ? unknown
-        : `state has no property ${Excess<N, State> & string}`
-      : unknown
+    ? unknown
     : `not a handler: "${K & string}" is neither an action tag nor a lifecycle tag`;
 };
 
@@ -1528,15 +1627,20 @@ export type Reducer<
 > = ActionHandlers<Props, State, A, O, H, R, TS> &
   LifecycleHandlers<Props, State, Emit<A, O>, H, R, TS>;
 
-/** The action handlers: required per declared tag, optional per settle tag of a slot task. */
+/**
+ * The action handlers: required per declared tag, optional per settle tag of a slot task.
+ * Mapped over the action union itself, keyed by each member's tag, so each
+ * payload is its own member: an `Extract` per tag walks the whole union once
+ * per key, quadratic in the number of actions on every edit.
+ */
 type ActionHandlers<Props, State, A extends Tagged, O extends Tagged, H extends AnyHooks, R, TS> = {
-  readonly [K in Exclude<A["_tag"], TaskActionsOf<TS>["_tag"]>]: (
-    payload: Simplify<Omit<Extract<A, { readonly _tag: K }>, "_tag">>,
+  readonly [M in A as M["_tag"] extends TaskActionsOf<TS>["_tag"] ? never : M["_tag"]]: (
+    payload: Simplify<Omit<M, "_tag">>,
     snapshot: ReducerSnapshot<Props, State, H, TS>,
   ) => Next<State, Emit<A, O>, R>;
 } & {
-  readonly [K in TaskActionsOf<TS>["_tag"]]?: (
-    payload: Simplify<Omit<Extract<A, { readonly _tag: K }>, "_tag">>,
+  readonly [M in A as M["_tag"] extends TaskActionsOf<TS>["_tag"] ? M["_tag"] : never]?: (
+    payload: Simplify<Omit<M, "_tag">>,
     snapshot: ReducerSnapshot<Props, State, H, TS>,
   ) => Next<State, Emit<A, O>, R>;
 };
@@ -1611,7 +1715,14 @@ export interface FeatureInternals<Props, State, Action, H extends AnyHooks> {
  * A feature's behaviour, before it is wired to a runtime. `component` turns one
  * into an `FC<Props>`; until then it is an inert value you can unit-test.
  */
-export interface Feature<in Props, State, Action, Output, H extends AnyHooks = {}, out R = never> {
+export interface Feature<
+  in Props,
+  in out State,
+  in out Action,
+  out Output,
+  in out H extends AnyHooks = {},
+  out R = never,
+> {
   /** @internal Not part of the surface — see `FeatureInternals`. */
   readonly [internals]: FeatureInternals<Props, State, Action | Output, H>;
 
@@ -1721,7 +1832,7 @@ export interface FeatureDefinition<
   ) => (props: Props) => InitialStateOf<State, TS>;
 
   readonly reducer: <U extends Reducer<Props, State, A, O, H, any, TS>>(
-    reducer: U & Exhaustive<U, State, A["_tag"] | LifecycleTag>,
+    reducer: U & Exhaustive<U, A["_tag"] | LifecycleTag>,
   ) => U;
 
   /**
@@ -1754,7 +1865,7 @@ export interface FeatureDefinition<
    */
   readonly create: <U extends Reducer<Props, State, A, O, H, any, TS>, SR = never>(parts: {
     readonly initialState: (props: Props) => InitialStateOf<State, TS>;
-    readonly reducer: U & Exhaustive<U, State, A["_tag"] | LifecycleTag>;
+    readonly reducer: U & Exhaustive<U, A["_tag"] | LifecycleTag>;
     readonly render: Render<Props, State, Emit<A, O>, H>;
     readonly subscriptions?: SubscriptionsHook<Props, State, H, Emit<A, O>, SR>;
   }) => Feature<Props, State, A, O, H, ServicesOf<U> | SR>;
@@ -1814,10 +1925,15 @@ const settled = (
  * tag also declared in `actions` or `outputs`, which is also what one
  * operation in both `tasks` and `actions` looks like; one operation under
  * two keys; and a `Task.output` operation in `tasks`.
+ *
+ * In development (`process.env.NODE_ENV !== "production"`, read here), the
+ * initial state and every new next state are checked against the state
+ * schema, task fields included; a state that does not match throws a
+ * `TypeError`. Production checks nothing.
  */
 export const define: <
-  PropsSchema extends AnyPropsSchema,
-  StateSchema extends AnyStateSchema,
+  PropsSchema extends StructSchemaLike,
+  StateSchema extends StructSchemaLike,
   const AS extends MemberSource<"internal">,
   const OS extends MemberSource<"outbound"> = readonly [],
   H extends AnyHooks = {},
@@ -1859,6 +1975,7 @@ export const define: <
     spec.outputs === undefined ? [] : tagsIn(spec.outputs, "outbound", "outputs", seen);
 
   const slots = slotTasks(spec, seen);
+  const validateState = stateValidator(spec.state, slots);
 
   // Opaque declarations (`Children`) are redacted only in `PropsChanged`
   // events; state reaches devtools transitions verbatim. Refusing them here
@@ -1890,10 +2007,16 @@ export const define: <
       const subscriptions: SubscriptionsHook<any, any, any, any, any> =
         parts.subscriptions ?? (() => NO_SUBSCRIPTIONS);
       // The slot's fields start `Idle`, under whatever the feature returns.
-      const initialState: (props: any) => any =
-        slots.length === 0
-          ? parts.initialState
-          : (props) => ({ ...idles, ...parts.initialState(props) });
+      // Checked like a handler's result: every later fold may return `state`
+      // unread only because the first one was read here.
+      const initialState = (props: any): any => {
+        const state =
+          slots.length === 0
+            ? parts.initialState(props)
+            : { ...idles, ...parts.initialState(props) };
+        validateState?.(state, "initialState");
+        return state;
+      };
 
       /**
        * A missing handler is the documented no-op only for a *lifecycle* tag —
@@ -1925,7 +2048,14 @@ export const define: <
             settle === undefined
               ? snapshot.state
               : settled(settle, action, snapshot.state, drafter);
-          const fold = new FoldSnapshot(state, snapshot.props, snapshot.hooks, drafter, slots);
+          const fold = new FoldSnapshot(
+            state,
+            snapshot.props,
+            snapshot.hooks,
+            drafter,
+            slots,
+            validateState,
+          );
           // `finish` runs whether or not the handler threw: an open draft
           // must be closed and unbooked before the defect propagates.
           let next: Next<any, any, any>;
@@ -2930,10 +3060,10 @@ const registerWithFastRefresh = (type: unknown, name: string): void => {
  * keeps a fragment working after Fast Refresh re-evaluates the file that made
  * the component.
  *
- *     export const Seed = component(seed, { name: "Seed" });
+ *     export const Todos = component(todos, { name: "Todos" });
  *
  *     const Paginator = () => {
- *       const { state, dispatch } = Seed.useFeature();
+ *       const { state, dispatch } = Todos.useFeature();
  *       …
  *     };
  *
@@ -3033,26 +3163,7 @@ export const createRuntime: <RootR, RootE>(
       hooks: hooksEquivalence,
     };
 
-    const decodeProps = SchemaParser.decodeUnknownSync(propsSchema, {
-      onExcessProperty: "error",
-      errors: "all",
-    });
-
-    // The parser's own throw says only "Schema validation failed", with the
-    // issue in `cause` — useless at an error boundary. Every problem, with its
-    // path, belongs in the message.
-    const validateProps = (input: unknown): void => {
-      try {
-        decodeProps(input);
-      } catch (error) {
-        if (error instanceof Error && SchemaIssue.isIssue(error.cause)) {
-          throw new TypeError(`Invalid props for <${name}>:\n${formatIssue(error.cause)}`, {
-            cause: error.cause,
-          });
-        }
-        throw error;
-      }
-    };
+    const validateProps = strictValidator(propsSchema);
 
     const Mount: FC<Record<string, unknown>> = (incoming) => {
       const rootRuntime = useContext(context);
@@ -3062,7 +3173,7 @@ export const createRuntime: <RootR, RootE>(
         [incoming],
       );
 
-      useMemo(() => validateProps(props), [props]);
+      useMemo(() => validateProps(props, `Invalid props for <${name}>`), [props]);
 
       // Latest-ref, assigned in a layout effect: commit and layout effects run
       // in one synchronous task, so no command fiber's microtask can emit

@@ -357,30 +357,25 @@ test("`Children` is a props field that surfaces as `ReactNode`", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Exhaustive / Excess
+// Exhaustive
 // ---------------------------------------------------------------------------
 
-test("`Exhaustive` catches a reducer handler returning an unknown state key", () => {
+test("`Exhaustive` rejects a key that is not a handler and reads no return type", () => {
   type TestState = { readonly count: number };
 
-  type GoodHandlers = {
-    readonly Inc: (action: any, snapshot: any) => TestState;
-  };
-  type BadHandlers = {
+  type Handlers = {
     readonly Inc: (action: any, snapshot: any) => { readonly count: number; readonly lmao: number };
+    readonly subscriptions: () => {};
   };
 
-  expect<Exhaustive<GoodHandlers, TestState>>().type.toBe<{ readonly Inc: unknown }>();
-  expect<Exhaustive<BadHandlers, TestState>>().type.toBe<{
-    readonly Inc: "state has no property lmao";
+  expect<Exhaustive<Handlers, "Inc">>().type.toBe<{
+    readonly Inc: unknown;
+    readonly subscriptions: `not a handler: "subscriptions" is neither an action tag nor a lifecycle tag`;
   }>();
 
-  // The synthetic types above cannot show the guard is attached where it has
-  // to run. It exists precisely because TypeScript's own excess-property check
-  // does *not* fire through an inferred return type — an unannotated handler
-  // returning `{ count, lmao }` type-checks on its own — so the only thing
-  // standing between that and a compiling feature is the intersection on
-  // `create`'s `reducer` parameter.
+  // A returned state with a key the schema does not declare compiles: the
+  // check cost a return-type inference per expression per handler, quadratic
+  // in the handler count on every edit. A draft cannot carry the key at all.
   const Defined = define({
     props: Schema.Struct({}),
     state: Schema.Struct({ count: Schema.Number }),
@@ -393,15 +388,11 @@ test("`Exhaustive` catches a reducer handler returning an unknown state key", ()
     render: () => null,
   });
 
-  expect(Defined.create).type.not.toBeCallableWith({
+  expect(Defined.create).type.toBeCallableWith({
     initialState: () => ({ count: 0 }),
     reducer: { Inc: () => ({ count: 1, lmao: 5 }) },
     render: () => null,
   });
-
-  // `FeatureDefinition.reducer` carries the same guard, for reducers written in their
-  // own file rather than inline.
-  expect(Defined.reducer).type.not.toBeCallableWith({ Inc: () => ({ count: 1, lmao: 5 }) });
 });
 
 // ---------------------------------------------------------------------------
@@ -1440,7 +1431,7 @@ test("`snapshot.draft` is a mutable `Draft<State>` that keeps the key set", () =
   });
 });
 
-test("`Task.start` and `Next.lazy` accept a draft, and `Exhaustive` sees no excess", () => {
+test("`Task.start` and `Next.lazy` accept a draft", () => {
   const load = Task("Load", { success: Schema.String, onError: Task.errorMessage });
   const WithTask = define({
     props: Schema.Struct({}),

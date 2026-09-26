@@ -231,6 +231,47 @@ every problem with its path. Validation only checks the props. `define`
 normalizes the props schema to its `Type` side, so a transforming field is not
 decoded again on a parent render.
 
+## State validation
+
+In development, the initial state and every new next state are validated
+against the state schema with `onExcessProperty: "error"` and `errors: "all"`.
+The check also covers the task slot's fields, each against its `Task.schema`.
+Every key and value is checked, at every depth. That catches an extra key in a
+spread, a nested spread, a draft a cast wrote into, and a wrong value.
+
+Development is `process.env.NODE_ENV !== "production"`, read when `define`
+runs. A bundler replaces the expression, and Vitest sets it to `"test"`.
+Without a bundler and without a `process` global, the expression reads as
+production, so nothing is checked.
+
+```tsx continue
+const loose = Cart.create({
+  initialState: Cart.initialState(() => ({ items: [] })),
+  reducer: Cart.reducer({
+    Added: ({ sku }, { state }) => ({ ...state, items: [...state.items, sku], total: 1 }),
+    Ordered: ({ orderId }, { state }) => [state, Command.output(OrderPlaced, { orderId })],
+    Emptied: (_payload, { state }) => state,
+  }),
+  render: () => null,
+});
+
+loose.reduce(actions.Added.make({ sku: "sku_1" }), {
+  state: { items: [] },
+  props: { customerId: "c_1" },
+  hooks: {},
+});
+// throws TypeError: handler returned a state that does not match the state schema:
+// Expected no excess property
+//   at ["total"]
+```
+
+The `TypeError` lists every issue with its path. Under the store it is a
+defect of that action and the state is kept; under `feature.run` the Effect
+rejects. `initialState` is checked where the initial state is built, with the
+prefix `initialState returned a state that does not match the state schema:`.
+A handler that returns `state` itself is not checked again: every state the
+store holds passed when it was built. In production nothing is checked.
+
 ## `FeatureComponent.useFeature`
 
 ```ts fragment

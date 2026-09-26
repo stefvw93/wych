@@ -75,6 +75,8 @@ export default defineConfig({
           name: "bench",
           include: [],
           benchmark: { include: ["src/**/*.bench.test.ts"] },
+          // The production path: `define` skips the development state check.
+          env: { NODE_ENV: "production" },
           ...measured,
         },
       },
@@ -159,6 +161,13 @@ export default defineConfig({
       },
       "stress:node": { command: "vp test --project stress", cache: false },
       "stress:browser": { command: "vp test --project stress-browser", cache: false },
+      // Language-server latency of the reducer paths (handler keys, `draft`,
+      // `tasks`) through `tsc --lsp`, over a generic todos fixture;
+      // `EXAMPLES=1` runs it over the examples instead.
+      // `bench:types:ab` compares the working tree against `HEAD` in
+      // interleaved rounds, the only comparison that holds on a loaded machine.
+      "bench:types": { command: "node bench/types/lsp-bench.mjs", cache: false },
+      "bench:types:ab": { command: "bench/types/ab.sh", cache: false },
     },
   },
 });
