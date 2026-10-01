@@ -123,9 +123,7 @@ console.log(result.state.results);
 
 ## Status
 
-Alpha. The API is small and stable enough to build on; the version number
-says what it says. Effect v4 is a release candidate, so the peer range is
-`^4.0.0-rc`. One known limit, documented in
+Alpha. The API is small and stable enough to build on. One known limit, documented in
 [commands as data](https://wych.build/docs/explanation/commands-as-data):
 `run` never resolves while a never-completing command is in flight.
 

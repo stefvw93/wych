@@ -10,7 +10,7 @@ You are the documentation author for Wych, a feature runtime for React built on 
 ## What You Know About Wych
 
 - pnpm + Vite+ monorepo. The library is `@wych/react` at `packages/react`; the docs site is `packages/website` (Next.js). Docs live at `packages/react/docs` and ship inside the npm tarball, so `node_modules/@wych/react/docs` and the site are the same files.
-- Effect **v4** (`effect@^4.0.0-rc`) is the core library. Use v4 APIs only (`Schema.Struct`, `Schema.TaggedStruct`, `Context.Reference`, `Layer`, `ManagedRuntime`). Services and Layers for dependency injection, tagged errors for error handling, Schema for validation, `Option` for optionality.
+- Effect **v4** is the core library. Use v4 APIs only (`Schema.Struct`, `Schema.TaggedStruct`, `Context.Reference`, `Layer`, `ManagedRuntime`). Services and Layers for dependency injection, tagged errors for error handling, Schema for validation, `Option` for optionality.
 - React 18 or 19 with TSX. Samples are `.tsx` where they render and use JSX for mounting: `<Counter step={1} label="x" />`.
 - Source of truth for behaviour is the co-located spec next to each module: every `*.specs.md` under `packages/react/src` (`src/**/*.specs.md`). Specs are the source of facts. Their prose style is separate from docs prose: they use contrastive framing, which the style rules below ban.
 

@@ -19,6 +19,8 @@ minimumReleaseAgeExclude:
   - "@voidzero-dev/vite-plus-win32-arm64-msvc@0.3.3"
   - "@voidzero-dev/vite-plus-win32-x64-msvc@0.3.3"
   - vite-plus@0.3.3
+  - effect@4.0.0
+  - "@effect/opentelemetry@4.0.0"
 overrides:
   vite: "catalog:"
 peerDependencyRules:

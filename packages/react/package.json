@@ -44,7 +44,7 @@
   "peerDependencies": {
     "@types/react": "^18.3 || ^19",
     "@types/react-dom": "^18.3 || ^19",
-    "effect": "^4.0.0-rc.116",
+    "effect": "^4.0.0",
     "react": "^18.3 || ^19",
     "react-dom": "^18.3 || ^19"
   }

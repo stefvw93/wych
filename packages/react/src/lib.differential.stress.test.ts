@@ -1,6 +1,6 @@
 /**
  * Property tests over the runtime, with `Arbitrary` from
- * `effect/unstable/arbitrary`. Generators derive from the action schemas, so
+ * `effect`. Generators derive from the action schemas, so
  * a payload bound is a schema check; `check` below runs a property to 200
  * runs, shrinks the first falsification, and rethrows the failing assertion
  * with the shrunk input and a replay token in front of it.
@@ -15,8 +15,7 @@
  * under `run` that it outran under the store. That is a difference in how the
  * two are driven, not in the runtime.
  */
-import { Effect, Layer, Schema } from "effect";
-import { Arbitrary } from "effect/unstable/arbitrary";
+import { Arbitrary, Effect, Layer, Schema } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 import {
   Go,

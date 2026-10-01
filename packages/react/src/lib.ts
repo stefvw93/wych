@@ -365,12 +365,16 @@ const messageTag: unique symbol = Symbol("@wych/tag");
 
 const message = (ch: Channel, tag: string, fields: Schema.Struct.Fields = {}) => {
   const schema = Schema.TaggedStruct(tag, fields);
-  const make = schema.make.bind(schema);
-  return Object.assign(schema, {
-    [channel]: ch,
-    [messageTag]: tag,
+  // Effect 4.0.0 caches `make` as a read-only own property on first read, so
+  // reading `schema.make` would make the override below throw. Take the
+  // original from a twin and define the override before anything reads it.
+  const make = Schema.TaggedStruct(tag, fields).make;
+  const wrapped = {
     make: (input?: object, options?: Schema.MakeOptions) => make((input ?? {}) as never, options),
-  });
+  };
+  Object.defineProperty(schema, "make", { value: wrapped.make, enumerable: true });
+  return Object.assign(schema, { [channel]: ch, [messageTag]: tag }) as typeof schema &
+    typeof wrapped & { [channel]: Channel; [messageTag]: string };
 };
 
 export const messages = (ch: Channel) =>
