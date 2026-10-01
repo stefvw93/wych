@@ -22,7 +22,10 @@ import type { ReactNode } from "react";
 
 const Row = Schema.Struct({ id: Schema.String, name: Schema.String, size: Schema.Number });
 
-const actions = Action({ Sorted: { by: Schema.String }, Selected: { id: Schema.String } });
+const actions = Action({
+  Sorted: { by: Schema.String },
+  Selected: { id: Schema.String },
+});
 
 const Table = define({
   props: Schema.Struct({

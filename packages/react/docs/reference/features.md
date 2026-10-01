@@ -18,7 +18,11 @@ import { Effect, Layer, Schema } from "effect";
 import { Action, Children, Command, define, Next, Task } from "@wych/react";
 import type { LazyCommand, Next as NextType, RenderSnapshot, Snapshot } from "@wych/react";
 
-const actions = Action({ Typed: { text: Schema.String }, Saved: {} });
+const actions = Action({
+  Typed: { text: Schema.String },
+  Saved: {},
+});
+
 const NoteSaved = Action.output("NoteSaved", { noteId: Schema.String, text: Schema.String });
 
 const NoteEditor = define({

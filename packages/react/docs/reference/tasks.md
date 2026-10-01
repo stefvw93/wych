@@ -38,7 +38,10 @@ const loadMail = Task("LoadMail", {
     }),
 });
 
-const actions = Action({ Opened: { folder: Schema.String }, Cancelled: {} });
+const actions = Action({
+  Opened: { folder: Schema.String },
+  Cancelled: {},
+});
 
 const Mailbox = define({
   props: Schema.Struct({}),

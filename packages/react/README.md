@@ -32,7 +32,10 @@ class SearchApi extends Context.Service<
   { readonly hits: (query: string) => Effect.Effect<ReadonlyArray<string>> }
 >()("SearchApi") {}
 
-const actions = Action({ Typed: { query: Schema.String }, Cleared: {} });
+const actions = Action({
+  Typed: { query: Schema.String },
+  Cleared: {},
+});
 
 const search = Task("Search", {
   success: Hits,

@@ -48,7 +48,11 @@ const saveNote = async (id: string, text: string) => {
   return { id, text };
 };
 
-const actions = Action({ Typed: { text: Schema.String }, Submitted: {} });
+const actions = Action({
+  Typed: { text: Schema.String },
+  Submitted: {},
+});
+
 const Saved = Action.output("Saved", { id: Schema.String });
 
 const save = Task("Save", {

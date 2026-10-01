@@ -42,7 +42,10 @@ Outputs, the fourth declaration, wait until
 import { Schema } from "effect";
 import { Action, define } from "@wych/react";
 
-const actions = Action({ TextChanged: { text: Schema.String }, Reverted: {} });
+const actions = Action({
+  TextChanged: { text: Schema.String },
+  Reverted: {},
+});
 
 const Editor = define({
   props: Schema.Struct({ noteId: Schema.String, initialText: Schema.String }),
